@@ -22,6 +22,9 @@ const WARNING_NOISE_PATTERNS = [
   'React DevTools',
   'Download the React DevTools',
   'Warning: Each child in a list should have a unique',
+  'set is server-side only, ignored on client',
+  'persist is server-side only, ignored on client',
+  'callService is server-side only, ignored on client',
 ] as const;
 
 /** Check if a console error message is noise (should be ignored) */

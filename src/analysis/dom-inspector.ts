@@ -57,7 +57,9 @@ export async function inspectDOM(
     if (!preview) return result;
 
     const text = (preview.textContent ?? '').trim();
-    result.isEmpty = text.length === 0;
+    // Canvas/SVG/video/img elements have no textContent but are valid content
+    const hasVisualElements = preview.querySelector('canvas, svg, video, img, iframe') !== null;
+    result.isEmpty = text.length === 0 && !hasVisualElements;
 
     // Check for "Unknown pattern: xxx"
     const unknownMatch = text.match(/Unknown pattern:\s*\S+/g);

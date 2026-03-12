@@ -38,12 +38,31 @@ export async function navigateWithRetry(
 }
 
 /**
- * Wait for the runtime to load and render content.
- * The OrbitalPreview shows "Loading runtime..." then renders actual content.
+ * Wait for the runtime to load, render content, and expose the verification API.
+ * Polls for window.__orbitalVerification and confirms INIT completed.
+ * Falls back to a timeout if the API never appears (e.g., simple pages).
  *
  * @param page - Playwright page
- * @param waitMs - Time to wait for runtime to settle (default: 3000ms)
+ * @param timeoutMs - Maximum time to wait (default: 10000ms)
  */
-export async function waitForRuntime(page: Page, waitMs = 3000): Promise<void> {
-  await page.waitForTimeout(waitMs);
+export async function waitForRuntime(page: Page, timeoutMs = 10000): Promise<void> {
+  const pollInterval = 200;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const ready = await page.evaluate(() => {
+      const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
+        { getSnapshot?: () => { transitions: unknown[] } } | undefined;
+      if (!api?.getSnapshot) return false;
+      const snap = api.getSnapshot();
+      // Ready when at least one transition has been recorded (INIT fired)
+      return snap.transitions.length > 0;
+    }).catch(() => false);
+
+    if (ready) return;
+    await page.waitForTimeout(pollInterval);
+  }
+
+  // Fallback: API never appeared, wait a bit for basic rendering
+  await page.waitForTimeout(1000);
 }
