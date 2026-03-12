@@ -27,8 +27,13 @@ export async function takeScreenshot(
     if (selector) {
       const element: ElementHandle | null = await page.$(selector);
       if (element) {
-        await element.screenshot({ path: outputPath });
-        return outputPath;
+        try {
+          await element.screenshot({ path: outputPath });
+          return outputPath;
+        } catch {
+          // Element screenshot failed (e.g., element detached or too large)
+          // Fall through to page screenshot
+        }
       }
     }
 
