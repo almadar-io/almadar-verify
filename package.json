@@ -1,6 +1,6 @@
 {
   "name": "@almadar/verify",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Shared Playwright verification utilities for Almadar runtime and compiled projects",
   "type": "module",
   "main": "./dist/index.js",
@@ -26,7 +26,8 @@
     "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "@almadar/core": ">=2.2.0"
+    "@almadar/core": ">=2.2.0",
+    "@faker-js/faker": "^9.9.0"
   },
   "peerDependencies": {
     "playwright": ">=1.40.0"

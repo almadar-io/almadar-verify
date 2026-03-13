@@ -48,6 +48,18 @@ export { isNoiseError, isNoiseWarning } from './util/filter.js';
 // Retry utility
 export { retry } from './util/retry.js';
 
+// Interaction utilities (Playwright-based form filling, button clicking, pattern classification)
+export {
+  classifyTargetPattern,
+  buildMinimalPayload,
+  fillFormFields,
+  generateFieldValue,
+  clickSubmitAction,
+  clickCloseAction,
+  countEntityRows,
+  type PatternClassification,
+} from './browser/interaction.js';
+
 // Re-export state machine algorithms from @almadar/core
 export {
   buildStateGraph,
