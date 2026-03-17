@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@almadar/core':
         specifier: '>=2.2.0'
-        version: 2.5.3
+        version: 2.6.0
       '@faker-js/faker':
         specifier: ^9.9.0
         version: 9.9.0
@@ -39,8 +39,8 @@ importers:
 
 packages:
 
-  '@almadar/core@2.5.3':
-    resolution: {integrity: sha512-lGANmhdcycyW9vkMR7kRFRSYTS2xJyLXHICSSU9wfH0rdtL6cCOkj+jfXxKuUPG/QYivMmUBncbs3pgZc6MBAA==}
+  '@almadar/core@2.6.0':
+    resolution: {integrity: sha512-DAdwKSSqEmMr3dm7kzt8rOzYE1GaD6UJ7D9Y978BQfcnl8WWVejXjydVMJ2eufIKGGMJpRvpFeoyuQnQ1+4wqw==}
 
   '@almadar/eslint-plugin@2.4.6':
     resolution: {integrity: sha512-Z5Ld+wnG5VkUVsOm020fp7nLs3W5Nba4Lxb4a16JVe08ZcE2S46AMGNaeejAIQ8Ip4/RJpID/kDVHPNtqH2DZQ==}
@@ -906,7 +906,7 @@ packages:
 
 snapshots:
 
-  '@almadar/core@2.5.3':
+  '@almadar/core@2.6.0':
     dependencies:
       '@almadar/operators': 2.1.0
       '@almadar/patterns': 2.8.0

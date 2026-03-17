@@ -1,5 +1,5 @@
 {
-  "name": "@almadar/verify",
+  "name": "@almadar-io/verify",
   "version": "1.3.0",
   "description": "Shared Playwright verification utilities for Almadar runtime and compiled projects",
   "type": "module",
