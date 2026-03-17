@@ -26,7 +26,7 @@
     "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "@almadar/core": ">=2.6.0",
+    "@almadar/core": ">=2.2.0",
     "@faker-js/faker": "^9.9.0"
   },
   "peerDependencies": {
