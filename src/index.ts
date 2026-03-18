@@ -58,6 +58,7 @@ export {
   clickCloseAction,
   countEntityRows,
   type PatternClassification,
+  type EntityFieldDef,
 } from './browser/interaction.js';
 
 // Re-export state machine algorithms from @almadar/core
