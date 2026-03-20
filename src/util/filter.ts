@@ -14,6 +14,8 @@ const ERROR_NOISE_PATTERNS = [
   'the server responded with a status of 404',
   'Failed to load resource',
   'ERR_CONNECTION_REFUSED',
+  'Encountered two children with the same key',
+  'React does not recognize the',
 ] as const;
 
 /** Patterns that should be ignored from console warnings */

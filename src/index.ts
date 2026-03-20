@@ -61,6 +61,20 @@ export {
   type EntityFieldDef,
 } from './browser/interaction.js';
 
+// Data presence assertions (entity data visibility, edit pre-population)
+export {
+  assertEditPrePopulated,
+  assertEntityDataVisible,
+  assertViewDataVisible,
+  assertFormFieldTypes,
+  type EditPrePopulationResult,
+  type EntityDataVisibleResult,
+  type ViewDataResult,
+  type FormFieldTypeResult,
+  type ExpectedFieldType,
+  type FieldTypeMismatch,
+} from './browser/data-assertions.js';
+
 // Re-export state machine algorithms from @almadar/core
 export {
   buildStateGraph,
