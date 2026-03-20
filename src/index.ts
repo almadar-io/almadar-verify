@@ -75,6 +75,13 @@ export {
   type FieldTypeMismatch,
 } from './browser/data-assertions.js';
 
+// Schema effect scanning (entity binding detection for verification gating)
+export {
+  scanEffectsForEntityBindings,
+  hasAnyEntityListBinding,
+  type EntityBindingScan,
+} from './schema/effect-scanner.js';
+
 // Re-export state machine algorithms from @almadar/core
 export {
   buildStateGraph,

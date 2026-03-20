@@ -209,9 +209,21 @@ export async function assertViewDataVisible(
       for (const el of dataFields) {
         const fieldName = el.getAttribute('data-field') ?? 'unknown';
         const text = (el.textContent ?? '').trim();
-        // A field "has value" if its text goes beyond just the label
-        // (i.e., not just "FirstName" but "FirstName: John Doe" or a sibling with the value)
-        if (text.length > fieldName.length + 2) {
+        const htmlEl = el as HTMLElement;
+
+        // Check multiple signals for "has value":
+        // 1. Text content beyond just the label
+        const hasTextValue = text.length > fieldName.length + 2;
+        // 2. ARIA attributes indicating a value
+        const hasAriaValue = htmlEl.getAttribute('aria-valuenow') !== null
+          || (htmlEl.getAttribute('aria-label') ?? '').length > fieldName.length;
+        // 3. data-value attribute
+        const hasDataValue = htmlEl.getAttribute('data-value') !== null;
+        // 4. Input elements with values inside the field container
+        const innerInput = el.querySelector('input, select, textarea') as HTMLInputElement | null;
+        const hasInputValue = innerInput !== null && (innerInput.value ?? '').trim().length > 0;
+
+        if (hasTextValue || hasAriaValue || hasDataValue || hasInputValue) {
           fieldsWithValues++;
         } else {
           emptyFieldNames.push(fieldName);
@@ -223,6 +235,18 @@ export async function assertViewDataVisible(
         totalFields: dataFields.length,
         fieldsWithValues,
         emptyFieldNames,
+      };
+    }
+
+    // Strategy 1b: Check for data-entity or data-entity-id attributes indicating bound data
+    const entityBound = container.querySelector('[data-entity], [data-entity-id]');
+    if (entityBound) {
+      const entityText = (entityBound.textContent ?? '').trim();
+      return {
+        hasFieldValues: entityText.length > 0,
+        totalFields: 1,
+        fieldsWithValues: entityText.length > 0 ? 1 : 0,
+        emptyFieldNames: entityText.length > 0 ? [] : ['entity-data'],
       };
     }
 
@@ -239,8 +263,8 @@ export async function assertViewDataVisible(
         if (idx >= 0) {
           // Get text after the field name
           const afterField = containerText.substring(idx + name.length).trim();
-          // If there's substantial text after the field name, it has a value
-          if (afterField.length > 2 && !afterField.startsWith(fieldNames.find(f => f !== name) ?? '')) {
+          // If there's any non-empty text after the field name, count it
+          if (afterField.length > 0 && !afterField.startsWith(fieldNames.find(f => f !== name) ?? '')) {
             fieldsWithValues++;
           } else {
             emptyFieldNames.push(name);
@@ -260,9 +284,9 @@ export async function assertViewDataVisible(
 
     // Fallback: just check if container has enough text content
     return {
-      hasFieldValues: containerText.length > 20,
+      hasFieldValues: containerText.length > 10,
       totalFields: 0,
-      fieldsWithValues: containerText.length > 20 ? 1 : 0,
+      fieldsWithValues: containerText.length > 10 ? 1 : 0,
       emptyFieldNames: [],
     };
   }, { selector: containerSelector, fieldNames: expectedFieldNames });

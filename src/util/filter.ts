@@ -27,6 +27,8 @@ const WARNING_NOISE_PATTERNS = [
   'set is server-side only, ignored on client',
   'persist is server-side only, ignored on client',
   'callService is server-side only, ignored on client',
+  '[webpack-dev-server]',
+  '[HMR]',
 ] as const;
 
 /** Check if a console error message is noise (should be ignored) */
