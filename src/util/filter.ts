@@ -16,6 +16,7 @@ const ERROR_NOISE_PATTERNS = [
   'ERR_CONNECTION_REFUSED',
   'Encountered two children with the same key',
   'React does not recognize the',
+  'You can only pass the action prop to',
   '[vite]',
 ] as const;
 
