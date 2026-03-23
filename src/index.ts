@@ -32,15 +32,36 @@ export {
 export { inspectEntityData, type EntityInspection } from './runtime/entity-inspector.js';
 
 // DOM analysis
-export { inspectDOM, type DOMInspection } from './analysis/dom-inspector.js';
+export {
+  inspectDOM, type DOMInspection,
+  detectViteErrorOverlay, type ViteOverlayResult,
+} from './analysis/dom-inspector.js';
 export { buildConsoleReport, type ConsoleReport } from './analysis/console-report.js';
 
 // Report generation
 export { buildJsonReport, writeJsonReport } from './report/json-report.js';
 export { buildMarkdownReport, writeMarkdownReport } from './report/markdown-report.js';
+export {
+  writeTransitionLogJsonl,
+  buildTransitionLogTxt,
+  writeTransitionLogTxt,
+} from './report/transition-log.js';
+export {
+  formatTestReport,
+  formatTestReportPlain,
+  writeTestReport,
+  type TestReportEntry,
+} from './report/test-report.js';
 
 // Shared types
-export type { VerifyResult, RuntimeState, ConsoleEntry, VerifyReport } from './util/types.js';
+export type {
+  VerifyResult,
+  RuntimeState,
+  ConsoleEntry,
+  VerifyReport,
+  TransitionLogEntry,
+  VerifyCheck,
+} from './util/types.js';
 
 // Noise filters
 export { isNoiseError, isNoiseWarning } from './util/filter.js';

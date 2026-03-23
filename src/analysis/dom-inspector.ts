@@ -9,6 +9,44 @@
 
 import type { Page } from 'playwright';
 
+/** Vite error overlay detection result */
+export interface ViteOverlayResult {
+  /** Whether a vite-error-overlay element is present in the DOM */
+  hasOverlay: boolean;
+  /** Extracted error message text from the overlay's shadow DOM */
+  errorMessage: string;
+}
+
+/**
+ * Detect Vite compilation error overlay.
+ *
+ * Vite renders a `vite-error-overlay` custom element when there is a
+ * TypeScript or build-time compilation error. The error message lives
+ * inside the element's shadow DOM.
+ */
+export async function detectViteErrorOverlay(page: Page): Promise<ViteOverlayResult> {
+  return page.evaluate(() => {
+    const overlay = document.querySelector('vite-error-overlay');
+    if (!overlay) {
+      return { hasOverlay: false, errorMessage: '' };
+    }
+    const shadow = overlay.shadowRoot;
+    let errorMessage = '';
+    if (shadow) {
+      const msgEl = shadow.querySelector('.message-body')
+        ?? shadow.querySelector('pre')
+        ?? shadow.querySelector('.message');
+      errorMessage = (msgEl?.textContent ?? overlay.textContent ?? '').trim();
+    } else {
+      errorMessage = (overlay.textContent ?? '').trim();
+    }
+    if (errorMessage.length > 500) {
+      errorMessage = errorMessage.slice(0, 500) + '...';
+    }
+    return { hasOverlay: true, errorMessage };
+  });
+}
+
 /** DOM inspection result */
 export interface DOMInspection {
   /** Unknown pattern errors found in the DOM */

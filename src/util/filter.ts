@@ -16,6 +16,7 @@ const ERROR_NOISE_PATTERNS = [
   'ERR_CONNECTION_REFUSED',
   'Encountered two children with the same key',
   'React does not recognize the',
+  '[vite]',
 ] as const;
 
 /** Patterns that should be ignored from console warnings */
