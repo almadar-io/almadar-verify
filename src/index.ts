@@ -25,6 +25,8 @@ export {
   readTraitStates,
   readEventLog,
   readRuntimeState,
+  getTraitCurrentState,
+  verifyTransitionAccepted,
   type OrbitalVerificationSnapshot,
 } from './runtime/state-bridge.js';
 

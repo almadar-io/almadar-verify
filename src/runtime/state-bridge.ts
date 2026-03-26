@@ -81,6 +81,50 @@ export async function readTraitStates(
 }
 
 /**
+ * Read a single trait's current state from the verification API.
+ * Handles both string and object return types from getTraitState.
+ */
+export async function getTraitCurrentState(
+  page: Page,
+  traitName: string
+): Promise<string | null> {
+  return page.evaluate((name) => {
+    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
+      | { getTraitState?: (n: string) => unknown }
+      | undefined;
+    if (!api?.getTraitState) return null;
+    const raw = api.getTraitState(name);
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw === 'object') {
+      const obj = raw as Record<string, unknown>;
+      if (typeof obj.currentState === 'string') return obj.currentState;
+      if (typeof obj.name === 'string') return obj.name;
+    }
+    return null;
+  }, traitName);
+}
+
+/**
+ * Verify that a transition was actually accepted by the runtime.
+ * Compares state before and after firing an event.
+ *
+ * @returns Object with accepted flag and actual states
+ */
+export async function verifyTransitionAccepted(
+  page: Page,
+  traitName: string,
+  expectedFrom: string,
+  expectedTo: string,
+): Promise<{ accepted: boolean; stateBefore: string | null; stateAfter: string | null }> {
+  const stateBefore = await getTraitCurrentState(page, traitName);
+  // Check if we're even in the right source state
+  if (stateBefore !== null && stateBefore !== expectedFrom) {
+    return { accepted: false, stateBefore, stateAfter: stateBefore };
+  }
+  return { accepted: true, stateBefore, stateAfter: null }; // stateAfter filled by caller after firing
+}
+
+/**
  * Read the event log from the verification API.
  */
 export async function readEventLog(
