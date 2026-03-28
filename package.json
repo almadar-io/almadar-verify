@@ -26,20 +26,20 @@
     "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "@almadar/core": ">=2.2.0",
+    "@almadar/core": "^2.9.0",
     "@faker-js/faker": "^9.9.0"
   },
   "peerDependencies": {
     "playwright": ">=1.40.0"
   },
   "devDependencies": {
+    "@almadar/eslint-plugin": ">=2.3.0",
     "@types/node": "^22.0.0",
+    "@typescript-eslint/parser": "8.56.0",
+    "eslint": "10.0.0",
     "playwright": "1.50.1",
     "tsup": "^8.0.0",
-    "typescript": "^5.4.0",
-    "eslint": "10.0.0",
-    "@typescript-eslint/parser": "8.56.0",
-    "@almadar/eslint-plugin": ">=2.3.0"
+    "typescript": "^5.4.0"
   },
   "repository": {
     "type": "git",

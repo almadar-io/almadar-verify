@@ -105,6 +105,15 @@ export {
   type EntityBindingScan,
 } from './schema/effect-scanner.js';
 
+// State walk engine (shared two-pass verification)
+export { StateWalkEngine } from './engine/StateWalkEngine.js';
+export type {
+  EngineAdapter,
+  TraitWalkConfig,
+  EngineConfig,
+  WalkResult,
+} from './engine/types.js';
+
 // Re-export state machine algorithms from @almadar/core
 export {
   buildStateGraph,
@@ -113,4 +122,5 @@ export {
   buildGuardPayloads,
   extractPayloadFieldRef,
   buildReplayPaths,
+  buildEdgeCoveringWalk,
 } from '@almadar/core';
