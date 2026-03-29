@@ -18,6 +18,13 @@ export { launchBrowser, type LaunchOptions } from './browser/launch.js';
 export { ConsoleCollector } from './browser/console.js';
 export { takeScreenshot, safeFileName } from './browser/screenshot.js';
 export { navigateWithRetry, waitForRuntime } from './browser/navigate.js';
+export {
+  Annotator,
+  type Annotation,
+  type AnnotationVerdict,
+  type AnnotationCategory,
+  type AnnotationPromptOptions,
+} from './browser/annotator.js';
 
 // Runtime state bridge
 export {
