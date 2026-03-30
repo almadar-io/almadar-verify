@@ -43,6 +43,12 @@ export interface EngineAdapter {
    * Typically implemented as page reload + wait for runtime ready.
    */
   reset?(page: Page): Promise<void>;
+
+  /**
+   * Called before each trait walk begins.
+   * Use to navigate to the correct page/route for the trait.
+   */
+  beforeTrait?(page: Page, trait: TraitWalkConfig): Promise<void>;
 }
 
 /** Configuration for a single trait's walk. */
@@ -50,6 +56,8 @@ export interface TraitWalkConfig {
   traitName: string;
   initialState: string;
   transitions: EdgeWalkTransition[];
+  /** Route path for this trait's page (e.g., "products", "orders"). Used for navigation. */
+  route?: string;
 }
 
 /** Engine-level configuration. */

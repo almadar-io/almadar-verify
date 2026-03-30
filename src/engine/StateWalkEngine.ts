@@ -47,6 +47,11 @@ export class StateWalkEngine {
     let totalTransitions = 0;
 
     for (const trait of traits) {
+      // Navigate to the trait's page before walking it
+      if (this.adapter.beforeTrait) {
+        await this.adapter.beforeTrait(page, trait);
+      }
+
       // Count non-INIT transitions
       const nonInit = trait.transitions.filter(
         (t) => t.event !== 'INIT' && t.from !== '*',
