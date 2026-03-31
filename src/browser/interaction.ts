@@ -82,6 +82,8 @@ export function generateFieldValue(inputType: string, _fieldName: string): strin
       return String(faker.number.float({ min: 1, max: 999, fractionDigits: 2 }));
     case 'email':
       return faker.internet.email();
+    case 'password':
+      return faker.internet.password({ length: 12 });
     case 'tel':
       return faker.phone.number();
     case 'url':
@@ -202,11 +204,12 @@ export async function fillFormFields(
 
   let filled = 0;
 
-  // Fill text-like and number inputs
+  // Fill text-like, number, and password inputs
   const inputs = container.locator(
     'input[type="text"]:visible, input[type="number"]:visible, ' +
     'input[type="email"]:visible, input[type="tel"]:visible, ' +
-    'input[type="url"]:visible, input:not([type]):visible'
+    'input[type="url"]:visible, input[type="password"]:visible, ' +
+    'input:not([type]):visible'
   );
   const inputCount = await inputs.count();
   for (let i = 0; i < inputCount; i++) {

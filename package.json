@@ -1,6 +1,6 @@
 {
   "name": "@almadar-io/verify",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Shared Playwright verification utilities for Almadar runtime and compiled projects",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,6 +9,7 @@
   "exports": {
     ".": {
       "import": "./dist/index.js",
+      "require": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
   },
