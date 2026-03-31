@@ -43,6 +43,8 @@ export interface TransitionLogEntry {
   effectResults: unknown[];
   domEntityCount: number;
   screenshot?: string;
+  /** Captured [almadar:*] log lines (client + server) during this transition */
+  logs?: string[];
 }
 
 /** A single verification check result (used by orbital-verify) */

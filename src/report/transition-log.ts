@@ -81,6 +81,14 @@ export function buildTransitionLogTxt(
     if (entry.screenshot) {
       lines.push(`  Screenshot: ${entry.screenshot}`);
     }
+
+    // Append captured almadar logs for this transition
+    if (entry.logs && entry.logs.length > 0) {
+      lines.push('  Logs:');
+      for (const logLine of entry.logs) {
+        lines.push(`    ${logLine}`);
+      }
+    }
     lines.push('');
   }
 
