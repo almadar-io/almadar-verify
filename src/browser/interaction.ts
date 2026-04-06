@@ -165,6 +165,33 @@ export function buildMinimalPayload(
       }
     }
 
+    // Agent-specific field generation
+    if (name === 'content' || name === 'prompt') {
+      payload[name] = faker.lorem.sentence();
+      continue;
+    }
+    if (name === 'category' && !entityField) {
+      const agentCategories = ['preference', 'correction', 'pattern-affinity', 'entity-template', 'error-resolution'];
+      payload[name] = agentCategories[0];
+      continue;
+    }
+    if (name === 'query') {
+      payload[name] = faker.lorem.words(3);
+      continue;
+    }
+    if (name === 'toolName') {
+      payload[name] = 'validate-schema';
+      continue;
+    }
+    if (name === 'language') {
+      payload[name] = 'typescript';
+      continue;
+    }
+    if (name === 'strategy') {
+      payload[name] = 'hybrid';
+      continue;
+    }
+
     switch (type) {
       case 'number':
       case 'integer':

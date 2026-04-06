@@ -19,6 +19,10 @@ export interface EntityBindingScan {
   hasEntityFieldBindings: boolean;
   /** UI binds an entity list (data-grid, data-list, etc.) */
   hasEntityListBinding: boolean;
+  /** Effects include agent/* operators */
+  hasAgentEffects: boolean;
+  /** Which agent operators are used */
+  agentOperators: string[];
 }
 
 /**
@@ -31,6 +35,8 @@ export interface EntityBindingScan {
 export function scanEffectsForEntityBindings(effects: unknown[]): EntityBindingScan {
   let hasEntityFieldBindings = false;
   let hasEntityListBinding = false;
+  let hasAgentEffects = false;
+  const agentOperators: string[] = [];
 
   function scan(value: unknown): void {
     if (hasEntityFieldBindings && hasEntityListBinding) return;
@@ -62,11 +68,19 @@ export function scanEffectsForEntityBindings(effects: unknown[]): EntityBindingS
   }
 
   for (const effect of effects) {
-    if (!Array.isArray(effect) || effect[0] !== 'render-ui' || effect[2] == null) continue;
+    if (!Array.isArray(effect)) continue;
+    // Detect agent/* operators
+    const op = effect[0];
+    if (typeof op === 'string' && op.startsWith('agent/')) {
+      hasAgentEffects = true;
+      if (!agentOperators.includes(op)) agentOperators.push(op);
+    }
+    // Scan render-ui for entity bindings
+    if (op !== 'render-ui' || effect[2] == null) continue;
     scan(effect[2]);
   }
 
-  return { hasEntityFieldBindings, hasEntityListBinding };
+  return { hasEntityFieldBindings, hasEntityListBinding, hasAgentEffects, agentOperators };
 }
 
 /**
