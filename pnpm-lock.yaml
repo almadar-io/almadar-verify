@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@almadar/core':
-        specifier: '>=5.3.2'
-        version: 5.3.2
+        specifier: '>=5.4.0'
+        version: 5.4.0
       '@faker-js/faker':
         specifier: ^9.9.0
         version: 9.9.0
@@ -39,8 +39,8 @@ importers:
 
 packages:
 
-  '@almadar/core@5.3.2':
-    resolution: {integrity: sha512-Gx4Q89qikFlznH2byZK3QQQ/VAmSH3J1Lu53SvwuksIqfl82M7Nwx8FP09FLeanOWN6YQrcsEB2LX7OkELuxxw==}
+  '@almadar/core@5.4.0':
+    resolution: {integrity: sha512-DLCSXZALq0XkaR5Kxs0INUto92yZ6Ai9mXySMHqC6NDhR4GqIQaQMuN0Zna8wCCWoco+WGh0oZta7DegRvzKOQ==}
 
   '@almadar/eslint-plugin@2.8.0':
     resolution: {integrity: sha512-8abtGsVP+YBaUEchSfGfQV3ZHEPtWt+4Swtu3P0AFofr+OMSfHLnor4aIwULzag+nHD9FQ7cQkVCTfBVgTHgiw==}
@@ -907,7 +907,7 @@ packages:
 
 snapshots:
 
-  '@almadar/core@5.3.2':
+  '@almadar/core@5.4.0':
     dependencies:
       '@almadar/patterns': 2.14.2
       zod: 3.25.76
@@ -919,7 +919,7 @@ snapshots:
 
   '@almadar/patterns@2.14.2':
     dependencies:
-      '@almadar/core': 5.3.2
+      '@almadar/core': 5.4.0
 
   '@esbuild/aix-ppc64@0.27.7':
     optional: true

@@ -17,15 +17,26 @@
  * @packageDocumentation
  */
 
-import type {
-  ResolvedIR,
-  ResolvedTraitTransition,
-  SExpr,
+import {
+  toBindingRoot,
+  type BindingRoot,
+  type ResolvedIR,
+  type ResolvedTraitEvent,
+  type ResolvedTraitTransition,
+  type SExpr,
 } from '@almadar/core';
+
+// Re-export so downstream verifier modules don't have to reach into @almadar/core.
+export type { BindingRoot } from '@almadar/core';
 
 // ── Event classification ──────────────────────────────────────────────
 
-export type EventKey = string;
+/**
+ * An event key string as declared on `ResolvedTraitEvent.key`. Kept as the
+ * raw union member (plain string) rather than a local alias so the type
+ * lines up 1:1 with the IR.
+ */
+type EventKey = ResolvedTraitEvent['key'];
 
 export interface EventClassification {
   /**
@@ -47,18 +58,6 @@ export interface EventClassification {
    */
   serverEmitted: Set<EventKey>;
 }
-
-// ── Bindings ──────────────────────────────────────────────────────────
-
-export type BindingRoot =
-  | 'config'
-  | 'payload'
-  | 'entity'
-  | 'state'
-  | 'user'
-  | 'item'
-  | 'now'
-  | 'other';
 
 /**
  * A single `@config.X`/`@payload.X`/`@entity.X` binding resolved in a
@@ -310,7 +309,7 @@ export class SchemaWalker {
     for (const [key, val] of Object.entries(obj)) {
       if (key === 'type' || key === 'children') continue;
       if (typeof val === 'string' && val.startsWith('@')) {
-        const parsed = this.parseBinding(val);
+        const parsed = this.classifyBinding(val);
         if (parsed) {
           out.push({
             path: val,
@@ -336,26 +335,27 @@ export class SchemaWalker {
     }
   }
 
-  private parseBinding(s: string): { root: BindingRoot; segments: string[] } | null {
+  /**
+   * Parse an `@X.path` binding string into the narrow schema-walker
+   * shape. Uses `toBindingRoot` from `@almadar/core` to narrow the head
+   * into the `BindingRoot` union — entity-reference bindings like
+   * `@User.name` fall through to `'other'` with the entity name retained
+   * as the first segment.
+   */
+  private classifyBinding(
+    s: string,
+  ): { root: BindingRoot; segments: string[] } | null {
     if (!s.startsWith('@')) return null;
     const body = s.slice(1);
     if (body.length === 0) return null;
     const parts = body.split('.');
     const head = parts[0];
-    const segments = parts.slice(1);
-    const knownRoots: BindingRoot[] = [
-      'config',
-      'payload',
-      'entity',
-      'state',
-      'user',
-      'item',
-      'now',
-    ];
-    if ((knownRoots as string[]).includes(head)) {
-      return { root: head as BindingRoot, segments };
-    }
-    return { root: 'other', segments: [head, ...segments] };
+    const tail = parts.slice(1);
+    const root = toBindingRoot(head);
+    return {
+      root,
+      segments: root === 'other' ? [head, ...tail] : tail,
+    };
   }
 
   private collectMutatingEffects(effect: SExpr, out: MutatingEffect[]): void {

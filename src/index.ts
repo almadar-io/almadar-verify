@@ -113,12 +113,12 @@ export {
 } from './schema/effect-scanner.js';
 
 // Schema walker — event classification + bindings + mutating effects
-// (feeds VG2 / VG3 / VG4 / VG11a / VG11c gates)
+// (feeds VG2 / VG3 / VG4 / VG11a / VG11c gates). `BindingRoot` is
+// re-exported from @almadar/core.
 export {
   SchemaWalker,
-  type EventKey,
-  type EventClassification,
   type BindingRoot,
+  type EventClassification,
   type SchemaBinding,
   type MutatingEffectKind,
   type MutatingEffect,
