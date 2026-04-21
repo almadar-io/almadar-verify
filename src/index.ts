@@ -160,6 +160,18 @@ export {
   type BindingAssertionResult,
 } from './browser/binding-assertions.js';
 
+// VG3 — click-path sample. After the programmatic engine walk, pick
+// one user-dispatchable transition per trait and fire it via an actual
+// DOM click so the button → bus → reducer plumbing is proven at least
+// once per trait. Pass1's sendEvent coverage stays untouched; this
+// augments with real click-through.
+export {
+  sampleClickPath,
+  type ClickPathSampleCheck,
+  type ClickPathTraitInput,
+  type ClickPathOptions,
+} from './browser/click-path.js';
+
 // State walk engine (shared two-pass verification)
 export { StateWalkEngine } from './engine/StateWalkEngine.js';
 export type {
