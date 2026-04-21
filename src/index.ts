@@ -112,6 +112,18 @@ export {
   type EntityBindingScan,
 } from './schema/effect-scanner.js';
 
+// Schema walker — event classification + bindings + mutating effects
+// (feeds VG2 / VG3 / VG4 / VG11a / VG11c gates)
+export {
+  SchemaWalker,
+  type EventKey,
+  type EventClassification,
+  type BindingRoot,
+  type SchemaBinding,
+  type MutatingEffectKind,
+  type MutatingEffect,
+} from './schema/walker.js';
+
 // State walk engine (shared two-pass verification)
 export { StateWalkEngine } from './engine/StateWalkEngine.js';
 export type {

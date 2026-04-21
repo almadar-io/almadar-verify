@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@almadar/core':
-        specifier: '>=4.8.2'
-        version: 4.8.2
+        specifier: '>=5.3.2'
+        version: 5.3.2
       '@faker-js/faker':
         specifier: ^9.9.0
         version: 9.9.0
@@ -39,19 +39,16 @@ importers:
 
 packages:
 
-  '@almadar/core@4.8.2':
-    resolution: {integrity: sha512-fc7GRURxLTIP+HrDZZnroVxCeePkuqi3pW4KuhhbRNQYYH3K4iECCgxzCr3UDlfVUD9tHaSVCV14UFZUd76XrQ==}
+  '@almadar/core@5.3.2':
+    resolution: {integrity: sha512-Gx4Q89qikFlznH2byZK3QQQ/VAmSH3J1Lu53SvwuksIqfl82M7Nwx8FP09FLeanOWN6YQrcsEB2LX7OkELuxxw==}
 
   '@almadar/eslint-plugin@2.8.0':
     resolution: {integrity: sha512-8abtGsVP+YBaUEchSfGfQV3ZHEPtWt+4Swtu3P0AFofr+OMSfHLnor4aIwULzag+nHD9FQ7cQkVCTfBVgTHgiw==}
     peerDependencies:
       eslint: '>=8.0.0'
 
-  '@almadar/operators@3.0.0':
-    resolution: {integrity: sha512-Ur6dD3FrWiq1A/XZ+I7lyjBev/eOZ77H1F6V2Xp4hZl2gHt7jbxatdCECEsG0qzJCwQen2vCKWLJEpl9yhFwMA==}
-
-  '@almadar/patterns@2.14.1':
-    resolution: {integrity: sha512-52oaXIOUpbezQZhKlJqqVSDhC57Hz6BOOQD2k0VBwmoHlDE3rteMRwY6jwQGe+EvsLGO6UcVcQnvLpr35KOjYA==}
+  '@almadar/patterns@2.14.2':
+    resolution: {integrity: sha512-3s1O0U1klHJDZjJY/714Hsdw2/ufh1iWAOLScVdOTNl/daj/hljvc2dkJdsyEXuSY+WRiNdY630aYrrEtKIvVA==}
 
   '@esbuild/aix-ppc64@0.27.7':
     resolution: {integrity: sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg==}
@@ -910,10 +907,9 @@ packages:
 
 snapshots:
 
-  '@almadar/core@4.8.2':
+  '@almadar/core@5.3.2':
     dependencies:
-      '@almadar/operators': 3.0.0
-      '@almadar/patterns': 2.14.1
+      '@almadar/patterns': 2.14.2
       zod: 3.25.76
 
   '@almadar/eslint-plugin@2.8.0(eslint@10.0.0)':
@@ -921,11 +917,9 @@ snapshots:
       eslint: 10.0.0
       jsonc-eslint-parser: 3.1.0
 
-  '@almadar/operators@3.0.0': {}
-
-  '@almadar/patterns@2.14.1':
+  '@almadar/patterns@2.14.2':
     dependencies:
-      '@almadar/core': 4.8.2
+      '@almadar/core': 5.3.2
 
   '@esbuild/aix-ppc64@0.27.7':
     optional: true
