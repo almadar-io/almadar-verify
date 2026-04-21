@@ -80,7 +80,7 @@ export function portalRendersFromTransition(
  * Read portal slot presence from the live DOM.
  *
  * Uses `#slot-<name>` (the canonical ID the runtime's
- * `UISlotRenderer` mounts). Skipped slots return `{ present: false,
+ * `UISlotRenderer` mounts). Missing slots return `{ present: false,
  * childCount: 0 }`.
  */
 async function readPortalSlot(
@@ -101,8 +101,55 @@ export interface ExpectedPortalRender {
   expectedPresent: boolean;
 }
 
+/** Options controlling the DOM probe's retry behavior. */
+export interface PortalProbeOptions {
+  /**
+   * Max time (ms) to wait for an expected-present slot to mount content
+   * before calling it a fail. Runtime paths can paint portals a few
+   * hundred ms after the state transition; a single-shot check at
+   * t=0 produced timing-race false-fails. Default: 3000.
+   */
+  mountTimeoutMs?: number;
+  /**
+   * Settle window (ms) to wait before checking that an expected-absent
+   * (cleared) slot actually cleared. Short by design — clears shouldn't
+   * need much time, and a long wait here punishes every clear probe
+   * for no signal. Default: 300.
+   */
+  clearSettleMs?: number;
+  /** Poll interval (ms) while waiting for a mount. Default: 100. */
+  pollMs?: number;
+}
+
 /**
- * Low-level portal probe. Runs a DOM check for each expected render.
+ * Wait for a portal slot to match `expectedPresent`, or fall through on
+ * timeout. Returns the final observation — the caller decides PASS/FAIL
+ * against that. For the expected-present case, polls up to
+ * `mountTimeoutMs`; for expected-absent, polls for a short `clearSettleMs`
+ * window and returns whatever it saw last.
+ */
+async function waitForPortalSlotState(
+  page: Page,
+  slot: PortalSlot,
+  expectedPresent: boolean,
+  options: Required<Pick<PortalProbeOptions, 'mountTimeoutMs' | 'clearSettleMs' | 'pollMs'>>,
+): Promise<{ present: boolean; childCount: number }> {
+  const deadline = Date.now() + (expectedPresent ? options.mountTimeoutMs : options.clearSettleMs);
+  let last = await readPortalSlot(page, slot);
+  while (Date.now() < deadline) {
+    const rendered = last.present && last.childCount > 0;
+    if (expectedPresent ? rendered : !rendered) return last;
+    await page.waitForTimeout(options.pollMs);
+    last = await readPortalSlot(page, slot);
+  }
+  return last;
+}
+
+/**
+ * Low-level portal probe. Runs a DOM check for each expected render,
+ * with retry-with-backoff so runtime-path modals that paint a few
+ * hundred ms after the state transition aren't misreported as missing.
+ *
  * Callers that already have the expected slot list (e.g. derived from
  * an extracted render-effect array instead of the full OIR) use this
  * directly; callers with a `ResolvedTraitTransition` in hand should
@@ -111,19 +158,25 @@ export interface ExpectedPortalRender {
 export async function probePortalSlots(
   page: Page,
   expected: readonly ExpectedPortalRender[],
+  options: PortalProbeOptions = {},
 ): Promise<PortalSlotCheck[]> {
   if (expected.length === 0) return [];
+  const opts = {
+    mountTimeoutMs: options.mountTimeoutMs ?? 3000,
+    clearSettleMs: options.clearSettleMs ?? 300,
+    pollMs: options.pollMs ?? 100,
+  };
   const results: PortalSlotCheck[] = [];
   for (const { slot, expectedPresent } of expected) {
-    const { present, childCount } = await readPortalSlot(page, slot);
+    const { present, childCount } = await waitForPortalSlotState(page, slot, expectedPresent, opts);
     const rendered = present && childCount > 0;
     const passed = expectedPresent ? rendered : !rendered;
     const detail = expectedPresent
       ? rendered
         ? `#slot-${slot} rendered with ${childCount} child(ren)`
-        : `#slot-${slot} expected content but ${present ? 'slot is empty' : 'slot not mounted'}`
+        : `#slot-${slot} expected content but ${present ? 'slot is empty' : 'slot not mounted'} after ${opts.mountTimeoutMs}ms`
       : rendered
-        ? `#slot-${slot} expected to be cleared but has ${childCount} child(ren)`
+        ? `#slot-${slot} expected to be cleared but has ${childCount} child(ren) after ${opts.clearSettleMs}ms`
         : `#slot-${slot} cleared as expected`;
     results.push({
       slot,
@@ -145,8 +198,9 @@ export async function probePortalSlots(
 export async function probePortalSlotsAfterTransition(
   page: Page,
   transition: ResolvedTraitTransition,
+  options?: PortalProbeOptions,
 ): Promise<PortalSlotCheck[]> {
-  return probePortalSlots(page, portalRendersFromTransition(transition));
+  return probePortalSlots(page, portalRendersFromTransition(transition), options);
 }
 
 /**

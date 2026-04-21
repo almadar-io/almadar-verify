@@ -139,6 +139,7 @@ export {
   type PortalSlot,
   type PortalSlotCheck,
   type ExpectedPortalRender,
+  type PortalProbeOptions,
 } from './browser/portal-slots.js';
 
 // VG6 — ref-trait invariant. Every trait reported via
