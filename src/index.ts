@@ -30,11 +30,13 @@ export {
 export {
   readVerificationSnapshot,
   readTraitStates,
+  readTraitSnapshots,
   readEventLog,
   readRuntimeState,
   getTraitCurrentState,
   verifyTransitionAccepted,
   type OrbitalVerificationSnapshot,
+  type TraitStateSnapshot,
 } from './runtime/state-bridge.js';
 
 // Entity data inspector
@@ -123,6 +125,38 @@ export {
   type MutatingEffectKind,
   type MutatingEffect,
 } from './schema/walker.js';
+
+// VG1 — portal slot presence probe. After render-ui-to-portal
+// transitions, asserts the matching `#slot-<name>` element mounted
+// with at least one child.
+export {
+  PORTAL_SLOTS,
+  isPortalSlot,
+  portalRendersFromTransition,
+  probePortalSlotsAfterTransition,
+  findTransition,
+  type PortalSlot,
+  type PortalSlotCheck,
+} from './browser/portal-slots.js';
+
+// VG6 — ref-trait invariant. Every trait reported via
+// `getTraitSnapshots()` must have a non-empty state + event list.
+export {
+  checkRefTraitInvariant,
+  assertRefTraitInvariant,
+  type RefTraitInvariantCheck,
+  type RefTraitInvariantResult,
+} from './browser/ref-trait-invariant.js';
+
+// VG11a — binding-to-DOM assertions. For every binding the schema
+// says the trait's current state renders, resolve the expected value
+// from config/payload/entity and assert it lands in the target slot.
+export {
+  probeBindingsAfterTransition,
+  probeAllTraitBindings,
+  type BindingCheck,
+  type BindingAssertionResult,
+} from './browser/binding-assertions.js';
 
 // State walk engine (shared two-pass verification)
 export { StateWalkEngine } from './engine/StateWalkEngine.js';

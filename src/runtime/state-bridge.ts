@@ -8,33 +8,25 @@
  */
 
 import type { Page } from 'playwright';
+import type {
+  TraitStateSnapshot,
+  VerificationSnapshot,
+} from '@almadar/core';
 import type { RuntimeState } from '../util/types.js';
 
-/** Shape of window.__orbitalVerification (subset used by verify tools) */
-export interface OrbitalVerificationSnapshot {
-  checks: Array<{
-    id: string;
-    label: string;
-    status: 'pass' | 'fail' | 'pending' | 'warn';
-    details?: string;
-  }>;
-  transitions: Array<{
-    id: string;
-    traitName: string;
-    from: string;
-    to: string;
-    event: string;
-    effects: Array<{ type: string; status: string; error?: string }>;
-  }>;
-  bridge: { connected: boolean } | null;
-  summary: {
-    totalChecks: number;
-    passed: number;
-    failed: number;
-    warnings: number;
-    pending: number;
-  };
-}
+/**
+ * Shape of `window.__orbitalVerification.getSnapshot()`. Re-exported as
+ * `OrbitalVerificationSnapshot` for backwards compatibility with callers
+ * that predate the core hoist; new code should import
+ * {@link VerificationSnapshot} directly from `@almadar/core`.
+ */
+export type OrbitalVerificationSnapshot = VerificationSnapshot;
+
+/**
+ * Re-export of the core wire type so callers of `state-bridge` don't
+ * have to reach into `@almadar/core` just to type a snapshot reader.
+ */
+export type { TraitStateSnapshot };
 
 /**
  * Read the verification snapshot from the browser.
@@ -122,6 +114,24 @@ export async function verifyTransitionAccepted(
     return { accepted: false, stateBefore, stateAfter: stateBefore };
   }
   return { accepted: true, stateBefore, stateAfter: null }; // stateAfter filled by caller after firing
+}
+
+/**
+ * Read per-trait reducer snapshots from the verification API.
+ * Returns an empty array on older runtimes that do not expose
+ * `getTraitSnapshots` (the Foundation 1 surface). Each entry carries
+ * the trait's current state, declared states/events, reducer `data`,
+ * `lastPayload`, last user-dispatched event, and cascade receipts.
+ */
+export async function readTraitSnapshots(
+  page: Page,
+): Promise<TraitStateSnapshot[]> {
+  return page.evaluate(() => {
+    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
+      | { getTraitSnapshots?: () => TraitStateSnapshot[] }
+      | undefined;
+    return api?.getTraitSnapshots?.() ?? [];
+  });
 }
 
 /**
