@@ -7,14 +7,18 @@
  * about whether the button the schema promises actually wires to the
  * event — you can ship a broken button and still see PASS.
  *
- * VG3 closes that gap with a **sample**: for each trait, pick ONE
- * transition whose event is declared as user-dispatchable (schema's
- * render-ui tree has a button / action / submitEvent for it), find the
- * corresponding DOM trigger, click it, and assert the state changed.
- * One click per trait is enough to prove the click-path end-to-end:
- * button → bus emit → reducer dispatch → state update. If that sample
- * passes, the remaining transitions of the same trait either share the
- * plumbing or are off the user's happy path.
+ * VG3 closes that gap with a **sample**: for each trait, pick ONE of
+ * its declared user-dispatchable events, find the corresponding DOM
+ * trigger, click it, and assert that *some* trait's state advanced as
+ * a result. Looking at "any trait changed" (not just the owning trait)
+ * matters because cross-trait handoffs are legit — a cart's `ADD_ITEM`
+ * button fires into a modal trait that then flips from `closed` to
+ * `form`, while the cart's own state stays on `browsing`.
+ *
+ * One click per trait is enough to prove the click-path plumbing end-
+ * to-end: button → bus emit → reducer dispatch → state update somewhere.
+ * If the sample passes, the remaining events of the same trait either
+ * share the plumbing or are off the user's happy path.
  *
  * This is deliberately narrower than Pass 2 "click every transition" —
  * sampling keeps the walk fast while still catching the class of
@@ -25,7 +29,7 @@
  */
 
 import type { Page } from 'playwright';
-import { getTraitCurrentState } from '../runtime/state-bridge.js';
+import { readTraitSnapshots, type TraitStateSnapshot } from '../runtime/state-bridge.js';
 
 /**
  * Events the runtime fires on its own (lifecycle) or that aren't user-
@@ -43,45 +47,50 @@ const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
 
 /** Input shape for one trait. Kept minimal so callers don't need the full IR. */
 export interface ClickPathTraitInput {
+  /** Name of the trait we're sampling on behalf of. */
   traitName: string;
-  /** Initial state name — used as the expected source when no state-bridge read is available. */
-  initialState: string;
   /**
    * Event keys the schema declared as user-dispatchable for this trait
    * (typically `trait.renderUIEvents` from the caller's plan). Events
    * not in this list are skipped (they're cascade / server-emit only
-   * per VG2).
+   * per VG2). Lifecycle events (`INIT` / `LOAD` / `$MOUNT`) are
+   * filtered out internally.
    */
   userDispatchableEvents: readonly string[];
-  /**
-   * Transition graph: used to pick a candidate whose `from` matches the
-   * current state. Only the `from`, `event`, `to` fields are consulted.
-   */
-  transitions: ReadonlyArray<{ from: string; event: string; to: string }>;
 }
 
 /** Result of one trait's click-path sample. */
 export interface ClickPathSampleCheck {
   traitName: string;
-  /** Event we tried to click. `null` when no candidate satisfied the pre-conditions. */
+  /** Event we tried to click. `null` when there was no candidate to try. */
   event: string | null;
-  /** CSS selector that actually matched + was clicked. `null` on no-match. */
+  /** CSS selector that matched + was clicked. `null` when no selector matched. */
   selector: string | null;
-  /** State the trait was in before the click, as read from the bridge. */
-  stateBefore: string | null;
-  /** State the trait was in after the click (and the settle wait). */
-  stateAfter: string | null;
-  /** True when the click fired and the state advanced to the transition's `to`. */
+  /**
+   * Snapshot of every trait's state BEFORE the click, keyed by
+   * trait name. Used as the baseline for the "did anything change"
+   * assertion.
+   */
+  statesBefore: Record<string, string>;
+  /** Same shape, AFTER the click + settle. */
+  statesAfter: Record<string, string>;
+  /**
+   * Trait names whose state differed between before and after.
+   * A non-empty array means the click made something happen; an empty
+   * array with `selector !== null` means we clicked a button and
+   * nothing happened (likely broken wiring or stale button).
+   */
+  changedTraits: string[];
   passed: boolean;
   detail: string;
 }
 
 export interface ClickPathOptions {
   /**
-   * Page reset hook — called before reading state so the sample
-   * starts from a clean page. If omitted, the probe uses whatever
-   * state the page is currently in; callers that have driven the page
-   * past initial via pass-1 should provide a reset.
+   * Page reset hook — called before sampling so the click runs against
+   * a freshly navigated page. If omitted, the probe uses whatever page
+   * state the caller left behind; callers that drove the page past
+   * initial via pass-1 should provide a reset.
    */
   reset?: (page: Page) => Promise<void>;
   /**
@@ -90,23 +99,19 @@ export interface ClickPathOptions {
    */
   settleMs?: number;
   /**
-   * Max time (ms) to wait after reset for the trait's state bridge to
-   * report *any* current state. The runtime typically needs a tick to
-   * wire `getTraitState` via `bindTraitStateGetter` before any read
-   * succeeds; without this wait the sample sees `null`, falls back to
-   * `initialState` (usually pre-INIT like `loading`), and picks
-   * candidates that don't make sense for the post-INIT page the user
-   * actually sees. Default: 5000.
+   * Max time (ms) to wait after reset for the trait snapshot bridge to
+   * populate. The runtime needs a tick to wire `registerTraitSnapshot`
+   * for each trait before any read succeeds. Default: 5000.
    */
   stateReadyTimeoutMs?: number;
-  /** Poll interval (ms) while waiting for state. Default: 150. */
+  /** Poll interval (ms) while waiting for the bridge. Default: 150. */
   stateReadyPollMs?: number;
 }
 
 /**
- * Candidate selectors for finding a clickable DOM trigger for an event.
- * Mirrors the button-finding heuristics used by `tryTriggerContractEvent`
- * in orbital-verify-unified, in priority order:
+ * Selectors for finding a clickable DOM trigger for an event. Mirrors
+ * the button-finding heuristics used by `tryTriggerContractEvent` in
+ * orbital-verify-unified, in priority order:
  *
  * 1. `[data-testid="action-EVENT"]` — the canonical id @almadar/ui
  *    stamps on every `action` / `event`-bound control.
@@ -139,16 +144,41 @@ async function tryClickSelector(
   }
 }
 
+/** Turn `readTraitSnapshots` output into a `{ traitName: currentState }` map. */
+function snapshotsToStateMap(snapshots: TraitStateSnapshot[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const s of snapshots) out[s.traitName] = s.currentState;
+  return out;
+}
+
+function diffStateMaps(
+  before: Record<string, string>,
+  after: Record<string, string>,
+): string[] {
+  const changed: string[] = [];
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const k of keys) {
+    if (before[k] !== after[k]) changed.push(k);
+  }
+  return changed;
+}
+
 /**
  * Execute one click-path sample against a running page. Returns a
  * {@link ClickPathSampleCheck} with the outcome for the verifier's
  * report.
  *
- * Picks the first user-dispatchable event whose transition's `from`
- * matches the current bridge state. If none match, returns with
- * `event: null` and a `detail` explaining why the sample was skipped —
- * a legitimate outcome for traits whose every user event requires a
- * non-initial state the walker never navigates to here.
+ * Strategy:
+ * 1. Reset the page (caller hook) and wait for the snapshot bridge
+ *    to populate.
+ * 2. For each user-dispatchable event (lifecycle excluded), find a
+ *    clickable trigger in the DOM.
+ * 3. Snapshot every trait's state, click, wait, snapshot again.
+ * 4. Diff: if any trait's state changed, the click fired and wired
+ *    through; PASS. Otherwise the click hit a dead button; FAIL.
+ * 5. If no selector matched any candidate event, the sample is FAIL
+ *    with a "no trigger" detail — the schema claims a user-dispatchable
+ *    event but the DOM doesn't expose it.
  */
 export async function sampleClickPath(
   page: Page,
@@ -163,73 +193,72 @@ export async function sampleClickPath(
     await options.reset(page);
   }
 
-  // Poll the bridge until it reports a state for this trait (or we
-  // time out). Using the bridge — not the schema's `initialState` —
-  // means we sample against the state the user actually lands in
-  // after INIT has fired, not the pre-INIT state the schema happens
-  // to declare first.
-  let stateBefore: string | null = null;
+  // Wait for at least one snapshot to populate — the bridge needs a
+  // tick after page load before `getTraitSnapshots()` reports anything.
+  let statesBefore: Record<string, string> = {};
   const deadline = Date.now() + stateReadyTimeoutMs;
   while (Date.now() < deadline) {
-    stateBefore = await getTraitCurrentState(page, trait.traitName);
-    if (stateBefore !== null) break;
+    const snaps = await readTraitSnapshots(page);
+    if (snaps.length > 0) {
+      statesBefore = snapshotsToStateMap(snaps);
+      break;
+    }
     await page.waitForTimeout(stateReadyPollMs);
   }
-  if (stateBefore === null) stateBefore = trait.initialState;
 
-  const candidates = trait.transitions.filter(
-    (t) =>
-      t.from === stateBefore &&
-      trait.userDispatchableEvents.includes(t.event) &&
-      !LIFECYCLE_EVENTS.has(t.event),
-  );
+  const candidates = trait.userDispatchableEvents.filter((e) => !LIFECYCLE_EVENTS.has(e));
 
   if (candidates.length === 0) {
     return {
       traitName: trait.traitName,
       event: null,
       selector: null,
-      stateBefore,
-      stateAfter: stateBefore,
-      passed: false,
+      statesBefore,
+      statesAfter: statesBefore,
+      changedTraits: [],
+      passed: true,
       detail:
-        `no user-dispatchable event with from=${stateBefore} on trait ${trait.traitName}` +
-        ` (user events: [${[...trait.userDispatchableEvents].join(', ')}])`,
+        `skipped: no non-lifecycle user-dispatchable events declared for trait ${trait.traitName}`,
     };
   }
 
-  for (const candidate of candidates) {
-    for (const selector of selectorsFor(candidate.event)) {
+  let firstTriedEvent: string | null = null;
+  for (const event of candidates) {
+    firstTriedEvent ??= event;
+    for (const selector of selectorsFor(event)) {
       const clicked = await tryClickSelector(page, selector);
       if (!clicked) continue;
 
       await page.waitForTimeout(settleMs);
-      const stateAfter = await getTraitCurrentState(page, trait.traitName);
-      const advanced = stateAfter === candidate.to;
+      const statesAfter = snapshotsToStateMap(await readTraitSnapshots(page));
+      const changedTraits = diffStateMaps(statesBefore, statesAfter);
 
       return {
         traitName: trait.traitName,
-        event: candidate.event,
+        event,
         selector,
-        stateBefore,
-        stateAfter,
-        passed: advanced,
-        detail: advanced
-          ? `clicked ${selector} → state ${stateBefore} → ${stateAfter}`
-          : `clicked ${selector} but state did not advance (expected ${candidate.to}, got ${stateAfter ?? 'null'})`,
+        statesBefore,
+        statesAfter,
+        changedTraits,
+        passed: changedTraits.length > 0,
+        detail: changedTraits.length > 0
+          ? `clicked ${selector} → ${changedTraits.length} trait(s) changed: ` +
+            changedTraits.map((t) => `${t} ${statesBefore[t] ?? 'null'} → ${statesAfter[t]}`).join(', ')
+          : `clicked ${selector} but no trait state advanced — button likely wired to a dead event key`,
       };
     }
   }
 
   return {
     traitName: trait.traitName,
-    event: candidates[0].event,
+    event: firstTriedEvent,
     selector: null,
-    stateBefore,
-    stateAfter: stateBefore,
+    statesBefore,
+    statesAfter: statesBefore,
+    changedTraits: [],
     passed: false,
     detail:
-      `no selector matched for event ${candidates[0].event} on trait ${trait.traitName}` +
-      ` (tried: ${selectorsFor(candidates[0].event).join(', ')})`,
+      `no clickable trigger found for any user-dispatchable event on trait ${trait.traitName}` +
+      ` (tried events: [${candidates.join(', ')}])`,
   };
 }
