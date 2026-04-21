@@ -133,10 +133,12 @@ export {
   PORTAL_SLOTS,
   isPortalSlot,
   portalRendersFromTransition,
+  probePortalSlots,
   probePortalSlotsAfterTransition,
   findTransition,
   type PortalSlot,
   type PortalSlotCheck,
+  type ExpectedPortalRender,
 } from './browser/portal-slots.js';
 
 // VG6 — ref-trait invariant. Every trait reported via

@@ -94,18 +94,25 @@ async function readPortalSlot(
   }, slot);
 }
 
-/**
- * Run portal-slot probes for a transition's expected renders.
- * Returns one {@link PortalSlotCheck} per render-ui to a portal slot.
- * Callers aggregate the results into their check list / report.
- */
-export async function probePortalSlotsAfterTransition(
-  page: Page,
-  transition: ResolvedTraitTransition,
-): Promise<PortalSlotCheck[]> {
-  const expected = portalRendersFromTransition(transition);
-  if (expected.length === 0) return [];
+/** An expected portal render the caller has already derived. */
+export interface ExpectedPortalRender {
+  slot: PortalSlot;
+  /** `true` when the transition's render-ui provided content; `false` on clear. */
+  expectedPresent: boolean;
+}
 
+/**
+ * Low-level portal probe. Runs a DOM check for each expected render.
+ * Callers that already have the expected slot list (e.g. derived from
+ * an extracted render-effect array instead of the full OIR) use this
+ * directly; callers with a `ResolvedTraitTransition` in hand should
+ * use {@link probePortalSlotsAfterTransition}, which wraps this.
+ */
+export async function probePortalSlots(
+  page: Page,
+  expected: readonly ExpectedPortalRender[],
+): Promise<PortalSlotCheck[]> {
+  if (expected.length === 0) return [];
   const results: PortalSlotCheck[] = [];
   for (const { slot, expectedPresent } of expected) {
     const { present, childCount } = await readPortalSlot(page, slot);
@@ -128,6 +135,18 @@ export async function probePortalSlotsAfterTransition(
     });
   }
   return results;
+}
+
+/**
+ * Run portal-slot probes for a transition's expected renders.
+ * Returns one {@link PortalSlotCheck} per render-ui to a portal slot.
+ * Callers aggregate the results into their check list / report.
+ */
+export async function probePortalSlotsAfterTransition(
+  page: Page,
+  transition: ResolvedTraitTransition,
+): Promise<PortalSlotCheck[]> {
+  return probePortalSlots(page, portalRendersFromTransition(transition));
 }
 
 /**
