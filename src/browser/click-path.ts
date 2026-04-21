@@ -27,6 +27,20 @@
 import type { Page } from 'playwright';
 import { getTraitCurrentState } from '../runtime/state-bridge.js';
 
+/**
+ * Events the runtime fires on its own (lifecycle) or that aren't user-
+ * invokable by design. VG3 excludes these from click-path candidates:
+ * clicking a lifecycle event would at best be a no-op and at worst
+ * mask the real "button wires to X" failure the sample is meant to
+ * catch.
+ */
+const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
+  'INIT',
+  'LOAD',
+  '$MOUNT',
+  '$UNMOUNT',
+]);
+
 /** Input shape for one trait. Kept minimal so callers don't need the full IR. */
 export interface ClickPathTraitInput {
   traitName: string;
@@ -65,7 +79,7 @@ export interface ClickPathSampleCheck {
 export interface ClickPathOptions {
   /**
    * Page reset hook — called before reading state so the sample
-   * starts from `initialState`. If omitted, the probe uses whatever
+   * starts from a clean page. If omitted, the probe uses whatever
    * state the page is currently in; callers that have driven the page
    * past initial via pass-1 should provide a reset.
    */
@@ -76,9 +90,17 @@ export interface ClickPathOptions {
    */
   settleMs?: number;
   /**
-   * Extra wait (ms) after reset before state reads. Default: 500.
+   * Max time (ms) to wait after reset for the trait's state bridge to
+   * report *any* current state. The runtime typically needs a tick to
+   * wire `getTraitState` via `bindTraitStateGetter` before any read
+   * succeeds; without this wait the sample sees `null`, falls back to
+   * `initialState` (usually pre-INIT like `loading`), and picks
+   * candidates that don't make sense for the post-INIT page the user
+   * actually sees. Default: 5000.
    */
-  postResetWaitMs?: number;
+  stateReadyTimeoutMs?: number;
+  /** Poll interval (ms) while waiting for state. Default: 150. */
+  stateReadyPollMs?: number;
 }
 
 /**
@@ -134,17 +156,32 @@ export async function sampleClickPath(
   options: ClickPathOptions = {},
 ): Promise<ClickPathSampleCheck> {
   const settleMs = options.settleMs ?? 1500;
-  const postResetWaitMs = options.postResetWaitMs ?? 500;
+  const stateReadyTimeoutMs = options.stateReadyTimeoutMs ?? 5000;
+  const stateReadyPollMs = options.stateReadyPollMs ?? 150;
 
   if (options.reset) {
     await options.reset(page);
-    await page.waitForTimeout(postResetWaitMs);
   }
 
-  const stateBefore = (await getTraitCurrentState(page, trait.traitName)) ?? trait.initialState;
+  // Poll the bridge until it reports a state for this trait (or we
+  // time out). Using the bridge — not the schema's `initialState` —
+  // means we sample against the state the user actually lands in
+  // after INIT has fired, not the pre-INIT state the schema happens
+  // to declare first.
+  let stateBefore: string | null = null;
+  const deadline = Date.now() + stateReadyTimeoutMs;
+  while (Date.now() < deadline) {
+    stateBefore = await getTraitCurrentState(page, trait.traitName);
+    if (stateBefore !== null) break;
+    await page.waitForTimeout(stateReadyPollMs);
+  }
+  if (stateBefore === null) stateBefore = trait.initialState;
 
   const candidates = trait.transitions.filter(
-    (t) => t.from === stateBefore && trait.userDispatchableEvents.includes(t.event),
+    (t) =>
+      t.from === stateBefore &&
+      trait.userDispatchableEvents.includes(t.event) &&
+      !LIFECYCLE_EVENTS.has(t.event),
   );
 
   if (candidates.length === 0) {
