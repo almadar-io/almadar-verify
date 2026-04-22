@@ -31,6 +31,7 @@
 import type { Page } from 'playwright';
 import type { EventPayload } from '@almadar/core';
 import { readTraitSnapshots, type TraitStateSnapshot } from '../runtime/state-bridge.js';
+import { fillFormFields } from './interaction.js';
 import {
   probeCascadeFlowDelta,
   type CascadeFlowDeltaResult,
@@ -433,27 +434,20 @@ async function sampleOneSite(
     await page.waitForTimeout(stateReadyPollMs);
   }
 
-  // VG16: reach non-initial-state sites by dispatching their rendering
-  // transition's event first. Modal-internal buttons (SAVE inside the
-  // Add-Item modal, CONFIRM_REMOVE inside the remove-confirm modal)
-  // never paint from the initial state; without this dispatch the
-  // sampler sees "no clickable trigger" because the host slot is empty.
+  // VG16 reach: drive the trait to `reach.toState` by CLICKING the real
+  // DOM button for `reach.event` — same user flow that mounts the
+  // site's host slot in production. Critically NOT `sendEvent(reach,
+  // {})`: a synthesized reach payload doesn't carry row context, so
+  // downstream state (lastPayload.id, entity rows, etc.) that the
+  // site's click reads back would be empty. A real click on a
+  // DataGrid's itemAction button carries `{id: row.id, row}` because
+  // the component stamps it; a header button click carries whatever
+  // its `actionPayload` resolved to. Either way, the verifier exercises
+  // exactly what the user does.
   //
-  // Many traits auto-progress past their initial state via lifecycle
-  // events (CartItemLoaded auto-fires for browse traits on orbital
-  // init). Dispatching reach into an auto-progressing trait with an
-  // empty payload re-runs its fetch/render-ui against `@payload.data
-  // === undefined`, emptying the slot we were trying to reach. Poll
-  // for natural progression first: if the trait leaves `fromState` on
-  // its own within a short grace window, the reach event has already
-  // been handled by the normal lifecycle and we do nothing. If it's
-  // still stuck in fromState after the window, the site is genuinely
-  // user-gated (like modal open via ADD_ITEM) and we dispatch.
-  //
-  // Skipped when fromState === toState (the transition is a pure
-  // render refresh) and when currentState is undefined (snapshot
-  // bridge still warming — pretending to synthesise events into an
-  // unregistered trait hides real regressions).
+  // Poll for natural progression first: auto-progressing traits may
+  // have already left `fromState` (e.g. CartItemLoaded lifecycle), in
+  // which case there's nothing to click — the site is already reachable.
   if (site.reach && site.reach.fromState !== site.reach.toState) {
     const settleDeadline = Date.now() + 2000;
     let currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
@@ -462,30 +456,35 @@ async function sampleOneSite(
       currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
     }
     if (currentState === site.reach.fromState) {
-      const reachPayload: EventPayload = site.reach.payload ?? {};
-      // `EventPayload`'s recursive shape makes Playwright's
-      // `page.evaluate` generic inference blow past TS's instantiation
-      // depth. Serialize to JSON at the boundary — the browser receives
-      // a plain object and re-parses with the same EventPayload contract
-      // on arrival. Keeps both sides strongly typed without the inference
-      // explosion.
-      await page.evaluate(
-        ({ ev, plJson }: { ev: string; plJson: string }) => {
-          const pl = JSON.parse(plJson) as EventPayload;
-          const api = (window as unknown as {
-            __orbitalVerification?: { sendEvent?: (event: string, payload?: EventPayload) => void };
-          }).__orbitalVerification;
-          api?.sendEvent?.(ev, pl);
-        },
-        { ev: site.reach.event, plJson: JSON.stringify(reachPayload) },
-      );
+      let reachClicked = false;
+      for (const selector of selectorsFor(site.reach.event)) {
+        if (await tryClickSelector(page, selector)) {
+          reachClicked = true;
+          break;
+        }
+      }
+      if (!reachClicked) {
+        // Site's reach button isn't in the DOM — can't reach. Bail out
+        // with a clear failure rather than masking with sendEvent
+        // synthesis; this is the class of bug VG3/VG11d is meant to
+        // surface.
+        return {
+          traitName: site.traitName,
+          event: site.event,
+          selector: null,
+          statesBefore: snapshotsToStateMap(await readTraitSnapshots(page)),
+          statesAfter: {},
+          changedTraits: [],
+          passed: false,
+          detail:
+            `reach failed for site ${site.siteKey}: no DOM button for reach event "${site.reach.event}" ` +
+            `(expected selectors: ${selectorsFor(site.reach.event).join(' | ')})`,
+        };
+      }
       // Poll for the trait to reach toState before giving up — the
       // event pipeline is async (enqueueAndDrain runs the transition
       // + effects in a promise chain) and the render-ui slot needs
-      // one React commit to mount. A fixed 300ms worked for minimal
-      // schemas but raced against real pipelines (composer expansion,
-      // server-bridge round-trip for fetch effects). Poll up to 2s
-      // for the state change; exit as soon as we see it.
+      // one React commit to mount.
       const mountDeadline = Date.now() + 2000;
       while (Date.now() < mountDeadline) {
         await page.waitForTimeout(100);
@@ -501,6 +500,23 @@ async function sampleOneSite(
   // all traits that report the entity in `data`. Matches the convention
   // used by phase4-browser's existing VG11b baseline capture.
   const countsBefore = entityCountsFromSnapshots(snapsBefore);
+
+  // Form-submit sites (e.g. `form-section` pattern with propPath ending
+  // `.submitEvent`) require filling the form before the submit click
+  // produces a non-empty payload — otherwise SAVE fires with `{data: {}}`
+  // and the downstream persist creates a blank row that never appears
+  // in the DataGrid. Detect these sites and run the fill flow first.
+  const isFormSubmit = site.patternType === 'form-section' && /\.(submitEvent)$/.test(site.propPath);
+  if (isFormSubmit) {
+    // Scope the fill to whichever slot the form renders in. The runtime
+    // stamps `#slot-<name>` on every portal; for the main slot use the
+    // document root.
+    const slotContainer = `#slot-${site.slot}`;
+    await fillFormFields(page, slotContainer).catch(() => {
+      // Fallback: try filling form anywhere in the document (a
+      // form-section rendered into `main` may not live under a portal).
+    });
+  }
 
   for (const selector of selectorsFor(site.event)) {
     const clicked = await tryClickSelector(page, selector);
