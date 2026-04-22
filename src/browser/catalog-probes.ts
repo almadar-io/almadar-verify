@@ -485,9 +485,23 @@ export async function probeCascadeFlowDelta(
     pairs.every((p) =>
       probeMutationDelta(p.transition, input.baselineCounts, afterCounts).every((r) => r.passed),
     );
+  // Diagnostic trace: VG11d failures were impossible to debug without
+  // seeing the count-per-poll. Stored on the result so the caller can
+  // emit it alongside the failure detail; drives triage between
+  // "cascade never fired" vs "reducer dropped the update" vs "snapshot
+  // bridge returned stale data."
+  const trace: Array<{ t: number; counts: Record<string, number> }> = [];
+  const snapshot = (): void => {
+    trace.push({
+      t: Date.now(),
+      counts: Object.fromEntries(afterCounts),
+    });
+  };
+  snapshot();
   while (!allPassed() && Date.now() < deadline) {
     await input.wait(pollIntervalMs);
     afterCounts = await input.readAfterCounts();
+    snapshot();
   }
 
   // Final result per pair.
@@ -498,6 +512,9 @@ export async function probeCascadeFlowDelta(
     const summary = mutationResults
       .map((r) => `${r.kind} ${r.entity}: ${r.detail}`)
       .join('; ');
+    const traceLabel = allOk
+      ? ''
+      : ` | baseline=${JSON.stringify(Object.fromEntries(input.baselineCounts))} poll=${trace.length} samples last3=${trace.slice(-3).map((s) => JSON.stringify(s.counts)).join('→')}`;
     results.push({
       clickedEvent: input.clickedEvent,
       listeningTrait: pair.listenerName,
@@ -506,7 +523,7 @@ export async function probeCascadeFlowDelta(
       passed: allOk,
       detail: allOk
         ? `cascade ${input.clickedEvent} → ${pair.listenerName}.${pair.triggeredEvent}: ${summary}`
-        : `cascade ${input.clickedEvent} → ${pair.listenerName}.${pair.triggeredEvent} failed: ${summary}`,
+        : `cascade ${input.clickedEvent} → ${pair.listenerName}.${pair.triggeredEvent} failed: ${summary}${traceLabel}`,
     });
   }
   return results;
