@@ -450,7 +450,7 @@ export async function probeCascadeFlowDelta(
     pollIntervalMs?: number;
   },
 ): Promise<CascadeFlowDeltaResult[]> {
-  const pollTimeoutMs = input.pollTimeoutMs ?? 4000;
+  const pollTimeoutMs = input.pollTimeoutMs ?? 10_000;
   const pollIntervalMs = input.pollIntervalMs ?? 250;
 
   // Resolve: which (listener, triggered-transition) pairs need a delta check?
