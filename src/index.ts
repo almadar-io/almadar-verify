@@ -161,10 +161,12 @@ export {
   type BindingAssertionResult,
 } from './browser/binding-assertions.js';
 
-// VG4 / VG11a / VG11b / VG11c — catalog-effect probes. Operate on raw
-// SExpr effect arrays directly; both runtime-verify's CatalogTransition
-// and orbital-verify-unified's UnifiedTransition satisfy `TransitionLike`
-// so each tool shares one binding / cascade / mutation implementation.
+// VG4 / VG11a / VG11b / VG11c / VG11d — catalog-effect probes. Operate on
+// raw SExpr effect arrays; both runtime-verify's CatalogTransition and
+// orbital-verify-unified's UnifiedTransition satisfy `TransitionLike` so
+// each tool shares one binding / cascade / mutation implementation.
+// `probeCascadeFlowDelta` is the VG11d gate — end-to-end row-count delta
+// through a user-click → cross-trait listens cascade → persist/fetch.
 export {
   collectCatalogBindings,
   pickBySegments,
@@ -174,6 +176,7 @@ export {
   probeMutationDelta,
   collectEmitDeclarations,
   probeCascadeCount,
+  probeCascadeFlowDelta,
   type TransitionLike,
   type TraitListenerLike,
   type CatalogBinding,
@@ -182,6 +185,7 @@ export {
   type MutationCheckResult,
   type EmitDeclaration,
   type CascadeCheckResult,
+  type CascadeFlowDeltaResult,
 } from './browser/catalog-probes.js';
 
 // VG3 — click-path sample. After the programmatic engine walk, pick

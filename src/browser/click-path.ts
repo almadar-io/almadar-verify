@@ -30,6 +30,11 @@
 
 import type { Page } from 'playwright';
 import { readTraitSnapshots, type TraitStateSnapshot } from '../runtime/state-bridge.js';
+import {
+  probeCascadeFlowDelta,
+  type CascadeFlowDeltaResult,
+  type TraitListenerLike,
+} from './catalog-probes.js';
 
 /**
  * Events the runtime fires on its own (lifecycle) or that aren't user-
@@ -141,6 +146,16 @@ export interface ClickPathSampleCheck {
   changedTraits: string[];
   passed: boolean;
   detail: string;
+  /**
+   * VG11d — cascade-flow delta. When the caller supplies
+   * `listenerTraits` in {@link ClickPathOptions}, each listener whose
+   * `listens[].event === site.event` AND whose triggered transition
+   * has persist/fetch effects contributes an entry here. One entry per
+   * `(listener trait, triggered event)` pair; `passed` is true when every
+   * mutation on the triggered transition landed the expected row delta.
+   * Empty array when no cascade was declared for the clicked event.
+   */
+  cascadeFlowDeltas?: CascadeFlowDeltaResult[];
 }
 
 export interface ClickPathOptions {
@@ -164,6 +179,19 @@ export interface ClickPathOptions {
   stateReadyTimeoutMs?: number;
   /** Poll interval (ms) while waiting for the bridge. Default: 150. */
   stateReadyPollMs?: number;
+  /**
+   * VG11d — listener trait catalog. When supplied, each click also
+   * triggers a cascade-flow delta assertion: any listener whose
+   * `listens[].event` matches the clicked event AND whose triggered
+   * transition has persist/fetch effects must produce the expected
+   * row-count delta within {@link cascadeFlowPollMs}. Closes the
+   * blind-spot where VG11b skips cascade-triggered frames because
+   * engine-synthesized payloads are unreliable — a user click carries
+   * the real payload, so end-to-end delta IS testable.
+   */
+  listenerTraits?: readonly TraitListenerLike[];
+  /** VG11d — polling timeout for cascade-flow delta. Default: 4000ms. */
+  cascadeFlowPollMs?: number;
 }
 
 /**
@@ -445,7 +473,12 @@ async function sampleOneSite(
     }
   }
 
-  const statesBefore = snapshotsToStateMap(await readTraitSnapshots(page));
+  const snapsBefore = await readTraitSnapshots(page);
+  const statesBefore = snapshotsToStateMap(snapsBefore);
+  // VG11d baseline — entity row counts BEFORE the click, max'd across
+  // all traits that report the entity in `data`. Matches the convention
+  // used by phase4-browser's existing VG11b baseline capture.
+  const countsBefore = entityCountsFromSnapshots(snapsBefore);
 
   for (const selector of selectorsFor(site.event)) {
     const clicked = await tryClickSelector(page, selector);
@@ -455,6 +488,33 @@ async function sampleOneSite(
     const statesAfter = snapshotsToStateMap(await readTraitSnapshots(page));
     const changedTraits = diffStateMaps(statesBefore, statesAfter);
 
+    // VG11d — cascade-flow delta. Fires only when the caller supplied a
+    // listener catalog; the probe stays silent when there's no cascade
+    // to test. Polling lives inside the probe; reuses probeMutationDelta's
+    // +1/-1/0 delta rules.
+    let cascadeFlowDeltas: CascadeFlowDeltaResult[] | undefined;
+    if (options.listenerTraits && options.listenerTraits.length > 0) {
+      cascadeFlowDeltas = await probeCascadeFlowDelta({
+        clickedEvent: site.event,
+        listenerTraits: options.listenerTraits,
+        baselineCounts: countsBefore,
+        readAfterCounts: async () => entityCountsFromSnapshots(await readTraitSnapshots(page)),
+        wait: (ms) => page.waitForTimeout(ms),
+        pollTimeoutMs: options.cascadeFlowPollMs,
+      });
+    }
+
+    const changeSummary = changedTraits.length > 0
+      ? `${changedTraits.length} trait(s) changed: ` +
+        changedTraits.map((t) => `${t} ${statesBefore[t] ?? 'null'} → ${statesAfter[t]}`).join(', ')
+      : 'no trait state advanced';
+    const cascadeSummary =
+      cascadeFlowDeltas && cascadeFlowDeltas.length > 0
+        ? ` | cascade: ${cascadeFlowDeltas.map((c) => (c.passed ? `${c.listeningTrait}.${c.triggeredEvent} ✓` : `${c.listeningTrait}.${c.triggeredEvent} ✗ (${c.detail})`)).join(', ')}`
+        : '';
+    const cascadePassed = cascadeFlowDeltas ? cascadeFlowDeltas.every((c) => c.passed) : true;
+    const statePassed = changedTraits.length > 0;
+
     return {
       traitName: site.traitName,
       event: site.event,
@@ -462,11 +522,11 @@ async function sampleOneSite(
       statesBefore,
       statesAfter,
       changedTraits,
-      passed: changedTraits.length > 0,
-      detail: changedTraits.length > 0
-        ? `site ${site.siteKey} clicked ${selector} → ${changedTraits.length} trait(s) changed: ` +
-          changedTraits.map((t) => `${t} ${statesBefore[t] ?? 'null'} → ${statesAfter[t]}`).join(', ')
+      passed: statePassed && cascadePassed,
+      detail: statePassed
+        ? `site ${site.siteKey} clicked ${selector} → ${changeSummary}${cascadeSummary}`
         : `site ${site.siteKey} clicked ${selector} but no trait state advanced — button likely wired to a dead event key`,
+      cascadeFlowDeltas,
     };
   }
 
@@ -482,4 +542,16 @@ async function sampleOneSite(
       `no clickable trigger found for site ${site.siteKey} (event: ${site.event}, slot: ${site.slot}, ` +
       `pattern: ${site.patternType}, propPath: ${site.propPath})`,
   };
+}
+
+/** Max row count per entity across every trait's `data[entity]`. */
+function entityCountsFromSnapshots(snapshots: readonly TraitStateSnapshot[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const s of snapshots) {
+    for (const [entity, rows] of Object.entries(s.data ?? {})) {
+      const n = Array.isArray(rows) ? rows.length : 0;
+      out.set(entity, Math.max(out.get(entity) ?? 0, n));
+    }
+  }
+  return out;
 }

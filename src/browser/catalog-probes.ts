@@ -37,11 +37,15 @@ export interface TransitionLike {
 /**
  * Minimal trait surface for cascade cross-reference lookups. Both
  * tools' trait shapes have a `name` plus an optional `listens` array
- * of `{ event }` entries.
+ * of `{ event, triggers }` entries. `transitions` and `linkedEntity`
+ * are optional — supplied when VG11d's `probeCascadeFlowDelta` needs to
+ * find the downstream persist effects and the entity they mutate.
  */
 export interface TraitListenerLike {
   name: string;
-  listens?: readonly { event?: string }[];
+  listens?: readonly { event?: string; triggers?: string }[];
+  transitions?: readonly TransitionLike[];
+  linkedEntity?: string;
 }
 
 // ── VG11a — Binding-to-DOM ─────────────────────────────────────────────
@@ -374,6 +378,136 @@ export function probeCascadeCount(
           : `${listener.name} listens for ${event} but cascadeReceived didn't grow (baseline: ${baselineCount}, after: ${matching})`,
       });
     }
+  }
+  return results;
+}
+
+// ── VG11d — Cascade-flow delta (end-to-end user-click mutation delta) ──
+
+/**
+ * Per-listener cascade result. One entry per (listener trait, triggered
+ * event) pair that a clicked event fed into, with the full mutation-delta
+ * breakdown for every persist/fetch effect on the triggered transition.
+ */
+export interface CascadeFlowDeltaResult {
+  /** The user-click event at the source of the cascade. */
+  clickedEvent: string;
+  /** The trait whose `listens` matched `clickedEvent`. */
+  listeningTrait: string;
+  /** The trigger event dispatched on the listening trait. */
+  triggeredEvent: string;
+  /** Row-count deltas for every persist/fetch effect on the triggered transition. */
+  mutations: MutationCheckResult[];
+  /** Overall pass iff every mutation delta passed (or there were none). */
+  passed: boolean;
+  detail: string;
+}
+
+/**
+ * VG11d — assert that a user click produces the end-to-end row-count
+ * delta the schema promises through a cross-trait `listens` cascade.
+ *
+ * Frame-level gates (VG4 `probeCascadeCount`, VG11b `probeMutationDelta`)
+ * each verify one step of the chain in isolation:
+ * - VG4: "listener received the emit event"
+ * - VG11b: "the listener's transition produced +1/-1 rows when the
+ *   engine dispatched the triggered event directly"
+ *
+ * Neither catches the case exposed by std-cart's Save/Confirm-Remove: a
+ * real user click on event `E` cascades into another trait's `T` whose
+ * transition has `(persist create/delete ...)`, but the row never
+ * appears/disappears because `T`'s payload is empty, or the persist
+ * short-circuits, or the downstream refetch never fires. `probeMutationDelta`
+ * explicitly SKIPs cascade-triggered frames (engine-synthesized payloads
+ * are unreliable), so the only way to test this path is to let the user
+ * click do the work and measure the delta.
+ *
+ * Algorithm:
+ * 1. For each listener trait with `listens[].event === clickedEvent`,
+ *    look up the transition whose `event === listens[].triggers`.
+ * 2. Pull the mutation effects off that transition via `collectMutationEffects`.
+ * 3. Poll `readAfterCounts` up to `pollTimeoutMs` for the expected
+ *    delta (+1 on create, -1 on delete). Break early when all mutations
+ *    pass.
+ * 4. Run `probeMutationDelta` with the final snapshot; return one
+ *    result per (listener, triggered-event) pair.
+ *
+ * Callers supply:
+ * - `readAfterCounts`: closure that reads the post-click entity count
+ *   map. Typically wraps `readTraitSnapshots(page)` + max across all
+ *   traits' `data[entity].length`.
+ * - `baselineCounts`: pre-click entity count map, captured right
+ *   before the click. Same shape as `readAfterCounts`'s return.
+ */
+export async function probeCascadeFlowDelta(
+  input: {
+    clickedEvent: string;
+    listenerTraits: readonly TraitListenerLike[];
+    baselineCounts: ReadonlyMap<string, number>;
+    readAfterCounts: () => Promise<Map<string, number>>;
+    wait: (ms: number) => Promise<void>;
+    pollTimeoutMs?: number;
+    pollIntervalMs?: number;
+  },
+): Promise<CascadeFlowDeltaResult[]> {
+  const pollTimeoutMs = input.pollTimeoutMs ?? 4000;
+  const pollIntervalMs = input.pollIntervalMs ?? 250;
+
+  // Resolve: which (listener, triggered-transition) pairs need a delta check?
+  type Pair = {
+    listenerName: string;
+    triggeredEvent: string;
+    transition: TransitionLike;
+    mutations: MutationEffect[];
+  };
+  const pairs: Pair[] = [];
+  for (const trait of input.listenerTraits) {
+    if (!Array.isArray(trait.listens) || !Array.isArray(trait.transitions)) continue;
+    for (const listen of trait.listens) {
+      if (listen.event !== input.clickedEvent) continue;
+      if (typeof listen.triggers !== 'string') continue;
+      const triggeredEvent = listen.triggers;
+      for (const tx of trait.transitions) {
+        if (tx.event !== triggeredEvent) continue;
+        const mutations = collectMutationEffects(tx.effects);
+        if (mutations.length === 0) continue;
+        pairs.push({ listenerName: trait.name, triggeredEvent, transition: tx, mutations });
+      }
+    }
+  }
+
+  if (pairs.length === 0) return [];
+
+  // Poll for all pairs to pass, break early when every pair's mutations pass.
+  let afterCounts = await input.readAfterCounts();
+  const deadline = Date.now() + pollTimeoutMs;
+  const allPassed = (): boolean =>
+    pairs.every((p) =>
+      probeMutationDelta(p.transition, input.baselineCounts, afterCounts).every((r) => r.passed),
+    );
+  while (!allPassed() && Date.now() < deadline) {
+    await input.wait(pollIntervalMs);
+    afterCounts = await input.readAfterCounts();
+  }
+
+  // Final result per pair.
+  const results: CascadeFlowDeltaResult[] = [];
+  for (const pair of pairs) {
+    const mutationResults = probeMutationDelta(pair.transition, input.baselineCounts, afterCounts);
+    const allOk = mutationResults.every((r) => r.passed);
+    const summary = mutationResults
+      .map((r) => `${r.kind} ${r.entity}: ${r.detail}`)
+      .join('; ');
+    results.push({
+      clickedEvent: input.clickedEvent,
+      listeningTrait: pair.listenerName,
+      triggeredEvent: pair.triggeredEvent,
+      mutations: mutationResults,
+      passed: allOk,
+      detail: allOk
+        ? `cascade ${input.clickedEvent} → ${pair.listenerName}.${pair.triggeredEvent}: ${summary}`
+        : `cascade ${input.clickedEvent} → ${pair.listenerName}.${pair.triggeredEvent} failed: ${summary}`,
+    });
   }
   return results;
 }
