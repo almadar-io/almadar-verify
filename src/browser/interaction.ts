@@ -14,6 +14,7 @@
  */
 
 import type { Page } from 'playwright';
+import type { EventPayload } from '@almadar/core';
 import { faker } from '@faker-js/faker';
 
 // ── Pattern Classification ──────────────────────────────────────────
@@ -120,8 +121,8 @@ export interface EntityFieldDef {
 export function buildMinimalPayload(
   fields: Array<string | { name: string; type?: string }>,
   entityFields?: EntityFieldDef[],
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
+): EventPayload {
+  const payload: EventPayload = {};
 
   // Build a lookup of entity fields by name for quick access
   const entityFieldMap = new Map<string, EntityFieldDef>();

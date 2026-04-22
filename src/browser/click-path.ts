@@ -29,6 +29,7 @@
  */
 
 import type { Page } from 'playwright';
+import type { EventPayload } from '@almadar/core';
 import { readTraitSnapshots, type TraitStateSnapshot } from '../runtime/state-bridge.js';
 import {
   probeCascadeFlowDelta,
@@ -119,6 +120,19 @@ export interface ClickPathRenderSite {
     fromState: string;
     /** State the trait is in after the transition (and while the site renders). */
     toState: string;
+    /**
+     * Optional payload for the reach dispatch. Without it the sampler
+     * fires `sendEvent(reach.event, {})` — which is enough to drive a
+     * no-payload transition but drops context for payload-bearing events
+     * (e.g. `REQUEST_REMOVE { id }` sets `@entity.pendingId = @payload.id`
+     * and the Confirm button downstream reads back `@entity.pendingId`).
+     * When the caller knows the event's payload schema, supply a
+     * synthesized value (typically via `buildMinimalPayload`) so the
+     * downstream state has real data to render + assert against. Types
+     * through `EventPayload` from `@almadar/core` so it can't drift from
+     * the contract every other emit/listen site uses.
+     */
+    payload?: EventPayload;
   };
 }
 
@@ -448,14 +462,22 @@ async function sampleOneSite(
       currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
     }
     if (currentState === site.reach.fromState) {
+      const reachPayload: EventPayload = site.reach.payload ?? {};
+      // `EventPayload`'s recursive shape makes Playwright's
+      // `page.evaluate` generic inference blow past TS's instantiation
+      // depth. Serialize to JSON at the boundary — the browser receives
+      // a plain object and re-parses with the same EventPayload contract
+      // on arrival. Keeps both sides strongly typed without the inference
+      // explosion.
       await page.evaluate(
-        (ev) => {
+        ({ ev, plJson }: { ev: string; plJson: string }) => {
+          const pl = JSON.parse(plJson) as EventPayload;
           const api = (window as unknown as {
-            __orbitalVerification?: { sendEvent?: (event: string, payload?: Record<string, unknown>) => void };
+            __orbitalVerification?: { sendEvent?: (event: string, payload?: EventPayload) => void };
           }).__orbitalVerification;
-          api?.sendEvent?.(ev, {});
+          api?.sendEvent?.(ev, pl);
         },
-        site.reach.event,
+        { ev: site.reach.event, plJson: JSON.stringify(reachPayload) },
       );
       // Poll for the trait to reach toState before giving up — the
       // event pipeline is async (enqueueAndDrain runs the transition
