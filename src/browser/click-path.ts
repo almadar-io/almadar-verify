@@ -95,6 +95,26 @@ export interface ClickPathRenderSite {
    * DataGrid. Exposed in the report's detail line for triage.
    */
   propPath: string;
+  /**
+   * Optional — the transition that ORIGINALLY rendered this site. Used
+   * to reach non-initial-state sites (e.g., buttons inside a modal that
+   * only paints in the trait's `open` state). The sampler dispatches
+   * `reach.event` into the runtime BEFORE clicking the target, giving
+   * the schema a chance to render the site's host slot. Callers that
+   * don't populate this fall back to "click from initial state" which
+   * works for main-slot sites but loses modal-internal coverage (VG16).
+   *
+   * When omitted OR when `toState === fromState` (the transition is a
+   * no-state-change render refresh), the sampler skips the dispatch.
+   */
+  reach?: {
+    /** Event key that triggered the rendering transition. */
+    event: string;
+    /** State the trait was in before the transition. */
+    fromState: string;
+    /** State the trait is in after the transition (and while the site renders). */
+    toState: string;
+  };
 }
 
 /** Result of one trait's click-path sample. */
@@ -362,16 +382,52 @@ async function sampleOneSite(
     await options.reset(page);
   }
 
-  let statesBefore: Record<string, string> = {};
+  // Wait for the state-snapshot bridge to populate — every trait has
+  // registered its getter and reported at least its initial state.
   const deadline = Date.now() + stateReadyTimeoutMs;
   while (Date.now() < deadline) {
     const snaps = await readTraitSnapshots(page);
-    if (snaps.length > 0) {
-      statesBefore = snapshotsToStateMap(snaps);
-      break;
-    }
+    if (snaps.length > 0) break;
     await page.waitForTimeout(stateReadyPollMs);
   }
+
+  // VG16: reach non-initial-state sites by dispatching their rendering
+  // transition's event first. Modal-internal buttons (SAVE inside the
+  // Add-Item modal, CONFIRM_REMOVE inside the remove-confirm modal)
+  // never paint from the initial state; without this dispatch the
+  // sampler sees "no clickable trigger" because the host slot is empty.
+  //
+  // The dispatch only runs when:
+  //   - the site carries reach info (caller opted in),
+  //   - the rendering transition actually changed state (otherwise
+  //     firing the reach event is wasted — it's a refresh),
+  //   - and the trait isn't already in the toState (a no-op otherwise).
+  //
+  // Uses `window.__orbitalVerification.sendEvent` (bound by
+  // `bindEventBus` at runtime), which re-prefixes with `UI:` and emits
+  // on the event bus the state machine listens on. Payload is `{}` —
+  // richer payloads belong to a dedicated reach-path planner.
+  if (site.reach && site.reach.fromState !== site.reach.toState) {
+    const currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
+    if (currentState !== site.reach.toState) {
+      await page.evaluate(
+        (ev) => {
+          const api = (window as unknown as {
+            __orbitalVerification?: { sendEvent?: (event: string, payload?: Record<string, unknown>) => void };
+          }).__orbitalVerification;
+          api?.sendEvent?.(ev, {});
+        },
+        site.reach.event,
+      );
+      // Give the transition + render-ui effect time to paint the host
+      // slot. 300ms is generous for React + portal mount in practice;
+      // callers can bump via `settleMs` if their schema runs heavier
+      // Phase 0 composers on the transition.
+      await page.waitForTimeout(300);
+    }
+  }
+
+  const statesBefore = snapshotsToStateMap(await readTraitSnapshots(page));
 
   for (const selector of selectorsFor(site.event)) {
     const clicked = await tryClickSelector(page, selector);
