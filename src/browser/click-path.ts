@@ -397,11 +397,16 @@ async function sampleOneSite(
   // never paint from the initial state; without this dispatch the
   // sampler sees "no clickable trigger" because the host slot is empty.
   //
-  // The dispatch only runs when:
-  //   - the site carries reach info (caller opted in),
-  //   - the rendering transition actually changed state (otherwise
-  //     firing the reach event is wasted — it's a refresh),
-  //   - and the trait isn't already in the toState (a no-op otherwise).
+  // Only dispatch when the trait is currently IN `fromState`. Any other
+  // current state means:
+  //   - trait has already auto-progressed past fromState (CartItemLoaded
+  //     auto-fires on INIT for browsing-on-load traits) — the site is
+  //     already reachable, dispatching would be a redundant event that
+  //     risks re-firing fetch/render-ui with an empty payload;
+  //   - OR the snapshot bridge hasn't populated (currentState ===
+  //     undefined) — leave the site to the default click-path; dispatching
+  //     into an unregistered trait is unobservable from the verifier's
+  //     perspective and can mask real regressions.
   //
   // Uses `window.__orbitalVerification.sendEvent` (bound by
   // `bindEventBus` at runtime), which re-prefixes with `UI:` and emits
@@ -409,7 +414,7 @@ async function sampleOneSite(
   // richer payloads belong to a dedicated reach-path planner.
   if (site.reach && site.reach.fromState !== site.reach.toState) {
     const currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
-    if (currentState !== site.reach.toState) {
+    if (currentState === site.reach.fromState) {
       await page.evaluate(
         (ev) => {
           const api = (window as unknown as {
