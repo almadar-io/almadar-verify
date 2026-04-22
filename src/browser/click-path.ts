@@ -397,23 +397,28 @@ async function sampleOneSite(
   // never paint from the initial state; without this dispatch the
   // sampler sees "no clickable trigger" because the host slot is empty.
   //
-  // Only dispatch when the trait is currently IN `fromState`. Any other
-  // current state means:
-  //   - trait has already auto-progressed past fromState (CartItemLoaded
-  //     auto-fires on INIT for browsing-on-load traits) — the site is
-  //     already reachable, dispatching would be a redundant event that
-  //     risks re-firing fetch/render-ui with an empty payload;
-  //   - OR the snapshot bridge hasn't populated (currentState ===
-  //     undefined) — leave the site to the default click-path; dispatching
-  //     into an unregistered trait is unobservable from the verifier's
-  //     perspective and can mask real regressions.
+  // Many traits auto-progress past their initial state via lifecycle
+  // events (CartItemLoaded auto-fires for browse traits on orbital
+  // init). Dispatching reach into an auto-progressing trait with an
+  // empty payload re-runs its fetch/render-ui against `@payload.data
+  // === undefined`, emptying the slot we were trying to reach. Poll
+  // for natural progression first: if the trait leaves `fromState` on
+  // its own within a short grace window, the reach event has already
+  // been handled by the normal lifecycle and we do nothing. If it's
+  // still stuck in fromState after the window, the site is genuinely
+  // user-gated (like modal open via ADD_ITEM) and we dispatch.
   //
-  // Uses `window.__orbitalVerification.sendEvent` (bound by
-  // `bindEventBus` at runtime), which re-prefixes with `UI:` and emits
-  // on the event bus the state machine listens on. Payload is `{}` —
-  // richer payloads belong to a dedicated reach-path planner.
+  // Skipped when fromState === toState (the transition is a pure
+  // render refresh) and when currentState is undefined (snapshot
+  // bridge still warming — pretending to synthesise events into an
+  // unregistered trait hides real regressions).
   if (site.reach && site.reach.fromState !== site.reach.toState) {
-    const currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
+    const settleDeadline = Date.now() + 2000;
+    let currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
+    while (currentState === site.reach.fromState && Date.now() < settleDeadline) {
+      await page.waitForTimeout(150);
+      currentState = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
+    }
     if (currentState === site.reach.fromState) {
       await page.evaluate(
         (ev) => {
