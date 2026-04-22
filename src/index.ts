@@ -161,6 +161,29 @@ export {
   type BindingAssertionResult,
 } from './browser/binding-assertions.js';
 
+// VG4 / VG11a / VG11b / VG11c — catalog-effect probes. Operate on raw
+// SExpr effect arrays directly; both runtime-verify's CatalogTransition
+// and orbital-verify-unified's UnifiedTransition satisfy `TransitionLike`
+// so each tool shares one binding / cascade / mutation implementation.
+export {
+  collectCatalogBindings,
+  pickBySegments,
+  valueToText,
+  probeBindingsForTransition,
+  collectMutationEffects,
+  probeMutationDelta,
+  collectEmitDeclarations,
+  probeCascadeCount,
+  type TransitionLike,
+  type TraitListenerLike,
+  type CatalogBinding,
+  type BindingProbeResult,
+  type MutationEffect,
+  type MutationCheckResult,
+  type EmitDeclaration,
+  type CascadeCheckResult,
+} from './browser/catalog-probes.js';
+
 // VG3 — click-path sample. After the programmatic engine walk, pick
 // one user-dispatchable transition per trait and fire it via an actual
 // DOM click so the button → bus → reducer plumbing is proven at least
