@@ -86,11 +86,14 @@ export function portalRendersFromTransition(
 async function readPortalSlot(
   page: Page,
   slot: PortalSlot,
-): Promise<{ present: boolean; childCount: number }> {
+): Promise<{ present: boolean; childCount: number; visibleSlots: string[] }> {
   return page.evaluate((s) => {
     const el = document.getElementById(`slot-${s}`);
-    if (!el) return { present: false, childCount: 0 };
-    return { present: true, childCount: el.children.length };
+    const visibleSlots = [...document.querySelectorAll('[id^="slot-"]')]
+      .map((n) => n.id)
+      .filter((id, i, arr) => arr.indexOf(id) === i);
+    if (!el) return { present: false, childCount: 0, visibleSlots };
+    return { present: true, childCount: el.children.length, visibleSlots };
   }, slot);
 }
 
@@ -133,7 +136,7 @@ async function waitForPortalSlotState(
   slot: PortalSlot,
   expectedPresent: boolean,
   options: Required<Pick<PortalProbeOptions, 'mountTimeoutMs' | 'clearSettleMs' | 'pollMs'>>,
-): Promise<{ present: boolean; childCount: number }> {
+): Promise<{ present: boolean; childCount: number; visibleSlots: string[] }> {
   const deadline = Date.now() + (expectedPresent ? options.mountTimeoutMs : options.clearSettleMs);
   let last = await readPortalSlot(page, slot);
   while (Date.now() < deadline) {
@@ -168,13 +171,21 @@ export async function probePortalSlots(
   };
   const results: PortalSlotCheck[] = [];
   for (const { slot, expectedPresent } of expected) {
-    const { present, childCount } = await waitForPortalSlotState(page, slot, expectedPresent, opts);
+    const { present, childCount, visibleSlots } = await waitForPortalSlotState(page, slot, expectedPresent, opts);
     const rendered = present && childCount > 0;
     const passed = expectedPresent ? rendered : !rendered;
+    // When a mount probe fails, include the set of slot-* IDs that ARE in
+    // the DOM. Distinguishes two failure modes: slot element never created
+    // (trait not subscribed / not re-rendered) vs element exists but empty
+    // (content didn't flow). Cheap to capture and makes debugging VG15
+    // considerably faster.
+    const slotsDump = visibleSlots.length > 0
+      ? ` [slots present: ${visibleSlots.join(', ')}]`
+      : ` [no slots mounted]`;
     const detail = expectedPresent
       ? rendered
         ? `#slot-${slot} rendered with ${childCount} child(ren)`
-        : `#slot-${slot} expected content but ${present ? 'slot is empty' : 'slot not mounted'} after ${opts.mountTimeoutMs}ms`
+        : `#slot-${slot} expected content but ${present ? 'slot is empty' : 'slot not mounted'} after ${opts.mountTimeoutMs}ms${slotsDump}`
       : rendered
         ? `#slot-${slot} expected to be cleared but has ${childCount} child(ren) after ${opts.clearSettleMs}ms`
         : `#slot-${slot} cleared as expected`;
