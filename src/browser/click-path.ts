@@ -429,11 +429,19 @@ async function sampleOneSite(
         },
         site.reach.event,
       );
-      // Give the transition + render-ui effect time to paint the host
-      // slot. 300ms is generous for React + portal mount in practice;
-      // callers can bump via `settleMs` if their schema runs heavier
-      // Phase 0 composers on the transition.
-      await page.waitForTimeout(300);
+      // Poll for the trait to reach toState before giving up — the
+      // event pipeline is async (enqueueAndDrain runs the transition
+      // + effects in a promise chain) and the render-ui slot needs
+      // one React commit to mount. A fixed 300ms worked for minimal
+      // schemas but raced against real pipelines (composer expansion,
+      // server-bridge round-trip for fetch effects). Poll up to 2s
+      // for the state change; exit as soon as we see it.
+      const mountDeadline = Date.now() + 2000;
+      while (Date.now() < mountDeadline) {
+        await page.waitForTimeout(100);
+        const next = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
+        if (next === site.reach.toState) break;
+      }
     }
   }
 
