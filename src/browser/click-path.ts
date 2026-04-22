@@ -59,6 +59,44 @@ export interface ClickPathTraitInput {
   userDispatchableEvents: readonly string[];
 }
 
+/**
+ * One render-site entry for the per-site VG3 sample (VG14).
+ *
+ * A render-site is a distinct `(slot, patternType, propPath)` occurrence
+ * where a declared event key appears in a trait's render-ui tree. VG3's
+ * original design sampled ONE event per trait; on patterns like
+ * `DataGrid` that expose BOTH a primary `action` prop AND a per-row
+ * `itemActions[].event` list, only the first click got tested and the
+ * itemAction buttons were never verified.
+ *
+ * Keying by (trait, slot, pattern, propPath, index) surfaces both the
+ * page-header button and the row itemAction as separate samples, so
+ * std-cart's `ADD_ITEM` (header) AND `REQUEST_REMOVE` (row) both land in
+ * the VG3 report.
+ */
+export interface ClickPathRenderSite {
+  /** Trait that owns this render-site. */
+  traitName: string;
+  /**
+   * Stable identifier: `"<slot>:<patternType>:<propPath>[:<index>]"`.
+   * Callers generate this at extraction time; sampleClickPathsPerSite
+   * treats duplicate keys as already-clicked and skips them.
+   */
+  siteKey: string;
+  /** Event key to click. Lifecycle events must not appear here. */
+  event: string;
+  /** Slot (`"main"`, `"modal"`, `"drawer"`, ...) for debugging output. */
+  slot: string;
+  /** Pattern type (`"button"`, `"data-grid"`, ...) for debugging output. */
+  patternType: string;
+  /**
+   * Dotted path to the event-valued prop within the pattern's
+   * propsSchema, e.g. `"action"` for Button, `"itemActions[].event"` for
+   * DataGrid. Exposed in the report's detail line for triage.
+   */
+  propPath: string;
+}
+
 /** Result of one trait's click-path sample. */
 export interface ClickPathSampleCheck {
   traitName: string;
@@ -260,5 +298,114 @@ export async function sampleClickPath(
     detail:
       `no clickable trigger found for any user-dispatchable event on trait ${trait.traitName}` +
       ` (tried events: [${candidates.join(', ')}])`,
+  };
+}
+
+/**
+ * Per-render-site click-path sample (VG14).
+ *
+ * Replaces `sampleClickPath`'s one-click-per-trait heuristic with one
+ * click per distinct render-site, so patterns that expose multiple
+ * event-valued props (DataGrid's primary `action` AND per-row
+ * `itemActions[].event`, for instance) all get exercised. Dedupes by
+ * `site.siteKey` — same site keyed by caller won't be clicked twice
+ * even if two callers pass it in.
+ *
+ * Each site is sampled in isolation: we reset the page via
+ * `options.reset`, wait for the snapshot bridge, snapshot state, click,
+ * wait, snapshot again, and diff. Same pass/fail rule as the per-trait
+ * sample: any trait's state must advance as a result of the click.
+ *
+ * Lifecycle events (`INIT` / `LOAD` / `$MOUNT` / `$UNMOUNT`) are dropped
+ * at the input boundary — callers typically exclude them during
+ * render-site extraction, but the filter is defensive.
+ */
+export async function sampleClickPathsPerSite(
+  page: Page,
+  sites: readonly ClickPathRenderSite[],
+  options: ClickPathOptions = {},
+): Promise<ClickPathSampleCheck[]> {
+  const results: ClickPathSampleCheck[] = [];
+  const seen = new Set<string>();
+
+  for (const site of sites) {
+    if (seen.has(site.siteKey)) continue;
+    seen.add(site.siteKey);
+    if (LIFECYCLE_EVENTS.has(site.event)) continue;
+
+    // Reset the page per site so clicks don't leak state across samples.
+    // Without this, click #2 runs from whatever state click #1 left — the
+    // sample loses the clean "did THIS click make something happen"
+    // signal that's the whole point of VG3.
+    const result = await sampleOneSite(page, site, options);
+    results.push(result);
+  }
+
+  return results;
+}
+
+/**
+ * Helper: run a single click-path sample against one render-site. Shares
+ * the reset + bridge-wait + diff logic with `sampleClickPath` but keyed
+ * on a specific event (not a list of candidates).
+ */
+async function sampleOneSite(
+  page: Page,
+  site: ClickPathRenderSite,
+  options: ClickPathOptions,
+): Promise<ClickPathSampleCheck> {
+  const settleMs = options.settleMs ?? 1500;
+  const stateReadyTimeoutMs = options.stateReadyTimeoutMs ?? 5000;
+  const stateReadyPollMs = options.stateReadyPollMs ?? 150;
+
+  if (options.reset) {
+    await options.reset(page);
+  }
+
+  let statesBefore: Record<string, string> = {};
+  const deadline = Date.now() + stateReadyTimeoutMs;
+  while (Date.now() < deadline) {
+    const snaps = await readTraitSnapshots(page);
+    if (snaps.length > 0) {
+      statesBefore = snapshotsToStateMap(snaps);
+      break;
+    }
+    await page.waitForTimeout(stateReadyPollMs);
+  }
+
+  for (const selector of selectorsFor(site.event)) {
+    const clicked = await tryClickSelector(page, selector);
+    if (!clicked) continue;
+
+    await page.waitForTimeout(settleMs);
+    const statesAfter = snapshotsToStateMap(await readTraitSnapshots(page));
+    const changedTraits = diffStateMaps(statesBefore, statesAfter);
+
+    return {
+      traitName: site.traitName,
+      event: site.event,
+      selector,
+      statesBefore,
+      statesAfter,
+      changedTraits,
+      passed: changedTraits.length > 0,
+      detail: changedTraits.length > 0
+        ? `site ${site.siteKey} clicked ${selector} → ${changedTraits.length} trait(s) changed: ` +
+          changedTraits.map((t) => `${t} ${statesBefore[t] ?? 'null'} → ${statesAfter[t]}`).join(', ')
+        : `site ${site.siteKey} clicked ${selector} but no trait state advanced — button likely wired to a dead event key`,
+    };
+  }
+
+  return {
+    traitName: site.traitName,
+    event: site.event,
+    selector: null,
+    statesBefore,
+    statesAfter: statesBefore,
+    changedTraits: [],
+    passed: false,
+    detail:
+      `no clickable trigger found for site ${site.siteKey} (event: ${site.event}, slot: ${site.slot}, ` +
+      `pattern: ${site.patternType}, propPath: ${site.propPath})`,
   };
 }

@@ -168,9 +168,11 @@ export {
 // augments with real click-through.
 export {
   sampleClickPath,
+  sampleClickPathsPerSite,
   type ClickPathSampleCheck,
   type ClickPathTraitInput,
   type ClickPathOptions,
+  type ClickPathRenderSite,
 } from './browser/click-path.js';
 
 // State walk engine (shared two-pass verification)
