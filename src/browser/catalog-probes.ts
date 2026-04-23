@@ -631,8 +631,10 @@ export interface EntityRowContentResult {
  *
  * Skipped / empty fields that do NOT fail the check:
  * - `id`, `createdAt`, `updatedAt` (framework-managed)
- * - Fields with a `default` (empty string default = declared OK)
- * - Fields where `required: false` or unspecified
+ * - Fields with a declared `default` (the schema has already said "OK at
+ *   this value" — `pendingId: string = ""` declares empty as acceptable,
+ *   so the probe must not flip around and fail because "" is empty)
+ * - Fields where `required: false`
  */
 export function probeEntityRowContent(input: {
   entityName: string;
@@ -663,8 +665,12 @@ export function probeEntityRowContent(input: {
   for (const field of input.entityFields) {
     if (FRAMEWORK.has(field.name)) continue;
     if (field.required === false) continue;
-    // Fields with defaults are "present" even if the caller omitted them.
-    if (!field.required && field.default === undefined) continue;
+    // Fields with a declared default are acceptable at that default, so
+    // whatever value is on the row is schema-conformant. Don't probe.
+    if (field.default !== undefined) continue;
+    // Fields with no declared requiredness and no default are best-effort
+    // optional — also skip.
+    if (!field.required) continue;
 
     const value = newRow[field.name];
     const isEmpty =
