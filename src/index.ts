@@ -180,6 +180,7 @@ export {
   collectEmitDeclarations,
   probeCascadeCount,
   probeCascadeFlowDelta,
+  probeEntityRowContent,
   type TransitionLike,
   type TraitListenerLike,
   type CatalogBinding,
@@ -189,6 +190,9 @@ export {
   type EmitDeclaration,
   type CascadeCheckResult,
   type CascadeFlowDeltaResult,
+  type EntityFieldLike,
+  type FieldContentCheck,
+  type EntityRowContentResult,
 } from './browser/catalog-probes.js';
 
 // VG3 — click-path sample. After the programmatic engine walk, pick

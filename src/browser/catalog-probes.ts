@@ -577,3 +577,119 @@ export async function probeCascadeFlowDelta(
   }
   return results;
 }
+
+// ── VG11f — Entity row content assertion ─────────────────────────────
+
+/**
+ * Minimal entity-field surface both tools' catalogs satisfy. `required`
+ * is the declaration that drives the assertion; `values` narrows enums;
+ * `default` exempts the field when no caller-supplied data is present.
+ */
+export interface EntityFieldLike {
+  name: string;
+  type: string;
+  required?: boolean;
+  values?: readonly string[];
+  default?: unknown;
+}
+
+export interface FieldContentCheck {
+  field: string;
+  present: boolean;
+  value: unknown;
+  detail: string;
+}
+
+export interface EntityRowContentResult {
+  entity: string;
+  rowId: unknown;
+  passed: boolean;
+  checks: FieldContentCheck[];
+  detail: string;
+}
+
+/**
+ * VG11f — assert a newly-created entity row carries non-empty values
+ * for every declared required field. Runs AFTER a persist-create
+ * cascade passes (VG11d's `grow` verdict) so the row we check is the
+ * one the caller actually created, not a pre-existing seed row.
+ *
+ * Motivation: VG11b/VG11d count +1 on create but don't look AT the
+ * row. A trait that emits SAVE with an empty/partial payload still
+ * grows the count by 1 but produces a blank card in the DataGrid —
+ * user-visible regression invisible to count-based gates. Mirror
+ * orbital-verify's content-verification semantics in the runtime path
+ * so runtime-verify catches the same class of bug.
+ *
+ * The caller supplies:
+ * - `entityName`: which entity to check (e.g. "CartItem")
+ * - `entityFields`: the entity's declared fields (from catalog)
+ * - `rowsAfter`: the trait's `data[entity]` array AFTER cascade
+ * - `rowsBefore` (optional): the same array BEFORE cascade — when
+ *   provided, we identify the new row as the one whose id isn't in
+ *   rowsBefore. When omitted, we check the last row (best-effort).
+ *
+ * Skipped / empty fields that do NOT fail the check:
+ * - `id`, `createdAt`, `updatedAt` (framework-managed)
+ * - Fields with a `default` (empty string default = declared OK)
+ * - Fields where `required: false` or unspecified
+ */
+export function probeEntityRowContent(input: {
+  entityName: string;
+  entityFields: readonly EntityFieldLike[];
+  rowsAfter: readonly Record<string, unknown>[];
+  rowsBefore?: readonly Record<string, unknown>[];
+}): EntityRowContentResult {
+  const beforeIds = new Set<unknown>(
+    (input.rowsBefore ?? [])
+      .map((r) => r.id)
+      .filter((id) => id !== undefined && id !== null),
+  );
+  const newRows = input.rowsAfter.filter((r) => !beforeIds.has(r.id));
+  const newRow = newRows[newRows.length - 1] ?? input.rowsAfter[input.rowsAfter.length - 1];
+
+  if (!newRow) {
+    return {
+      entity: input.entityName,
+      rowId: undefined,
+      passed: false,
+      checks: [],
+      detail: `${input.entityName}: no row found to check (rowsAfter is empty)`,
+    };
+  }
+
+  const FRAMEWORK = new Set(['id', 'createdAt', 'updatedAt']);
+  const checks: FieldContentCheck[] = [];
+  for (const field of input.entityFields) {
+    if (FRAMEWORK.has(field.name)) continue;
+    if (field.required === false) continue;
+    // Fields with defaults are "present" even if the caller omitted them.
+    if (!field.required && field.default === undefined) continue;
+
+    const value = newRow[field.name];
+    const isEmpty =
+      value === null ||
+      value === undefined ||
+      (typeof value === 'string' && value.trim().length === 0);
+    const present = !isEmpty;
+    checks.push({
+      field: field.name,
+      present,
+      value,
+      detail: present
+        ? `${field.name}=${typeof value === 'string' ? `"${String(value).slice(0, 40)}"` : typeof value}`
+        : `${field.name} MISSING (declared type=${field.type}${field.required ? ', required' : ''})`,
+    });
+  }
+
+  const failed = checks.filter((c) => !c.present);
+  return {
+    entity: input.entityName,
+    rowId: newRow.id,
+    passed: failed.length === 0,
+    checks,
+    detail: failed.length === 0
+      ? `new ${input.entityName} row has all ${checks.length} declared field(s): ${checks.map((c) => c.detail).join(', ')}`
+      : `new ${input.entityName} row (id=${String(newRow.id)}) missing ${failed.length}/${checks.length} field(s): ${failed.map((c) => c.detail).join(', ')}`,
+  };
+}
