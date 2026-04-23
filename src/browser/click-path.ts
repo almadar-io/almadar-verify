@@ -564,8 +564,13 @@ async function sampleOneSite(
       for (const [name, value] of Object.entries(submittedValues)) {
         // Skip very short / generic values that could false-match existing rows.
         if (typeof value !== 'string' || value.length < 4) continue;
+        // Use getByText with a substring match — Playwright's `text=<literal>`
+        // selector interprets quotes literally and misses real DOM text.
+        // Substring also handles cases where the DataGrid truncates long
+        // descriptions (faker.lorem.sentence → "Lorem ipsum dolor sit..."
+        // may render as "Lorem ipsum dolor sit…" with ellipsis).
         const visible = await page
-          .locator(`text=${JSON.stringify(value)}`)
+          .getByText(value, { exact: false })
           .first()
           .isVisible({ timeout: 500 })
           .catch(() => false);
@@ -622,13 +627,30 @@ async function sampleOneSite(
   };
 }
 
-/** Max row count per entity across every trait's `data[entity]`. */
+/**
+ * Row count per entity, taking the **minimum** across traits that carry
+ * `data[entity]`. Min (not max) because stale caches inflate the reading:
+ * a trait that dispatched a server call earlier in the session may keep
+ * an outdated snapshot while another trait that just re-fetched holds
+ * the fresh count. Taking min surfaces the most-recently-updated trait
+ * for mutations that shrink the set (persist delete).
+ *
+ * For create mutations (+1 expected), min would also work if one trait
+ * already refetched; if ONLY a stale trait reports and the refetcher
+ * hasn't fired yet, the old count shows — the poll loop keeps checking
+ * until a trait reports the delta or the deadline hits.
+ *
+ * Traits that don't report data[entity] at all are skipped (count for
+ * that trait = "unknown", not 0, so it doesn't drag min to zero).
+ */
 function entityCountsFromSnapshots(snapshots: readonly TraitStateSnapshot[]): Map<string, number> {
   const out = new Map<string, number>();
   for (const s of snapshots) {
     for (const [entity, rows] of Object.entries(s.data ?? {})) {
-      const n = Array.isArray(rows) ? rows.length : 0;
-      out.set(entity, Math.max(out.get(entity) ?? 0, n));
+      if (!Array.isArray(rows)) continue;
+      const n = rows.length;
+      const current = out.get(entity);
+      out.set(entity, current === undefined ? n : Math.min(current, n));
     }
   }
   return out;
