@@ -258,44 +258,93 @@ export interface MutationCheckResult {
 }
 
 /**
+ * Per-trait entity row counts. Each trait that carries `data[entity]`
+ * contributes its own count; stale traits coexist with freshly-refetched
+ * ones post-cascade. The probe passes if **any** trait reports the
+ * expected delta — a single aggregator (min or max) picks the wrong
+ * trait in one direction (min hides creates, max hides deletes).
+ */
+export type PerTraitEntityCounts = ReadonlyMap<string, readonly number[]>;
+
+/**
+ * Pick the representative count for display in pass/fail detail. For
+ * growth (create) the best witness is the largest trait; for shrink
+ * (delete) the smallest; for "any count" (update, fetch) just pick one.
+ */
+function pickWitness(counts: readonly number[], direction: 'grow' | 'shrink' | 'any'): number {
+  if (counts.length === 0) return 0;
+  if (direction === 'grow') return Math.max(...counts);
+  if (direction === 'shrink') return Math.min(...counts);
+  return counts[0] ?? 0;
+}
+
+function toArray(v: number | readonly number[] | undefined): readonly number[] {
+  if (v === undefined) return [];
+  return typeof v === 'number' ? [v] : v;
+}
+
+/**
  * For each mutation effect in the transition, compute the expected
  * delta and compare to the actual post-settle count. Baselines are
  * captured by the caller BEFORE the event is dispatched.
+ *
+ * Accepts per-trait count arrays OR a single aggregated count (legacy
+ * callers). With arrays, the probe passes if ANY trait reports the
+ * expected delta — avoids false negatives when one trait has a stale
+ * cache and another just refetched.
  */
 export function probeMutationDelta(
   transition: TransitionLike,
-  snapshotsBefore: ReadonlyMap<string, number>,
-  snapshotsAfter: ReadonlyMap<string, number>,
+  snapshotsBefore: ReadonlyMap<string, number | readonly number[]>,
+  snapshotsAfter: ReadonlyMap<string, number | readonly number[]>,
 ): MutationCheckResult[] {
   const effects = collectMutationEffects(transition.effects);
   const results: MutationCheckResult[] = [];
   for (const eff of effects) {
-    const baseline = snapshotsBefore.get(eff.entity) ?? 0;
-    const after = snapshotsAfter.get(eff.entity) ?? 0;
-    const delta = after - baseline;
+    const beforeCounts = toArray(snapshotsBefore.get(eff.entity));
+    const afterCounts = toArray(snapshotsAfter.get(eff.entity));
     let passed: boolean;
     let detail: string;
+    let baseline: number;
+    let after: number;
     if (eff.kind === 'persist-create') {
+      // Before: use min (lowest baseline → most room to grow).
+      // After: use max (any trait that grew is a witness).
+      baseline = pickWitness(beforeCounts, 'shrink');
+      after = pickWitness(afterCounts, 'grow');
+      const delta = after - baseline;
       passed = delta >= 1;
       detail = passed
         ? `${eff.entity} row count grew ${baseline}→${after}`
         : `${eff.entity} expected +1 after persist-create, got ${delta}`;
+      results.push({ kind: eff.kind, entity: eff.entity, baseline, after, delta, passed, detail });
     } else if (eff.kind === 'persist-delete') {
+      // Before: use max (highest baseline). After: use min (any trait that shrank).
+      baseline = pickWitness(beforeCounts, 'grow');
+      after = pickWitness(afterCounts, 'shrink');
+      const delta = after - baseline;
       passed = delta <= -1;
       detail = passed
         ? `${eff.entity} row count shrank ${baseline}→${after}`
         : `${eff.entity} expected -1 after persist-delete, got ${delta}`;
+      results.push({ kind: eff.kind, entity: eff.entity, baseline, after, delta, passed, detail });
     } else if (eff.kind === 'persist-update') {
+      baseline = pickWitness(beforeCounts, 'any');
+      after = pickWitness(afterCounts, 'any');
+      const delta = after - baseline;
       passed = delta === 0;
       detail = passed
         ? `${eff.entity} row count stable at ${after} across update`
         : `${eff.entity} expected 0 delta on persist-update, got ${delta}`;
+      results.push({ kind: eff.kind, entity: eff.entity, baseline, after, delta, passed, detail });
     } else {
-      // fetch — populated is enough; row count may grow or stay stable.
+      baseline = pickWitness(beforeCounts, 'any');
+      after = pickWitness(afterCounts, 'any');
+      const delta = after - baseline;
       passed = after >= 0;
       detail = `${eff.entity} after fetch: ${after} row(s)`;
+      results.push({ kind: eff.kind, entity: eff.entity, baseline, after, delta, passed, detail });
     }
-    results.push({ kind: eff.kind, entity: eff.entity, baseline, after, delta, passed, detail });
   }
   return results;
 }
@@ -443,8 +492,8 @@ export async function probeCascadeFlowDelta(
   input: {
     clickedEvent: string;
     listenerTraits: readonly TraitListenerLike[];
-    baselineCounts: ReadonlyMap<string, number>;
-    readAfterCounts: () => Promise<Map<string, number>>;
+    baselineCounts: ReadonlyMap<string, number | readonly number[]>;
+    readAfterCounts: () => Promise<Map<string, number | readonly number[]>>;
     wait: (ms: number) => Promise<void>;
     pollTimeoutMs?: number;
     pollIntervalMs?: number;
@@ -490,7 +539,7 @@ export async function probeCascadeFlowDelta(
   // emit it alongside the failure detail; drives triage between
   // "cascade never fired" vs "reducer dropped the update" vs "snapshot
   // bridge returned stale data."
-  const trace: Array<{ t: number; counts: Record<string, number> }> = [];
+  const trace: Array<{ t: number; counts: Record<string, number | readonly number[]> }> = [];
   const snapshot = (): void => {
     trace.push({
       t: Date.now(),

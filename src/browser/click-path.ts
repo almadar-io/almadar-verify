@@ -628,29 +628,27 @@ async function sampleOneSite(
 }
 
 /**
- * Row count per entity, taking the **minimum** across traits that carry
- * `data[entity]`. Min (not max) because stale caches inflate the reading:
- * a trait that dispatched a server call earlier in the session may keep
- * an outdated snapshot while another trait that just re-fetched holds
- * the fresh count. Taking min surfaces the most-recently-updated trait
- * for mutations that shrink the set (persist delete).
+ * Row counts per entity, one entry per trait that carries `data[entity]`.
+ * Returns an array (not an aggregated single count) so `probeMutationDelta`
+ * can pick the right witness direction:
+ * - create (+1): max across traits — any trait that grew is the witness.
+ * - delete (-1): min across traits — any trait that shrank is the witness.
  *
- * For create mutations (+1 expected), min would also work if one trait
- * already refetched; if ONLY a stale trait reports and the refetcher
- * hasn't fired yet, the old count shows — the poll loop keeps checking
- * until a trait reports the delta or the deadline hits.
+ * A single aggregator (min OR max) picks the wrong trait in one direction:
+ * a stale trait's cached count hides the fresh trait's mutation. Keeping
+ * the raw per-trait list lets the probe be direction-aware.
  *
- * Traits that don't report data[entity] at all are skipped (count for
- * that trait = "unknown", not 0, so it doesn't drag min to zero).
+ * Traits that don't report `data[entity]` at all contribute nothing
+ * (treated as "unknown" rather than 0).
  */
-function entityCountsFromSnapshots(snapshots: readonly TraitStateSnapshot[]): Map<string, number> {
-  const out = new Map<string, number>();
+function entityCountsFromSnapshots(snapshots: readonly TraitStateSnapshot[]): Map<string, number[]> {
+  const out = new Map<string, number[]>();
   for (const s of snapshots) {
     for (const [entity, rows] of Object.entries(s.data ?? {})) {
       if (!Array.isArray(rows)) continue;
-      const n = rows.length;
-      const current = out.get(entity);
-      out.set(entity, current === undefined ? n : Math.min(current, n));
+      const bucket = out.get(entity);
+      if (bucket) bucket.push(rows.length);
+      else out.set(entity, [rows.length]);
     }
   }
   return out;
