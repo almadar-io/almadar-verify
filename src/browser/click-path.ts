@@ -31,7 +31,7 @@
 import type { Page } from 'playwright';
 import type { EventPayload } from '@almadar/core';
 import { readTraitSnapshots, type TraitStateSnapshot } from '../runtime/state-bridge.js';
-import { fillFormFields } from './interaction.js';
+import { fillFormFieldsWithValues, type FilledFormValues } from './interaction.js';
 import {
   probeCascadeFlowDelta,
   type CascadeFlowDeltaResult,
@@ -171,6 +171,17 @@ export interface ClickPathSampleCheck {
    * Empty array when no cascade was declared for the clicked event.
    */
   cascadeFlowDeltas?: CascadeFlowDeltaResult[];
+  /**
+   * VG11e — submitted-entity DOM verification. For form-submit sites,
+   * `fillFormFieldsWithValues` records the faker-generated value for
+   * each field (`name → value`). After the cascade delta confirms +1
+   * row, each value is searched in the page DOM; `submittedValues` and
+   * `submittedVisibility` record what was submitted and which values
+   * appeared. Only populated when the site was a form-submit AND a
+   * cascade flow delta ran.
+   */
+  submittedValues?: FilledFormValues;
+  submittedVisibility?: Array<{ name: string; value: string; visible: boolean }>;
 }
 
 export interface ClickPathOptions {
@@ -505,17 +516,16 @@ async function sampleOneSite(
   // `.submitEvent`) require filling the form before the submit click
   // produces a non-empty payload — otherwise SAVE fires with `{data: {}}`
   // and the downstream persist creates a blank row that never appears
-  // in the DataGrid. Detect these sites and run the fill flow first.
+  // in the DataGrid. Detect these sites, fill the form, and record the
+  // filled values so VG11e can later assert they're visible in the DOM.
   const isFormSubmit = site.patternType === 'form-section' && /\.(submitEvent)$/.test(site.propPath);
+  let submittedValues: FilledFormValues | undefined;
   if (isFormSubmit) {
-    // Scope the fill to whichever slot the form renders in. The runtime
-    // stamps `#slot-<name>` on every portal; for the main slot use the
-    // document root.
     const slotContainer = `#slot-${site.slot}`;
-    await fillFormFields(page, slotContainer).catch(() => {
-      // Fallback: try filling form anywhere in the document (a
-      // form-section rendered into `main` may not live under a portal).
-    });
+    const result = await fillFormFieldsWithValues(page, slotContainer).catch(() => ({ count: 0, values: {} }));
+    if (result.count > 0) {
+      submittedValues = result.values;
+    }
   }
 
   for (const selector of selectorsFor(site.event)) {
@@ -542,6 +552,27 @@ async function sampleOneSite(
       });
     }
 
+    // VG11e — submitted-entity DOM verification. If the site was a
+    // form-submit AND cascade-flow delta confirmed +1 row, assert the
+    // faker-generated values we filled actually appear in the page. A
+    // cascade that reports +1 but never renders the new row's name /
+    // description produces a silent regression the delta alone misses
+    // (e.g. persist created a blank row because payload shape drift).
+    let submittedVisibility: Array<{ name: string; value: string; visible: boolean }> | undefined;
+    if (submittedValues && cascadeFlowDeltas && cascadeFlowDeltas.some((c) => c.passed)) {
+      submittedVisibility = [];
+      for (const [name, value] of Object.entries(submittedValues)) {
+        // Skip very short / generic values that could false-match existing rows.
+        if (typeof value !== 'string' || value.length < 4) continue;
+        const visible = await page
+          .locator(`text=${JSON.stringify(value)}`)
+          .first()
+          .isVisible({ timeout: 500 })
+          .catch(() => false);
+        submittedVisibility.push({ name, value, visible });
+      }
+    }
+
     const changeSummary = changedTraits.length > 0
       ? `${changedTraits.length} trait(s) changed: ` +
         changedTraits.map((t) => `${t} ${statesBefore[t] ?? 'null'} → ${statesAfter[t]}`).join(', ')
@@ -550,7 +581,14 @@ async function sampleOneSite(
       cascadeFlowDeltas && cascadeFlowDeltas.length > 0
         ? ` | cascade: ${cascadeFlowDeltas.map((c) => (c.passed ? `${c.listeningTrait}.${c.triggeredEvent} ✓` : `${c.listeningTrait}.${c.triggeredEvent} ✗ (${c.detail})`)).join(', ')}`
         : '';
+    const submittedSummary =
+      submittedVisibility && submittedVisibility.length > 0
+        ? ` | submitted-on-page: ${submittedVisibility.map((s) => `${s.name}=${s.visible ? '✓' : '✗'}`).join(', ')}`
+        : '';
     const cascadePassed = cascadeFlowDeltas ? cascadeFlowDeltas.every((c) => c.passed) : true;
+    const submittedPassed = submittedVisibility
+      ? submittedVisibility.every((s) => s.visible)
+      : true;
     const statePassed = changedTraits.length > 0;
 
     return {
@@ -560,11 +598,13 @@ async function sampleOneSite(
       statesBefore,
       statesAfter,
       changedTraits,
-      passed: statePassed && cascadePassed,
+      passed: statePassed && cascadePassed && submittedPassed,
       detail: statePassed
-        ? `site ${site.siteKey} clicked ${selector} → ${changeSummary}${cascadeSummary}`
+        ? `site ${site.siteKey} clicked ${selector} → ${changeSummary}${cascadeSummary}${submittedSummary}`
         : `site ${site.siteKey} clicked ${selector} but no trait state advanced — button likely wired to a dead event key`,
       cascadeFlowDeltas,
+      submittedValues,
+      submittedVisibility,
     };
   }
 

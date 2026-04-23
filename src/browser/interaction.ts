@@ -216,21 +216,38 @@ export function buildMinimalPayload(
 // ── Browser Form Filling ────────────────────────────────────────────
 
 /**
- * Fill all visible form inputs within a container using generic DOM scanning.
- * Uses Playwright locator chaining (container.locator(child)) instead of
- * CSS string concatenation, which breaks with comma-separated container selectors.
- *
- * Returns the number of fields successfully filled.
+ * Values a {@link fillFormFieldsWithValues} call set on the form,
+ * keyed by the input's `name` attribute (or a stable positional key
+ * when name is missing). Feeds post-submit assertions — a verifier can
+ * search the resulting DOM for each filled value and confirm the row
+ * it submitted actually appeared. Closes the "form filled, server
+ * acknowledged, but is the row on screen?" gap that counting alone
+ * misses.
  */
-export async function fillFormFields(
+export type FilledFormValues = Record<string, string>;
+
+export interface FilledFormResult {
+  count: number;
+  values: FilledFormValues;
+}
+
+/**
+ * Fill every visible input/textarea/select within `containerSelector`
+ * and return a map of `name → value` for the fields that were actually
+ * filled. Callers asserting "the row I just created shows up" iterate
+ * this map and check each value's text is present in the target list.
+ */
+export async function fillFormFieldsWithValues(
   page: Page,
   containerSelector: string
-): Promise<number> {
+): Promise<FilledFormResult> {
   const container = page.locator(containerSelector).first();
   const containerVisible = await container.isVisible({ timeout: 500 }).catch(() => false);
-  if (!containerVisible) return 0;
+  if (!containerVisible) return { count: 0, values: {} };
 
-  let filled = 0;
+  const values: FilledFormValues = {};
+  let count = 0;
+  const keyFor = (name: string, fallback: string): string => (name && name.length > 0 ? name : fallback);
 
   // Fill text-like, number, and password inputs
   const inputs = container.locator(
@@ -247,7 +264,8 @@ export async function fillFormFields(
       const nameAttr = await input.getAttribute('name') ?? '';
       const value = generateFieldValue(typeAttr, nameAttr);
       await input.fill(value);
-      filled++;
+      values[keyFor(nameAttr, `input-${i}`)] = value;
+      count++;
     } catch {
       // Input may have become detached
     }
@@ -261,8 +279,10 @@ export async function fillFormFields(
       const input = dateInputs.nth(i);
       const typeAttr = await input.getAttribute('type') ?? 'date';
       const nameAttr = await input.getAttribute('name') ?? '';
-      await input.fill(generateFieldValue(typeAttr, nameAttr));
-      filled++;
+      const value = generateFieldValue(typeAttr, nameAttr);
+      await input.fill(value);
+      values[keyFor(nameAttr, `date-${i}`)] = value;
+      count++;
     } catch {
       // Skip
     }
@@ -273,8 +293,12 @@ export async function fillFormFields(
   const taCount = await textareas.count();
   for (let i = 0; i < taCount; i++) {
     try {
-      await textareas.nth(i).fill(faker.lorem.sentence());
-      filled++;
+      const ta = textareas.nth(i);
+      const nameAttr = await ta.getAttribute('name') ?? '';
+      const value = faker.lorem.sentence();
+      await ta.fill(value);
+      values[keyFor(nameAttr, `textarea-${i}`)] = value;
+      count++;
     } catch {
       // Skip
     }
@@ -288,15 +312,31 @@ export async function fillFormFields(
       const select = selects.nth(i);
       const options = await select.locator('option').allTextContents();
       if (options.length > 1) {
+        const nameAttr = await select.getAttribute('name') ?? '';
         await select.selectOption({ index: 1 });
-        filled++;
+        values[keyFor(nameAttr, `select-${i}`)] = options[1] ?? '';
+        count++;
       }
     } catch {
       // Skip
     }
   }
 
-  return filled;
+  return { count, values };
+}
+
+/**
+ * Back-compat wrapper for callers that only want the count. Delegates
+ * to {@link fillFormFieldsWithValues}; values are discarded. New callers
+ * that want to verify submitted data later should use the -WithValues
+ * form directly.
+ */
+export async function fillFormFields(
+  page: Page,
+  containerSelector: string,
+): Promise<number> {
+  const result = await fillFormFieldsWithValues(page, containerSelector);
+  return result.count;
 }
 
 // ── Submit/Save Button Clicking ─────────────────────────────────────
