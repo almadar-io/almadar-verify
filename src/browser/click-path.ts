@@ -561,6 +561,13 @@ async function sampleOneSite(
     let submittedVisibility: Array<{ name: string; value: string; visible: boolean }> | undefined;
     if (submittedValues && cascadeFlowDeltas && cascadeFlowDeltas.some((c) => c.passed)) {
       submittedVisibility = [];
+      // The cascade probe passes as soon as ANY trait reports the grown
+      // count — typically the trait that owns the persistor's fetch. The
+      // listening trait that renders the DataGrid may still be mid-
+      // refetch, so give it up to 5s for the new row's text to appear
+      // before declaring the value invisible. Without this extra wait
+      // VG11e flakes on short-text fields that haven't been committed
+      // to the DOM yet even though the mutation succeeded.
       for (const [name, value] of Object.entries(submittedValues)) {
         // Skip very short / generic values that could false-match existing rows.
         if (typeof value !== 'string' || value.length < 4) continue;
@@ -572,7 +579,8 @@ async function sampleOneSite(
         const visible = await page
           .getByText(value, { exact: false })
           .first()
-          .isVisible({ timeout: 500 })
+          .waitFor({ state: 'visible', timeout: 5000 })
+          .then(() => true)
           .catch(() => false);
         submittedVisibility.push({ name, value, visible });
       }
