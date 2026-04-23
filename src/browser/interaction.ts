@@ -205,6 +205,44 @@ export function buildMinimalPayload(
       case 'date':
         payload[name] = faker.date.recent().toISOString();
         break;
+      case 'object':
+      case 'any':
+        // When an event declares `data: object!` (e.g. SAVE carries the
+        // form's submitted row), the payload field IS the entity shape.
+        // Defaulting to a string here (via faker.lorem.words) persists
+        // `data: "lorem ipsum"` — server stores it literally, DataGrid
+        // tries to read row.name/row.description off a string and renders
+        // a blank card. Build a real object from the entity field types
+        // so the persisted row has the fields the grid renders.
+        if (entityFields && entityFields.length > 0) {
+          const obj: EventPayload = {};
+          for (const ef of entityFields) {
+            if (ef.values && ef.values.length > 0) {
+              obj[ef.name] = ef.values[0];
+              continue;
+            }
+            switch (ef.type) {
+              case 'number':
+              case 'integer':
+              case 'float':
+                obj[ef.name] = faker.number.float({ min: 1, max: 999, fractionDigits: 2 });
+                break;
+              case 'boolean':
+                obj[ef.name] = faker.datatype.boolean();
+                break;
+              case 'date':
+                obj[ef.name] = faker.date.recent().toISOString();
+                break;
+              default:
+                obj[ef.name] = faker.lorem.words(2);
+                break;
+            }
+          }
+          payload[name] = obj;
+        } else {
+          payload[name] = { label: faker.lorem.words(2) };
+        }
+        break;
       default:
         payload[name] = faker.lorem.words(2);
         break;
