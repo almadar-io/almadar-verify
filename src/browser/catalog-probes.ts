@@ -66,9 +66,27 @@ export interface CatalogBinding {
 }
 
 /**
+ * Prop keys whose values carry event-emit payloads, not render-text
+ * bindings. `actionPayload: {id: "@payload.id"}` threads `@payload.id`
+ * into the emitted event's payload — it's NOT a promise to render the
+ * id as DOM text. A binding found under one of these keys should not
+ * be subject to VG11a's DOM search.
+ */
+const EVENT_ARG_PROP_KEYS = new Set([
+  'actionPayload',
+  'payload',
+  'submitPayload',
+  'eventPayload',
+]);
+
+/**
  * Walk a render-ui config tree and collect every `@root.path` binding.
  * Used to enumerate what a transition "promises" to render so the
  * probe can check the promised values are in the DOM.
+ *
+ * Skips recursion into props listed in {@link EVENT_ARG_PROP_KEYS} —
+ * those carry payload bindings forwarded to emitted events, not text
+ * that's supposed to show up in the DOM.
  */
 export function collectCatalogBindings(
   node: unknown,
@@ -85,6 +103,7 @@ export function collectCatalogBindings(
   const obj = node as Record<string, unknown>;
   const patternType = typeof obj.type === 'string' ? obj.type : rootPatternType;
   for (const [key, value] of Object.entries(obj)) {
+    if (EVENT_ARG_PROP_KEYS.has(key)) continue;
     if (typeof value === 'string' && value.startsWith('@')) {
       const match = /^@(config|payload|entity)(?:\.(.+))?$/.exec(value);
       if (match) {
