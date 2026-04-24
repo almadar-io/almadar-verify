@@ -165,7 +165,7 @@ export async function readRuntimeState(page: Page): Promise<RuntimeState | null>
         { currentState, context: {} },
       ])
     ),
-    entities: {}, // Entity data requires FetchedDataContext inspection
+    entities: {}, // G13: entity data flows via `@payload.data`, not context
     events: snapshot.transitions.map((t) => t.event),
     guards: Object.fromEntries(
       snapshot.checks
