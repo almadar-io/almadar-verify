@@ -218,6 +218,18 @@ export interface ClickPathOptions {
   listenerTraits?: readonly TraitListenerLike[];
   /** VG11d — polling timeout for cascade-flow delta. Default: 4000ms. */
   cascadeFlowPollMs?: number;
+  /**
+   * Per-trait render-ui event inventory. For each trait name, the list of
+   * event keys the trait surfaces as DOM triggers anywhere in its own
+   * render-ui (handlers, button actions, form submits, etc.). Used to
+   * decide whether a missing reach button is a real bug (event IS in the
+   * list) or a consumer-driven trait verified standalone (event is NOT
+   * in the list). When the latter, the sampler falls back to
+   * `__orbitalVerification.sendEvent(reach.event, reach.payload ?? {})`
+   * to drive the trait to the reach state via the same API the engine
+   * walk uses for transition coverage.
+   */
+  traitRenderUIEvents?: Record<string, readonly string[]>;
 }
 
 /**
@@ -475,32 +487,73 @@ async function sampleOneSite(
         }
       }
       if (!reachClicked) {
-        // Site's reach button isn't in the DOM — can't reach. Bail out
-        // with a clear failure rather than masking with sendEvent
-        // synthesis; this is the class of bug VG3/VG11d is meant to
-        // surface.
-        return {
-          traitName: site.traitName,
-          event: site.event,
-          selector: null,
-          statesBefore: snapshotsToStateMap(await readTraitSnapshots(page)),
-          statesAfter: {},
-          changedTraits: [],
-          passed: false,
-          detail:
-            `reach failed for site ${site.siteKey}: no DOM button for reach event "${site.reach.event}" ` +
-            `(expected selectors: ${selectorsFor(site.reach.event).join(' | ')})`,
-        };
-      }
-      // Poll for the trait to reach toState before giving up — the
-      // event pipeline is async (enqueueAndDrain runs the transition
-      // + effects in a promise chain) and the render-ui slot needs
-      // one React commit to mount.
-      const mountDeadline = Date.now() + 2000;
-      while (Date.now() < mountDeadline) {
-        await page.waitForTimeout(100);
-        const next = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
-        if (next === site.reach.toState) break;
+        // No DOM button matches `reach.event`. There are two distinct
+        // cases here, and the schema tells them apart:
+        //
+        //   (a) The trait IS supposed to surface the event as a DOM
+        //       trigger somewhere in its own render-ui (the event appears
+        //       in `traitRenderUIEvents`), but the button is missing or
+        //       the wiring is broken. Fail loudly — that's the class of
+        //       bug this probe exists to catch.
+        //
+        //   (b) The trait is *consumer-driven*: it never renders a UI
+        //       trigger for `reach.event` itself because a parent trait
+        //       (the one that imports it via `uses`) owns the trigger.
+        //       std-modal is the canonical case — OPEN comes from a
+        //       parent like std-cart's Browse trait, which renders a
+        //       "Create" button. When this trait is verified standalone
+        //       there is no parent and no DOM button by design. Fall
+        //       back to `__orbitalVerification.sendEvent(reach.event,
+        //       reach.payload ?? {})` — same API the engine walk uses
+        //       for transition coverage — so the binding/click-path
+        //       probes inside the reached state can still run.
+        //
+        // The schema's `traitRenderUIEvents` is the source of truth: if
+        // the event isn't in that set, no render-ui in the trait surfaces
+        // it as a trigger and case (b) applies.
+        const isConsumerDriven = !(options.traitRenderUIEvents?.[site.traitName]?.includes(site.reach.event));
+        if (isConsumerDriven) {
+          await page.evaluate(({ ev, pl }: { ev: string; pl: Record<string, unknown> }) => {
+            const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
+              | { sendEvent?: (e: string, p?: Record<string, unknown>) => void }
+              | undefined;
+            api?.sendEvent?.(ev, pl);
+          }, { ev: site.reach.event, pl: (site.reach.payload ?? {}) as Record<string, unknown> });
+          // Poll for state advancement, same as the click path below.
+          const mountDeadline = Date.now() + 2000;
+          while (Date.now() < mountDeadline) {
+            await page.waitForTimeout(100);
+            const next = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
+            if (next === site.reach.toState) break;
+          }
+        } else {
+          // Case (a): the schema says this trait should render the
+          // trigger, but no button appeared. Real bug — surface it.
+          return {
+            traitName: site.traitName,
+            event: site.event,
+            selector: null,
+            statesBefore: snapshotsToStateMap(await readTraitSnapshots(page)),
+            statesAfter: {},
+            changedTraits: [],
+            passed: false,
+            detail:
+              `reach failed for site ${site.siteKey}: no DOM button for reach event "${site.reach.event}" ` +
+              `(expected selectors: ${selectorsFor(site.reach.event).join(' | ')}); ` +
+              `schema declares this event in trait render-ui but DOM has no trigger`,
+          };
+        }
+      } else {
+        // Poll for the trait to reach toState before giving up — the
+        // event pipeline is async (enqueueAndDrain runs the transition
+        // + effects in a promise chain) and the render-ui slot needs
+        // one React commit to mount.
+        const mountDeadline = Date.now() + 2000;
+        while (Date.now() < mountDeadline) {
+          await page.waitForTimeout(100);
+          const next = snapshotsToStateMap(await readTraitSnapshots(page))[site.traitName];
+          if (next === site.reach.toState) break;
+        }
       }
     }
   }
