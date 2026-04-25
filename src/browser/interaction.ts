@@ -14,7 +14,7 @@
  */
 
 import type { Page } from 'playwright';
-import type { EventPayload } from '@almadar/core';
+import type { EventPayload, EventPayloadValue } from '@almadar/core';
 import { faker } from '@faker-js/faker';
 
 // ── Pattern Classification ──────────────────────────────────────────
@@ -213,14 +213,13 @@ export function buildMinimalPayload(
         inner === 'string' || inner === 'number' || inner === 'integer' ||
         inner === 'float' || inner === 'boolean';
       if (isScalarInner) {
-        const len = 3;
-        const arr: Array<string | number | boolean> = [];
-        for (let i = 0; i < len; i++) {
+        const arr: EventPayloadValue[] = [];
+        for (let i = 0; i < 3; i++) {
           if (inner === 'string') arr.push(faker.lorem.words(2));
           else if (inner === 'boolean') arr.push(faker.datatype.boolean());
           else arr.push(faker.number.float({ min: 1, max: 999, fractionDigits: 2 }));
         }
-        payload[name] = arr as EventPayload[string];
+        payload[name] = arr;
       } else if (entityFields && entityFields.length > 0) {
         const row: EventPayload = {};
         for (const ef of entityFields) {
