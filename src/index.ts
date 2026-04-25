@@ -181,6 +181,8 @@ export {
   probeCascadeCount,
   probeCascadeFlowDelta,
   probeEntityRowContent,
+  probeListRender,
+  type ListRenderResult,
   type TransitionLike,
   type TraitListenerLike,
   type CatalogBinding,

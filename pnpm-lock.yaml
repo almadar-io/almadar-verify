@@ -47,8 +47,8 @@ packages:
     peerDependencies:
       eslint: '>=8.0.0'
 
-  '@almadar/patterns@2.17.2':
-    resolution: {integrity: sha512-lVC+7ROwge6hnpIjtOEfKsFo90sEdfnxFfJ8rJe7M9MSsHiJ1U9r3wfV2rwUG5ku2NZGuM0N75dLHN5JKAoYrg==}
+  '@almadar/patterns@2.18.1':
+    resolution: {integrity: sha512-IKrd17SYkSfG0sw5lJbs0fUAcxlomvw2uLO7ijKj+trHkQAcWfg1vMzodWfrPT/SZW7JL4X1Ufa7GoZGmZusmQ==}
 
   '@esbuild/aix-ppc64@0.27.7':
     resolution: {integrity: sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg==}
@@ -909,7 +909,7 @@ snapshots:
 
   '@almadar/core@5.8.0':
     dependencies:
-      '@almadar/patterns': 2.17.2
+      '@almadar/patterns': 2.18.1
       zod: 3.25.76
 
   '@almadar/eslint-plugin@2.8.0(eslint@10.0.0)':
@@ -917,7 +917,7 @@ snapshots:
       eslint: 10.0.0
       jsonc-eslint-parser: 3.1.0
 
-  '@almadar/patterns@2.17.2':
+  '@almadar/patterns@2.18.1':
     dependencies:
       '@almadar/core': 5.8.0
 

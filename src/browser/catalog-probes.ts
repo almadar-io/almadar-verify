@@ -744,3 +744,150 @@ export function probeEntityRowContent(input: {
       : `new ${input.entityName} row (id=${String(newRow.id)}) missing ${failed.length}/${checks.length} field(s): ${failed.map((c) => c.detail).join(', ')}`,
   };
 }
+
+// ── VG11g — List-render row count ────────────────────────────────────
+
+/**
+ * Pattern types that render as iterable list/grid containers. When a
+ * transition's render-ui binds an entity-array or `@payload.data` array
+ * to one of these, the receiving DOM should grow at least one row.
+ *
+ * Source of truth lives in `@almadar/patterns`'s pattern category, but
+ * carrying the small set here lets the probe stay self-contained — and
+ * the registry never adds list-shaped patterns under any other category.
+ */
+const LIST_PATTERN_TYPES: ReadonlySet<string> = new Set([
+  'data-grid',
+  'data-list',
+  'data-table',
+  'entity-cards',
+  'entity-table',
+  'card-grid',
+]);
+
+/**
+ * Result of one VG11g list-render probe.
+ */
+export interface ListRenderResult {
+  /** `(slot, pattern, propPath)` triple identifying the bound site. */
+  slot: string;
+  patternType: string;
+  propPath: string;
+  /** Resolved binding the list pattern was reading from (`@payload.data`, `@entity`, …). */
+  binding: string;
+  /** Length of the array the binding resolved to at probe time. */
+  expectedRows: number;
+  /** Number of list-item children actually rendered in the slot. */
+  observedRows: number;
+  passed: boolean;
+  detail: string;
+}
+
+/**
+ * VG11g — assert that list/grid patterns bound to a non-empty array
+ * actually render at least one row in the DOM.
+ *
+ * Catches the false-PASS class where the engine walk reports green and
+ * `@payload.data` resolves to a real array, but the receiving data-grid
+ * shows "no items" because the rows never made it from the props through
+ * the renderer (synthesized payload that the pattern can't iterate, broken
+ * row-render lambda, missing `entity` prop, etc.).
+ *
+ * Skips the probe when the bound array is empty — atoms whose initial
+ * state legitimately renders empty stay green.
+ *
+ * @param page Playwright page (or any element with `locator()`).
+ * @param transition The transition that just fired (used to walk effects).
+ * @param snapshot Live runtime snapshot — `lastPayload` + `data[entity]`.
+ * @param linkedEntity The trait's linked entity name (resolves `@entity`).
+ */
+export async function probeListRender(
+  page: Page,
+  transition: TransitionLike,
+  snapshot: { lastPayload?: unknown; data: Record<string, unknown> } | undefined,
+  linkedEntity: string | undefined,
+): Promise<ListRenderResult[]> {
+  const bindings: CatalogBinding[] = [];
+  for (const effect of transition.effects) {
+    if (!Array.isArray(effect) || effect[0] !== 'render-ui') continue;
+    const slot = typeof effect[1] === 'string' ? effect[1] : 'unknown';
+    const config = effect[2];
+    const topType = typeof (config as { type?: unknown } | null)?.type === 'string'
+      ? (config as { type: string }).type
+      : 'unknown';
+    collectCatalogBindings(config, slot, topType, bindings);
+  }
+
+  const results: ListRenderResult[] = [];
+  // One probe per list-pattern site whose entity/payload binding resolved
+  // to a non-empty array. `collectCatalogBindings` records the binding
+  // path the pattern is reading from; `propKey` tells us if it landed on
+  // a data-bearing prop (`entity` / `data` / `items`) and `patternType`
+  // gates the probe to list-shaped consumers only.
+  const seenSites = new Set<string>();
+  for (const binding of bindings) {
+    if (!LIST_PATTERN_TYPES.has(binding.patternType)) continue;
+    if (binding.propKey !== 'entity' && binding.propKey !== 'data' && binding.propKey !== 'items') continue;
+    const siteKey = `${binding.slot}:${binding.patternType}:${binding.path}`;
+    if (seenSites.has(siteKey)) continue;
+    seenSites.add(siteKey);
+
+    let resolved: unknown;
+    if (binding.root === 'config') {
+      // Config-bound list — usually a hard-coded array; verifier doesn't
+      // assert content there. Skip.
+      continue;
+    } else if (binding.root === 'payload') {
+      resolved = pickBySegments(snapshot?.lastPayload, binding.segments);
+    } else {
+      const entityRows = linkedEntity ? snapshot?.data?.[linkedEntity] : undefined;
+      // For `@entity` (no segments) the entire row collection IS the array.
+      // For `@entity.field` we pluck through.
+      resolved = binding.segments.length > 0
+        ? pickBySegments(entityRows, binding.segments)
+        : entityRows;
+    }
+
+    if (!Array.isArray(resolved) || resolved.length === 0) {
+      // Empty / non-array binding — list-pattern is rendering empty by
+      // design. Don't false-fail.
+      continue;
+    }
+    const expectedRows = resolved.length;
+
+    // Count list-item descendants of this slot, biased toward the
+    // pattern that's actually mounted. The countEntityRows strategies
+    // are deliberately permissive — `[data-entity-id]` /
+    // `[data-entity-row]` / `tbody tr` cover every list pattern in
+    // @almadar/ui without requiring a per-pattern selector list here.
+    const observedRows = await page.evaluate((slotName: string) => {
+      const scope = document.getElementById(`slot-${slotName}`) ?? document.body;
+      // Strategy 1: explicit row markers.
+      const direct = scope.querySelectorAll('[data-entity-row], [data-entity-id]');
+      if (direct.length > 0) return direct.length;
+      // Strategy 2: data-grid / data-table tbody tr.
+      const gridRows = scope.querySelectorAll('[data-pattern="data-grid"] tbody tr, [data-pattern="data-table"] tbody tr, [data-pattern="entity-table"] tbody tr');
+      if (gridRows.length > 0) return gridRows.length;
+      // Strategy 3: any visible tbody tr inside the slot (fallback for
+      // custom patterns that don't stamp data-pattern).
+      const tableRows = scope.querySelectorAll('tbody tr');
+      return tableRows.length;
+    }, binding.slot);
+
+    const passed = observedRows >= 1;
+    results.push({
+      slot: binding.slot,
+      patternType: binding.patternType,
+      propPath: binding.path,
+      binding: `@${binding.root}${binding.segments.length > 0 ? '.' + binding.segments.join('.') : ''}`,
+      expectedRows,
+      observedRows,
+      passed,
+      detail: passed
+        ? `${binding.patternType}@${binding.slot} rendered ${observedRows} row(s) for ${expectedRows}-element binding`
+        : `${binding.patternType}@${binding.slot} bound to ${expectedRows}-element array but DOM shows 0 rows — pattern is mounted but rows never rendered`,
+    });
+  }
+
+  return results;
+}
