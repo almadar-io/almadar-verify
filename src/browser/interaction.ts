@@ -193,6 +193,65 @@ export function buildMinimalPayload(
       continue;
     }
 
+    // G45 / Phase B.10 part (1): array-typed payload fields. Events that
+    // carry a list (e.g. `LOAD { data: [Conversation] }`) previously fell
+    // through to the default branch and got `data: "lorem ipsum"` — a
+    // string the receiving data-list / data-grid can't iterate, so the
+    // pattern rendered empty even though VG checks all passed.
+    // Detect the bracketed-entity shape `[Foo]` (or plain `array`) and
+    // synthesize a one-element array using the entity's field types.
+    const arrayMatch = typeof type === 'string'
+      ? /^\[(.+)\]$/.exec(type) ?? (type === 'array' ? [type, ''] as const : null)
+      : null;
+    if (arrayMatch) {
+      const inner = arrayMatch[1] ?? '';
+      // For a structured-entity array, build one mock row from the
+      // entity field defs (same path used by `object`/`any` below).
+      // For a scalar array (`[string]`/`[number]`), produce 2-3 faker
+      // primitives so list patterns have visible rows.
+      const isScalarInner =
+        inner === 'string' || inner === 'number' || inner === 'integer' ||
+        inner === 'float' || inner === 'boolean';
+      if (isScalarInner) {
+        const len = 3;
+        const arr: EventPayload[string] = [];
+        for (let i = 0; i < len; i++) {
+          if (inner === 'string') arr.push(faker.lorem.words(2));
+          else if (inner === 'boolean') arr.push(faker.datatype.boolean());
+          else arr.push(faker.number.float({ min: 1, max: 999, fractionDigits: 2 }));
+        }
+        payload[name] = arr;
+      } else if (entityFields && entityFields.length > 0) {
+        const row: EventPayload = {};
+        for (const ef of entityFields) {
+          if (ef.values && ef.values.length > 0) {
+            row[ef.name] = ef.values[0];
+            continue;
+          }
+          switch (ef.type) {
+            case 'number':
+            case 'integer':
+            case 'float':
+              row[ef.name] = faker.number.float({ min: 1, max: 999, fractionDigits: 2 });
+              break;
+            case 'boolean':
+              row[ef.name] = faker.datatype.boolean();
+              break;
+            case 'date':
+              row[ef.name] = faker.date.recent().toISOString();
+              break;
+            default:
+              row[ef.name] = faker.lorem.words(2);
+              break;
+          }
+        }
+        payload[name] = [row];
+      } else {
+        payload[name] = [{ label: faker.lorem.words(2) }];
+      }
+      continue;
+    }
+
     switch (type) {
       case 'number':
       case 'integer':

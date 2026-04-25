@@ -200,31 +200,57 @@ export async function probeBindingsForTransition(
 
     const expectedText = valueToText(expected);
     if (expectedText === null) {
+      // Non-scalar expected value — skip without DOM search. Surface a
+      // specific detail when the binding root is `payload` and the
+      // resolved value is object-typed (the typical G29 case): payload
+      // schemas like `SAVE { data: object }` carry structured rows the
+      // verifier shouldn't try to render-as-text. Distinguishing this
+      // from "no value yet" makes triage faster. (G29 — Phase B.2.)
+      const isObjectish = expected !== null && typeof expected === 'object';
+      const detail = isObjectish && binding.root === 'payload'
+        ? `skipped — payload binding "${binding.path}" is object-typed (not text-renderable)`
+        : isObjectish
+          ? `skipped — ${binding.root} binding "${binding.path}" resolved to object/array (not text-renderable)`
+          : `skipped — expected value not resolvable (${resolveDetail})`;
       results.push({
         path: binding.path,
         slot: binding.slot,
         patternType: binding.patternType,
         propKey: binding.propKey,
         passed: true,
-        detail: `skipped — expected value not scalar (${resolveDetail})`,
+        detail,
       });
       continue;
     }
 
-    const found = await page.evaluate(({ slot, text }) => {
-      const scope = document.getElementById(`slot-${slot}`) ?? document.body;
-      if (scope.textContent?.includes(text)) return true;
-      const fieldEls = scope.querySelectorAll('[data-field]');
-      for (const el of fieldEls) {
-        if ((el.textContent ?? '').includes(text)) return true;
-        if ((el as HTMLInputElement).value === text) return true;
-      }
-      const inputs = scope.querySelectorAll('input, textarea, select');
-      for (const el of inputs) {
-        if ((el as HTMLInputElement).value === text) return true;
-      }
-      return false;
-    }, { slot: binding.slot, text: expectedText });
+    // G39 / Phase B.6: poll the DOM for up to 2s before declaring the
+    // text missing. The fetch effect that populates `entity.<field>` may
+    // not have settled when the probe first reads — particularly for
+    // bindings against an entity loaded asynchronously after a transition
+    // (e.g. AgentMemoryThread `entity.totalSteps` after the success
+    // emit). Substring match logic is correct; the original synchronous
+    // read just raced the React commit. Resolve `false` if the deadline
+    // passes without finding the text.
+    const pollDeadline = Date.now() + 2000;
+    let found = false;
+    while (Date.now() < pollDeadline) {
+      found = await page.evaluate(({ slot, text }) => {
+        const scope = document.getElementById(`slot-${slot}`) ?? document.body;
+        if (scope.textContent?.includes(text)) return true;
+        const fieldEls = scope.querySelectorAll('[data-field]');
+        for (const el of fieldEls) {
+          if ((el.textContent ?? '').includes(text)) return true;
+          if ((el as HTMLInputElement).value === text) return true;
+        }
+        const inputs = scope.querySelectorAll('input, textarea, select');
+        for (const el of inputs) {
+          if ((el as HTMLInputElement).value === text) return true;
+        }
+        return false;
+      }, { slot: binding.slot, text: expectedText });
+      if (found) break;
+      await page.waitForTimeout(100);
+    }
 
     results.push({
       path: binding.path,

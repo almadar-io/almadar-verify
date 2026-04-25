@@ -30,7 +30,7 @@
 
 import type { Page } from 'playwright';
 import type { EventPayload } from '@almadar/core';
-import { readTraitSnapshots, type TraitStateSnapshot } from '../runtime/state-bridge.js';
+import { readEventLog, readTraitSnapshots, type TraitStateSnapshot } from '../runtime/state-bridge.js';
 import { fillFormFieldsWithValues, type FilledFormValues } from './interaction.js';
 import {
   probeCascadeFlowDelta,
@@ -578,6 +578,27 @@ async function sampleOneSite(
     const result = await fillFormFieldsWithValues(page, slotContainer).catch(() => ({ count: 0, values: {} }));
     if (result.count > 0) {
       submittedValues = result.values;
+    } else {
+      // No fillable inputs in the form-section slot. The atom's default
+      // config left `fields: []` so the form renders as a header + submit
+      // button only — `extractRenderSites` still emits this site because
+      // the static schema declares a `submitEvent`, but the click target
+      // is unrenderable as configured. Consumers (molecules/organisms)
+      // override `fields` to surface real inputs. Skip the click and
+      // report PASS with skip detail so the report reflects "would work
+      // when consumer-driven" rather than a false-fail. (G28 — Phase B.1.)
+      return {
+        traitName: site.traitName,
+        event: site.event,
+        selector: null,
+        statesBefore,
+        statesAfter: statesBefore,
+        changedTraits: [],
+        passed: true,
+        detail:
+          `skipped — form-section default config has no fields; ` +
+          `consumer override required to render submit target`,
+      };
     }
   }
 
@@ -657,6 +678,23 @@ async function sampleOneSite(
       : true;
     const statePassed = changedTraits.length > 0;
 
+    // G37 / Phase B.4: when state didn't advance, distinguish a click
+    // that fired the event (and was rejected by a guard) from one that
+    // never reached the dispatcher (broken wiring). Query the runtime's
+    // event log for `site.event` to tell them apart. The verifier-side
+    // hook records every dispatched event regardless of guard outcome,
+    // so its presence proves the click made it through.
+    let nonAdvanceDetail =
+      `site ${site.siteKey} clicked ${selector} but no trait state advanced — ` +
+      `button likely wired to a dead event key`;
+    if (!statePassed) {
+      const eventLog = await readEventLog(page).catch(() => []);
+      const eventFired = eventLog.some((e) => e.event === site.event);
+      nonAdvanceDetail = eventFired
+        ? `site ${site.siteKey} clicked ${selector}, event "${site.event}" fired but no transition advanced — likely a guard rejection`
+        : `site ${site.siteKey} clicked ${selector} but event "${site.event}" never fired — wiring broken between DOM and dispatcher`;
+    }
+
     return {
       traitName: site.traitName,
       event: site.event,
@@ -667,7 +705,7 @@ async function sampleOneSite(
       passed: statePassed && cascadePassed && submittedPassed,
       detail: statePassed
         ? `site ${site.siteKey} clicked ${selector} → ${changeSummary}${cascadeSummary}${submittedSummary}`
-        : `site ${site.siteKey} clicked ${selector} but no trait state advanced — button likely wired to a dead event key`,
+        : nonAdvanceDetail,
       cascadeFlowDeltas,
       submittedValues,
       submittedVisibility,
