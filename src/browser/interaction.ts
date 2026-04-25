@@ -214,13 +214,13 @@ export function buildMinimalPayload(
         inner === 'float' || inner === 'boolean';
       if (isScalarInner) {
         const len = 3;
-        const arr: EventPayload[string] = [];
+        const arr: Array<string | number | boolean> = [];
         for (let i = 0; i < len; i++) {
           if (inner === 'string') arr.push(faker.lorem.words(2));
           else if (inner === 'boolean') arr.push(faker.datatype.boolean());
           else arr.push(faker.number.float({ min: 1, max: 999, fractionDigits: 2 }));
         }
-        payload[name] = arr;
+        payload[name] = arr as EventPayload[string];
       } else if (entityFields && entityFields.length > 0) {
         const row: EventPayload = {};
         for (const ef of entityFields) {
