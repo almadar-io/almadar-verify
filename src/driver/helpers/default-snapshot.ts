@@ -94,7 +94,13 @@ export function createDefaultSnapshot(
       // safeFileName strips dots, so sanitize the basename then append
       // the extension. Otherwise `.png` becomes `_png` and playwright
       // rejects with `unsupported mime type "null"`.
-      const fileName = `${safeFileName(`${traitName}_${step.from}_${step.event}_${step.to}`)}.png`;
+      //
+      // Multiple steps with the same `from_event_to` cause (e.g. base
+      // walk and interaction-test for the same transition) would
+      // collide on the same filename, last-write-wins. Suffix with the
+      // testKind so each variant gets its own screenshot file.
+      const variant = step.testKind !== undefined ? `__${step.testKind}` : '';
+      const fileName = `${safeFileName(`${traitName}_${step.from}_${step.event}_${step.to}${variant}`)}.png`;
       screenshotPath = join(outputDir, 'frames', fileName);
       await takeScreenshot(page, screenshotPath);
     }
