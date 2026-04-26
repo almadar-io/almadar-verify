@@ -28,14 +28,25 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   const matched: BindingMatch[] = [];
   const missing: { slot: string; expected: string }[] = [];
 
-  // The "last event dispatched" should equal the cause event when the
-  // dispatch landed on the targeted trait. Cross-trait dispatches (the
-  // emit-sweep) won't satisfy this, so we report mismatches as missing.
-  if (traitSnapshot.lastEventDispatched?.event === frame.cause.event) {
+  // Check the event log delta first — it captures EVERY event the
+  // runtime dispatched during this frame, not just the most recent.
+  // `lastEventDispatched` on the snapshot is a single-slot moving
+  // target: after a cause event triggers cascade-fired follow-ups
+  // (e.g. INIT auto-firing from a server-success effect), the snapshot
+  // ends up reflecting the cascade event, not the cause. Both signals
+  // are useful — if either has the cause event, the dispatch landed.
+  const causeInEventLog = frame.eventLogDelta.added.some(
+    (entry) => entry.type === frame.cause.event,
+  );
+  const causeInLastDispatched = traitSnapshot.lastEventDispatched?.event === frame.cause.event;
+
+  if (causeInEventLog || causeInLastDispatched) {
     matched.push({
       slot: 'lastEventDispatched',
       expected: frame.cause.event,
-      actual: traitSnapshot.lastEventDispatched.event,
+      actual: causeInLastDispatched
+        ? (traitSnapshot.lastEventDispatched as { event: string }).event
+        : 'eventLog',
     });
   } else if (frame.cause.triggerKind !== 'auto-init') {
     missing.push({
