@@ -83,7 +83,10 @@ export function createDefaultSnapshot(
     // Optional screenshot.
     let screenshotPath: string | null = null;
     if (screenshots && step !== null) {
-      const fileName = safeFileName(`${traitName}_${step.from}_${step.event}_${step.to}.png`);
+      // safeFileName strips dots, so sanitize the basename then append
+      // the extension. Otherwise `.png` becomes `_png` and playwright
+      // rejects with `unsupported mime type "null"`.
+      const fileName = `${safeFileName(`${traitName}_${step.from}_${step.event}_${step.to}`)}.png`;
       screenshotPath = join(outputDir, 'frames', fileName);
       await takeScreenshot(page, screenshotPath);
     }
