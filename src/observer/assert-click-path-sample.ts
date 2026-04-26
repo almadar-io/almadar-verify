@@ -57,11 +57,22 @@ export function assertClickPathSample(frames: ReadonlyArray<Frame>): Verdict[] {
       }
     }
 
+    // A click-path sample passes if either:
+    //   1. The dispatch advanced some trait's state, OR
+    //   2. `frame.accepted` is true (the runtime guard-accepted the
+    //      transition — handles self-loop transitions like `loading
+    //      INIT loading` where state correctly doesn't change but the
+    //      click did reach the reducer).
+    // Pre-fix this only checked (1), which false-failed every Refresh /
+    // Retry button wired to an INIT self-loop.
+    const passed = advancedTrait !== null || frame.accepted;
     verdicts.push({
-      passed: advancedTrait !== null,
+      passed,
       detail: advancedTrait !== null
         ? `click-path: ${frame.cause.event} advanced ${advancedTrait}'s state`
-        : `click-path: ${frame.cause.event} did not advance any trait state — affordance likely wired to a dead event key`,
+        : passed
+          ? `click-path: ${frame.cause.event} dispatch accepted (self-loop transition)`
+          : `click-path: ${frame.cause.event} did not advance any trait state — affordance likely wired to a dead event key`,
       evidence: { frameIndices: [frame.index] },
     });
   }

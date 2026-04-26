@@ -92,15 +92,26 @@ describe('assertClickPathSample', () => {
     expect(verdicts[0].detail).toMatch(/advanced X's state/);
   });
 
-  it('fails when the click-path frame leaves all trait states unchanged', () => {
+  it('fails when the click-path frame is rejected (dispatch never reached the reducer)', () => {
     const frames: Frame[] = [
       frame(0, otherCause('X', 'INIT'), [{ name: 'X', state: 'a' }]),
-      frame(1, clickPathCause('X', 'CLICK'), [{ name: 'X', state: 'a' }]),
+      frame(1, clickPathCause('X', 'CLICK'), [{ name: 'X', state: 'a' }], false),
     ];
     const verdicts = assertClickPathSample(frames);
     expect(verdicts).toHaveLength(1);
     expect(verdicts[0].passed).toBe(false);
     expect(verdicts[0].detail).toMatch(/dead event key/);
+  });
+
+  it('passes a self-loop click (accepted=true, state unchanged) — Refresh/Retry buttons wired to INIT', () => {
+    const frames: Frame[] = [
+      frame(0, otherCause('X', 'INIT'), [{ name: 'X', state: 'a' }]),
+      frame(1, clickPathCause('X', 'INIT'), [{ name: 'X', state: 'a' }], true),
+    ];
+    const verdicts = assertClickPathSample(frames);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].passed).toBe(true);
+    expect(verdicts[0].detail).toMatch(/self-loop/);
   });
 
   it('passes when the click drives a CROSS-trait state change (legitimate handoff)', () => {
@@ -135,7 +146,7 @@ describe('assertClickPathSample', () => {
     const frames: Frame[] = [
       frame(0, otherCause('X', 'INIT'), [{ name: 'X', state: 'a' }]),
       frame(1, clickPathCause('X', 'CLICK_A'), [{ name: 'X', state: 'b' }]),
-      frame(2, clickPathCause('X', 'CLICK_B'), [{ name: 'X', state: 'b' }]), // no advance
+      frame(2, clickPathCause('X', 'CLICK_B'), [{ name: 'X', state: 'b' }], false), // dispatch rejected
     ];
     const verdicts = assertClickPathSample(frames);
     expect(verdicts).toHaveLength(2);

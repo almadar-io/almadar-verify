@@ -33,6 +33,21 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
   const result: ExtendedWalkStep[] = [];
   const entityFieldsByName = collectEntityFields(orbital);
 
+  // Orbital-wide set of events surfaced as DOM affordances anywhere
+  // (`action: "EVENT"`, `submitEvent: "EVENT"`). Buttons that fire a
+  // sibling trait's event (e.g. a list trait with an "+" button that
+  // dispatches ADD_ITEM into a separate detail trait) live outside
+  // the trait owning the transition, so this set spans the whole
+  // orbital, not just the trait currently being planned.
+  const userClickableEvents = collectClickableEventsAcrossOrbital(orbital);
+
+  // Server-emitted events: every `emit.success` / `emit.failure` value
+  // across all `fetch` / `persist` / `call-service` / `ref` effects in
+  // the orbital. These arrive on the cascade after a server round-trip
+  // and have no DOM affordance — driving them via interaction tests is
+  // a guaranteed-uncovered miss that drags coverage down.
+  const serverEmittedEvents = collectServerEmittedEvents(orbital);
+
   for (const { trait } of eachInlineTrait(orbital)) {
     if (trait.stateMachine === undefined) continue;
     const initial = findInitialState(trait.stateMachine);
@@ -40,6 +55,8 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
 
     for (const transition of trait.stateMachine.transitions) {
       if (transition.event === 'INIT') continue;
+      if (serverEmittedEvents.has(transition.event)) continue;
+      if (!userClickableEvents.has(transition.event)) continue;
 
       const renderTarget = findRenderTarget(transition);
       if (renderTarget === null) continue;
@@ -95,6 +112,72 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
 interface RenderTarget {
   pattern: string;
   isForm: boolean;
+}
+
+/**
+ * Orbital-wide scan: every event that appears as `action:` or
+ * `submitEvent:` in any trait's render-ui. Driving an interaction test
+ * for an event not in this set means clicking nothing — the kernel
+ * would fall back to a bus dispatch and lose the user-path semantics
+ * the test was meant to cover.
+ */
+function collectClickableEventsAcrossOrbital(orbital: OrbitalSchema): Set<string> {
+  const out = new Set<string>();
+  for (const { trait } of eachInlineTrait(orbital)) {
+    if (trait.stateMachine === undefined) continue;
+    for (const transition of trait.stateMachine.transitions) {
+      for (const effect of transition.effects ?? []) {
+        if (!Array.isArray(effect)) continue;
+        if (effect[0] !== 'render-ui') continue;
+        walkActions(effect[2], out);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Orbital-wide scan: every event named in any `emit.success` /
+ * `emit.failure` block on a `fetch` / `persist` / `call-service` /
+ * `ref` effect. These events arrive over the server cascade and have
+ * no DOM affordance.
+ */
+function collectServerEmittedEvents(orbital: OrbitalSchema): Set<string> {
+  const out = new Set<string>();
+  const SERVER_OPS = new Set(['fetch', 'persist', 'call-service', 'ref']);
+  for (const { trait } of eachInlineTrait(orbital)) {
+    if (trait.stateMachine === undefined) continue;
+    for (const transition of trait.stateMachine.transitions) {
+      for (const effect of transition.effects ?? []) {
+        if (!Array.isArray(effect)) continue;
+        if (typeof effect[0] !== 'string' || !SERVER_OPS.has(effect[0])) continue;
+        // Last element is the options object that may carry `emit`.
+        for (let i = 2; i < effect.length; i++) {
+          const node = effect[i];
+          if (node === null || typeof node !== 'object' || Array.isArray(node)) continue;
+          const emit = (node as { emit?: { success?: unknown; failure?: unknown } }).emit;
+          if (emit === undefined) continue;
+          if (typeof emit.success === 'string') out.add(emit.success);
+          if (typeof emit.failure === 'string') out.add(emit.failure);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function walkActions(node: unknown, out: Set<string>): void {
+  if (node === null || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const child of node) walkActions(child, out);
+    return;
+  }
+  const obj = node as { action?: unknown; submitEvent?: unknown };
+  if (typeof obj.action === 'string') out.add(obj.action);
+  if (typeof obj.submitEvent === 'string') out.add(obj.submitEvent);
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'object' && v !== null) walkActions(v, out);
+  }
 }
 
 /**

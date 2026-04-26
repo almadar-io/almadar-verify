@@ -43,6 +43,20 @@ const cart: OrbitalSchema = {
               { key: 'CANCEL', name: 'Cancel' },
             ],
             transitions: [
+              // INIT renders the list with an "Add" button that fires
+              // ADD_ITEM. This is the orbital-wide DOM affordance the
+              // interaction-test planner looks for.
+              {
+                from: 'idle',
+                to: 'idle',
+                event: 'INIT',
+                effects: [['render-ui', 'main', {
+                  type: 'stack',
+                  children: [
+                    { type: 'button', label: 'Add', action: 'ADD_ITEM' },
+                  ],
+                }]],
+              },
               {
                 from: 'idle',
                 to: 'form',
@@ -53,7 +67,11 @@ const cart: OrbitalSchema = {
                 from: 'form',
                 to: 'idle',
                 event: 'SAVE',
-                effects: [['render-ui', 'modal', { type: 'form-section', fields: [{ name: 'name' }] }]],
+                effects: [['render-ui', 'modal', {
+                  type: 'form-section',
+                  fields: [{ name: 'name' }],
+                  submitEvent: 'SAVE',
+                }]],
               },
               {
                 from: 'form',
