@@ -79,13 +79,27 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
         });
       }
 
-      // Build form data when the rendered pattern is a form.
-      const payloadSchema = extractPayloadSchema(trait, transition.event);
+      // Build form data — three derivation strategies, in priority order:
+      //   1. Nested form-section inside the render-ui (e.g. modal opens
+      //      a form-section whose `submitEvent` cascades to SAVE).
+      //      Drives the form-fill regardless of where the form lives in
+      //      the render tree. Used by std-cart's ADD_ITEM → modal[
+      //      form-section{ name, description, status, submitEvent: SAVE }].
+      //   2. Top-level pattern is a form (`form`, `form-section`, or
+      //      object with `fields:` directly).
+      //   3. Otherwise: undefined → driver just clicks the affordance.
       const linkedEntity = trait.linkedEntity;
-      const formData =
-        renderTarget.isForm && payloadSchema.length > 0
+      const nestedForm = findNestedForm(transition);
+      let formData: Record<string, FieldValue> | undefined;
+      if (nestedForm !== null) {
+        const fieldNames = nestedForm.fields.map((n) => ({ name: n, type: 'string' as const }));
+        formData = buildFormData(fieldNames, linkedEntity, entityFieldsByName);
+      } else {
+        const payloadSchema = extractPayloadSchema(trait, transition.event);
+        formData = renderTarget.isForm && payloadSchema.length > 0
           ? buildFormData(payloadSchema, linkedEntity, entityFieldsByName)
           : undefined;
+      }
 
       result.push({
         from: transition.from,
@@ -178,6 +192,55 @@ function walkActions(node: unknown, out: Set<string>): void {
   for (const v of Object.values(obj)) {
     if (typeof v === 'object' && v !== null) walkActions(v, out);
   }
+}
+
+/**
+ * Walk a transition's `render-ui` payload(s) looking for a nested form
+ * (object with a `fields:` array, typically `type: "form-section"` but
+ * not required). Returns the field name list when found — used by the
+ * interaction planner to derive `formData` so the driver can fill the
+ * form even when the top-level rendered pattern is a wrapper (modal,
+ * stack) and not the form itself.
+ */
+function findNestedForm(transition: Transition): { fields: ReadonlyArray<string> } | null {
+  for (const effect of transition.effects ?? []) {
+    if (!Array.isArray(effect)) continue;
+    if (effect[0] !== 'render-ui') continue;
+    const found = walkForFormFields(effect[2]);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+function walkForFormFields(node: unknown): { fields: ReadonlyArray<string> } | null {
+  if (node === null || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = walkForFormFields(item);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  const obj = node as { fields?: unknown; children?: unknown; [k: string]: unknown };
+  // Direct hit: an object with a `fields:` array of `{name, ...}`.
+  if (Array.isArray(obj.fields)) {
+    const names: string[] = [];
+    for (const f of obj.fields) {
+      if (f !== null && typeof f === 'object' && !Array.isArray(f)) {
+        const name = (f as { name?: unknown }).name;
+        if (typeof name === 'string') names.push(name);
+      }
+    }
+    if (names.length > 0) return { fields: names };
+  }
+  // Recurse into children + every other object-valued property.
+  for (const value of Object.values(obj)) {
+    if (typeof value === 'object' && value !== null) {
+      const found = walkForFormFields(value);
+      if (found !== null) return found;
+    }
+  }
+  return null;
 }
 
 /**

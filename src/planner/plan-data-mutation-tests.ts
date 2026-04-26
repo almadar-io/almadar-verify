@@ -14,12 +14,15 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema, Trait } from '@almadar/core';
+import type { FieldValue, OrbitalSchema, Trait } from '@almadar/core';
+import { isEntityReference, isEntityCall } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
+import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
 
 export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[] {
   const result: ExtendedWalkStep[] = [];
+  const entityFieldsByName = collectEntityFields(orbital);
 
   for (const { trait } of eachInlineTrait(orbital)) {
     if (trait.stateMachine === undefined) continue;
@@ -36,12 +39,26 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
       // a fallback.
       const entityName = persist.entity;
 
+      // Synthesize a payload from the dispatching event's payloadSchema
+      // + the persist target entity's fields. Without this, every
+      // data-mutation step dispatched with `payload: {}` and the
+      // persist effect's `@payload.data` resolved to `undefined`,
+      // which made `create` insert nothing and the gate fail.
+      // Prefer the persist target's entity fields over the trait's
+      // linked entity — `["persist", "create", "CartItem", ...]` writes
+      // to CartItem regardless of the trait's `linkedEntity`.
+      const payloadSchema = extractPayloadSchema(trait, transition.event);
+      const persistEntityFields = entityFieldsByName[entityName];
+      const stepPayload = payloadSchema.length > 0
+        ? (buildMinimalPayload(payloadSchema, persistEntityFields) as Record<string, FieldValue>)
+        : {};
+
       result.push({
         from: transition.from,
         event: transition.event,
         to: transition.to,
         guardCase: null,
-        payload: {},
+        payload: stepPayload,
         isRepositioning: false,
         traitName: trait.name,
         triggerKind: 'dom',
@@ -78,4 +95,37 @@ function deltaFor(kind: 'create' | 'update' | 'delete'): number {
   if (kind === 'create') return 1;
   if (kind === 'delete') return -1;
   return 0;
+}
+
+function extractPayloadSchema(
+  trait: Trait,
+  eventKey: string,
+): Array<{ name: string; type: string; required?: boolean }> {
+  const event = trait.stateMachine?.events.find((e) => e.key === eventKey);
+  if (event === undefined || event.payloadSchema === undefined) return [];
+  return event.payloadSchema.map((f) => ({
+    name: f.name,
+    type: f.type,
+    required: f.required,
+  }));
+}
+
+/** Mirror of plan-interaction-tests.collectEntityFields — produces an
+ *  entityName → field-defs map by walking every orbital's inline + ref
+ *  entities. The entity narrowing uses core's `isEntityReference` /
+ *  `isEntityCall` guards. */
+function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityFieldDef[]> {
+  const out: Record<string, EntityFieldDef[]> = {};
+  for (const orb of orbital.orbitals) {
+    const entityRef = orb.entity;
+    if (entityRef === undefined) continue;
+    if (isEntityReference(entityRef) || isEntityCall(entityRef)) continue;
+    const fields = entityRef.fields ?? [];
+    out[entityRef.name] = fields.map((f) => ({
+      name: f.name,
+      type: f.type,
+      values: f.values !== undefined ? [...f.values] : undefined,
+    }));
+  }
+  return out;
 }

@@ -69,7 +69,7 @@ const cart: OrbitalSchema = {
                 event: 'SAVE',
                 effects: [['render-ui', 'modal', {
                   type: 'form-section',
-                  fields: [{ name: 'name' }],
+                  fields: [{ name: 'name' }, { name: 'description' }],
                   submitEvent: 'SAVE',
                 }]],
               },
