@@ -18,8 +18,13 @@
 import type { Page } from 'playwright';
 import type { ResolvedTrait, ResolvedTraitTransition, SExpr } from '@almadar/core';
 
-/** Canonical portal slot names — must match `packages/almadar-ui/renderer/slot-definitions.ts`. */
+/** Canonical portal slot names — mirrors `UISlot` in `@almadar/ui`'s
+ *  `hooks/useUISlots.ts`. Must include every slot the runtime stamps
+ *  as `id="slot-{name}"`, otherwise per-slot verdicts (VG1, portal
+ *  presence) silently skip transitions targeting the missing slot. */
 export const PORTAL_SLOTS = [
+  'main',
+  'sidebar',
   'modal',
   'drawer',
   'overlay',
@@ -27,6 +32,8 @@ export const PORTAL_SLOTS = [
   'toast',
   'hud-top',
   'hud-bottom',
+  'hud-left',
+  'hud-right',
   'floating',
 ] as const;
 

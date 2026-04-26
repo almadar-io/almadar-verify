@@ -29,6 +29,7 @@ import type { ExtendedWalkStep } from '../../planner/types.js';
 import type { ConsoleCollector } from '../../browser/console.js';
 import { readVerificationSnapshot, readEventLog } from '../../runtime/state-bridge.js';
 import { takeScreenshot, safeFileName } from '../../browser/screenshot.js';
+import { PORTAL_SLOTS, type PortalSlot } from '../../browser/portal-slots.js';
 import { join } from 'node:path';
 
 export interface DefaultSnapshotOptions {
@@ -80,6 +81,13 @@ export function createDefaultSnapshot(
     const effectResults = lastEffectResultsFor(runtimeSnapshot, traitName);
     const serverResponse = lastServerResponseFor(runtimeSnapshot, traitName);
 
+    // Probe portal slots from the live DOM. The runtime stamps
+    // `id="slot-{name}"` on every mounted slot and `data-pattern` on
+    // its top child. Without this, every per-slot verdict (VG1, portal
+    // presence) sees an empty `portals` array and reports "slot not
+    // mounted" even when the screenshot proves otherwise.
+    const portals = await probePortals(page);
+
     // Optional screenshot.
     let screenshotPath: string | null = null;
     if (screenshots && step !== null) {
@@ -96,7 +104,7 @@ export function createDefaultSnapshot(
       dom: {
         url: page.url(),
         rowsByEntity: rowCounts(entityData),
-        portals: [],
+        portals,
         visibleTextSample: '',
       },
       consoleAdded,
@@ -148,4 +156,29 @@ function lastEffectResultsFor(snap: VerificationSnapshot, traitName: string): Ef
 function lastServerResponseFor(snap: VerificationSnapshot, traitName: string): ServerResponseTrace | null {
   const recent = [...snap.transitions].reverse().find((t) => t.traitName === traitName);
   return recent?.serverResponse ?? null;
+}
+
+/**
+ * Probe every canonical portal slot in the live DOM. Reports which are
+ * mounted (`#slot-{name}` element exists) and the child element count.
+ * `data-pattern` on the slot's first child is recorded by `assertPortalPerStep`
+ * via the `portals` array (top-level pattern only — nested patterns are
+ * not enumerated here).
+ */
+async function probePortals(page: Page): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>> {
+  try {
+    const slots = PORTAL_SLOTS as ReadonlyArray<PortalSlot>;
+    const results = await page.evaluate((slotNames: ReadonlyArray<string>) => {
+      return slotNames.map((name) => {
+        const el = document.getElementById(`slot-${name}`);
+        if (el === null) return { slot: name, mounted: false, childCount: 0 };
+        return { slot: name, mounted: true, childCount: el.children.length };
+      });
+    }, slots as unknown as string[]);
+    return results as ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>;
+  } catch {
+    // Page may have navigated mid-snapshot; return empty so verdicts
+    // surface as "slot not mounted" instead of crashing the run.
+    return [];
+  }
 }
