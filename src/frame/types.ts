@@ -104,6 +104,12 @@ export interface FrameCause {
    * whether the mock store reflects the row delta.
    */
   expectedSuccessEvent?: string;
+  /**
+   * v3.2.3: the form's `submitEvent` carried from the originating step.
+   * The DOM trigger uses `[data-testid="action-<submitEvent>"]` to find
+   * and click the Save button. No fallback heuristics.
+   */
+  submitEvent?: string;
 }
 
 /**

@@ -84,6 +84,17 @@ export interface ExtendedWalkStep extends WalkStep {
   expectedSuccessEvent?: string;
 
   /**
+   * v3.2.3: when an interaction-test step opens a form (e.g. a modal
+   * containing a form-section), this is the form's `submitEvent` — the
+   * event key dispatched when the user clicks the Save button. The
+   * driver targets `[data-testid="action-<submitEvent>"]` to find and
+   * click it. Extracted by the planner from the form-section's render-ui
+   * config. No fallback heuristics — if the rendered button doesn't
+   * carry the attribute, that's a UI bug to fix at source.
+   */
+  submitEvent?: string;
+
+  /**
    * Steps to replay first to reach this step's `from` state. The
    * planner expands these inline so each becomes its own
    * `triggerKind: 'replay'` Frame in the kernel walk; consumers should

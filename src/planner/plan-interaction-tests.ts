@@ -127,6 +127,7 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
         testKind: 'interaction',
         expectedPattern: renderTarget.pattern,
         ...(formData !== undefined && { formData }),
+        ...(nestedForm?.submitEvent !== undefined && { submitEvent: nestedForm.submitEvent }),
       });
     }
   }
@@ -215,7 +216,12 @@ function walkActions(node: unknown, out: Set<string>): void {
  * form even when the top-level rendered pattern is a wrapper (modal,
  * stack) and not the form itself.
  */
-function findNestedForm(transition: Transition): { fields: ReadonlyArray<string> } | null {
+interface NestedForm {
+  fields: ReadonlyArray<string>;
+  submitEvent?: string;
+}
+
+function findNestedForm(transition: Transition): NestedForm | null {
   for (const effect of transition.effects ?? []) {
     if (!Array.isArray(effect)) continue;
     if (effect[0] !== 'render-ui') continue;
@@ -225,7 +231,7 @@ function findNestedForm(transition: Transition): { fields: ReadonlyArray<string>
   return null;
 }
 
-function walkForFormFields(node: unknown): { fields: ReadonlyArray<string> } | null {
+function walkForFormFields(node: unknown): NestedForm | null {
   if (node === null || typeof node !== 'object') return null;
   if (Array.isArray(node)) {
     for (const item of node) {
@@ -234,17 +240,28 @@ function walkForFormFields(node: unknown): { fields: ReadonlyArray<string> } | n
     }
     return null;
   }
-  const obj = node as { fields?: unknown; children?: unknown; [k: string]: unknown };
-  // Direct hit: an object with a `fields:` array of `{name, ...}`.
+  const obj = node as { fields?: unknown; submitEvent?: unknown; [k: string]: unknown };
+  // Direct hit: an object with a `fields:` array. Two flavors:
+  //   - Object-style: `[{ name: "X", type: "string", ... }]`
+  //   - String-style: `["X", "Y", "Z"]` — std-modal's default form-section
+  //     ships this shape and delegates type info to the linked entity at
+  //     render time (Form.tsx normalizes via entity lookup).
   if (Array.isArray(obj.fields)) {
     const names: string[] = [];
     for (const f of obj.fields) {
-      if (f !== null && typeof f === 'object' && !Array.isArray(f)) {
+      if (typeof f === 'string' && f.length > 0) {
+        names.push(f);
+      } else if (f !== null && typeof f === 'object' && !Array.isArray(f)) {
         const name = (f as { name?: unknown }).name;
         if (typeof name === 'string') names.push(name);
       }
     }
-    if (names.length > 0) return { fields: names };
+    if (names.length > 0) {
+      return {
+        fields: names,
+        ...(typeof obj.submitEvent === 'string' && { submitEvent: obj.submitEvent }),
+      };
+    }
   }
   // Recurse into children + every other object-valued property.
   for (const value of Object.values(obj)) {

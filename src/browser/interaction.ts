@@ -469,88 +469,30 @@ export async function fillFormFieldsFromMap(
     const stringValue = fieldValueToString(value);
     if (stringValue === null) continue;
 
-    // Try input/textarea — matched by `name`, `id`, or
-    // `data-field-name`. React-driven form components frequently use
-    // `id` (or no name attribute at all) since they're controlled
-    // components, so the strict `[name="X"]` selector misses them.
-    const inputSelector = [
-      `input[name="${name}"]`,
-      `input[id="${name}"]`,
-      `input[data-field-name="${name}"]`,
-      `textarea[name="${name}"]`,
-      `textarea[id="${name}"]`,
-      `textarea[data-field-name="${name}"]`,
-    ].map((s) => `${s}:visible`).join(', ');
-    const input = container.locator(inputSelector).first();
-    const inputVisible = await input.isVisible({ timeout: 200 }).catch(() => false);
-    if (inputVisible) {
-      try {
-        await input.fill(stringValue);
-        count++;
-        continue;
-      } catch {
-        // Try select fallback below.
+    // ONE deterministic selector: `data-field-name="<name>"`. Every
+    // form-rendering path in `@almadar/ui` (Form.tsx commonProps,
+    // InputPattern/TextareaPattern/SelectPattern) stamps this attribute
+    // at source. If a render is missing it, that's a UI bug to fix in
+    // `@almadar/ui` — never add fallback strategies here.
+    const field = container.locator(`[data-field-name="${name}"]`).first();
+    const visible = await field.isVisible({ timeout: 200 }).catch(() => false);
+    if (!visible) continue;
+    const tag = await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => 'input');
+    try {
+      if (tag === 'select') {
+        await field.selectOption(stringValue);
+      } else {
+        await field.fill(stringValue);
       }
+      count++;
+    } catch {
+      // Field exists with the right tag but value couldn't be set
+      // (e.g. select option not in the list). Surface as 0 contribution
+      // to count — the planner needs to align with the entity's enum.
     }
-
-    // Try select — same matchers.
-    const selectSelector = [
-      `select[name="${name}"]`,
-      `select[id="${name}"]`,
-      `select[data-field-name="${name}"]`,
-    ].map((s) => `${s}:visible`).join(', ');
-    const select = container.locator(selectSelector).first();
-    const selectVisible = await select.isVisible({ timeout: 200 }).catch(() => false);
-    if (selectVisible) {
-      try {
-        await select.selectOption(stringValue);
-        count++;
-        continue;
-      } catch {
-        // Try label fallback below.
-      }
-    }
-
-    // Final fallback: accessible-name resolution via `getByLabel`. Catches
-    // forms whose React-controlled inputs don't expose name / id / data-
-    // field-name (only the visible label maps fields to inputs). Tries
-    // exact-case, capitalized, and " *" suffix forms — real markup labels
-    // required fields with an asterisk that the verifier should ignore.
-    const labelCandidates = [
-      name,
-      capitalize(name),
-      `${capitalize(name)} *`,
-    ];
-    let filled = false;
-    for (const candidate of labelCandidates) {
-      try {
-        const labeled = container.getByLabel(candidate, { exact: false }).first();
-        const labeledVisible = await labeled.isVisible({ timeout: 200 }).catch(() => false);
-        if (!labeledVisible) continue;
-        // selectOption when the labeled element is a <select>; fill
-        // otherwise. Probe the element's tag name.
-        const tag = await labeled.evaluate((el) => el.tagName.toLowerCase()).catch(() => 'input');
-        if (tag === 'select') {
-          await labeled.selectOption(stringValue);
-        } else {
-          await labeled.fill(stringValue);
-        }
-        count++;
-        filled = true;
-        break;
-      } catch {
-        // Try next candidate.
-      }
-    }
-    if (filled) continue;
   }
 
   return count;
-}
-
-function capitalize(s: string): string {
-  if (s.length === 0) return s;
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /**
@@ -571,59 +513,34 @@ function fieldValueToString(value: FieldValue): string | null {
 // ── Submit/Save Button Clicking ─────────────────────────────────────
 
 /**
- * Find and click the submit/save action button within a container.
- * Tries multiple selector strategies in order of specificity.
- * Returns true if a button was found and clicked.
+ * Click the form's submit button. ONE deterministic selector:
+ * `[data-testid="action-<submitEvent>"]`. Every form-rendering path in
+ * `@almadar/ui` (Form.tsx, ComponentPatterns.tsx) stamps this on the
+ * submit Button. If the rendered DOM doesn't carry it, the form's
+ * source needs to add the attribute — never add fallback strategies.
+ *
+ * `submitEvent` is the event key the form's submit dispatches (e.g.
+ * "SAVE", "SUBMIT_REPORT", whatever the form-section's `submitEvent`
+ * config says). The planner extracts this from the render-ui at plan
+ * time and passes it through.
  */
 export async function clickSubmitAction(
   page: Page,
-  containerSelector: string
+  containerSelector: string,
+  submitEvent: string,
 ): Promise<boolean> {
-  // Critical: containerSelector is a comma-separated CSS selector union
-  // (e.g. `[data-pattern="form-section"], [data-pattern="form"], form`).
-  // String-concatenating ` button` onto it parses as N-1 unscoped
-  // selectors plus 1 scoped — the form ELEMENT matches, not its
-  // descendants. Use Playwright `.locator()` chaining instead so the
-  // descendant selector applies to ALL container variants uniformly.
   const container = page.locator(containerSelector).first();
-
-  // Strategy 1: data-testid="action-SAVE" or data-testid="action-SUBMIT"
-  for (const testId of ['action-SAVE', 'action-SUBMIT']) {
-    const btn = container.locator(`[data-testid="${testId}"]`).first();
-    try {
-      if (await btn.isVisible({ timeout: 1000 })) {
-        await btn.click();
-        return true;
-      }
-    } catch {
-      // Not found
-    }
-  }
-
-  // Strategy 2: button[type="submit"]
-  const submitBtn = container.locator('button[type="submit"]').first();
+  const btn = container.locator(`[data-testid="action-${submitEvent}"]`).first();
   try {
-    if (await submitBtn.isVisible({ timeout: 1000 })) {
-      await submitBtn.click();
+    if (await btn.isVisible({ timeout: 1000 })) {
+      await btn.click();
       return true;
     }
   } catch {
-    // Not found
+    // The button isn't visible / clickable — that's a UI contract gap.
+    // Don't fall back: the form's submit Button must carry
+    // `data-testid="action-<submitEvent>"`.
   }
-
-  // Strategy 3: Button with text matching save/submit/add/create/log
-  for (const label of ['Save', 'Submit', 'Log', 'Add', 'Create']) {
-    const textBtn = container.locator('button').filter({ hasText: new RegExp(`^${label}`, 'i') }).first();
-    try {
-      if (await textBtn.isVisible({ timeout: 500 })) {
-        await textBtn.click();
-        return true;
-      }
-    } catch {
-      // Not found
-    }
-  }
-
   return false;
 }
 
