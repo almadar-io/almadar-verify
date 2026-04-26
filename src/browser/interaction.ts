@@ -469,8 +469,19 @@ export async function fillFormFieldsFromMap(
     const stringValue = fieldValueToString(value);
     if (stringValue === null) continue;
 
-    // Try input/textarea first.
-    const input = container.locator(`input[name="${name}"]:visible, textarea[name="${name}"]:visible`).first();
+    // Try input/textarea — matched by `name`, `id`, or
+    // `data-field-name`. React-driven form components frequently use
+    // `id` (or no name attribute at all) since they're controlled
+    // components, so the strict `[name="X"]` selector misses them.
+    const inputSelector = [
+      `input[name="${name}"]`,
+      `input[id="${name}"]`,
+      `input[data-field-name="${name}"]`,
+      `textarea[name="${name}"]`,
+      `textarea[id="${name}"]`,
+      `textarea[data-field-name="${name}"]`,
+    ].map((s) => `${s}:visible`).join(', ');
+    const input = container.locator(inputSelector).first();
     const inputVisible = await input.isVisible({ timeout: 200 }).catch(() => false);
     if (inputVisible) {
       try {
@@ -482,8 +493,13 @@ export async function fillFormFieldsFromMap(
       }
     }
 
-    // Try select.
-    const select = container.locator(`select[name="${name}"]:visible`).first();
+    // Try select — same matchers.
+    const selectSelector = [
+      `select[name="${name}"]`,
+      `select[id="${name}"]`,
+      `select[data-field-name="${name}"]`,
+    ].map((s) => `${s}:visible`).join(', ');
+    const select = container.locator(selectSelector).first();
     const selectVisible = await select.isVisible({ timeout: 200 }).catch(() => false);
     if (selectVisible) {
       try {
