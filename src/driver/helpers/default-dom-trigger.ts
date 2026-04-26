@@ -15,22 +15,19 @@
  *
  * When `step.formData` is set (planner extensions like
  * `planInteractionTests` populate this for SAVE-shaped events), the
- * trigger:
- *   1. Clicks the affordance (which typically opens a form modal).
- *   2. Waits briefly for the form to mount.
- *   3. Fills matching fields with the supplied `FieldValue`s via
- *      `fillFormFieldsFromMap`.
- *   4. Clicks the submit affordance via `clickSubmitAction`.
+ * trigger fills the matching fields after the affordance click so the
+ * frame's screenshot captures a populated form. The trigger does NOT
+ * click submit — interaction tests verify "the modal opens with the
+ * right pattern at the right slot"; form submission and the resulting
+ * `persist` cascade belong to the data-mutation observer's separate
+ * frame, fired via the persistor trait directly.
  *
  * @packageDocumentation
  */
 
 import type { Page } from 'playwright';
 import type { ExtendedWalkStep } from '../../planner/types.js';
-import {
-  fillFormFieldsFromMap,
-  clickSubmitAction,
-} from '../../browser/interaction.js';
+import { fillFormFieldsFromMap } from '../../browser/interaction.js';
 
 export interface DefaultDomTriggerOptions {
   /** Click timeout in ms. Default: 2000. */
@@ -74,15 +71,13 @@ export function createDefaultDomTrigger(
       return true;
     }
 
-    // Form data present → wait for the form to mount, fill it, submit.
+    // Form data present → wait for the form to mount, fill it. We
+    // intentionally do NOT click submit; the interaction test verdict
+    // checks that the form-section pattern is mounted, not that the
+    // form persists. Submission semantics live in the data-mutation
+    // observer's separate frame.
     await page.waitForTimeout(formMountTimeoutMs);
     await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
-    if (step.submitEvent === undefined) {
-      // No submitEvent declared → planner found a form but no Save
-      // affordance. Source bug (form-section missing `submitEvent`).
-      return true;
-    }
-    await clickSubmitAction(page, formContainerSelector, step.submitEvent);
     return true;
   };
 }
