@@ -35,8 +35,14 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   // (e.g. INIT auto-firing from a server-success effect), the snapshot
   // ends up reflecting the cascade event, not the cause. Both signals
   // are useful — if either has the cause event, the dispatch landed.
-  const causeInEventLog = frame.eventLogDelta.added.some(
-    (entry) => entry.type === frame.cause.event,
+  // The runtime's event log uses prefixed entry types
+  // (`UI:EVENT`, `<Trait>:DISPATCH`, `<Trait>:EVENT:SUCCESS`,
+  // `<Trait>:EVENT:ERROR`) alongside raw event names. A cause event
+  // of `INIT` is therefore confirmed if any colon-delimited segment
+  // of the entry type is exactly the cause event.
+  const causeInEventLog = frame.eventLogDelta.added.some((entry) =>
+    entry.type === frame.cause.event ||
+    entry.type.split(':').includes(frame.cause.event),
   );
   const causeInLastDispatched = traitSnapshot.lastEventDispatched?.event === frame.cause.event;
 
