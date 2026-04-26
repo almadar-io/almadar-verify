@@ -3,76 +3,112 @@
  * step per declared cross-orbital contract emit so Phase 4c becomes
  * part of the Frame stream.
  *
- * Pre-v3.0.0 this lived in orbital `phase4-browser.ts:3656-3789`. That
- * code navigated to each route, scanned `[data-pattern]` elements,
- * looked up the pattern's contract from `event-contracts.json`, and
- * imperatively tried to trigger each non-optional emit, checking for
- * JS errors after each attempt.
+ * Reads the parsed `OrbitalSchema` directly + a contract registry
+ * (`pattern → emits`) the consumer loads from `event-contracts.json`.
+ * For each pattern that appears in any trait's render-ui (so it'll
+ * render in the running app) AND has registered emits in the registry,
+ * each non-optional emit becomes one step.
  *
- * The lifted shape: the consumer (orbital, runtime-verify) loads the
- * contract registry, computes the set of event names to test (filtering
- * out events already covered by interaction tests), and hands the
- * planner a flat `string[]`. Each name becomes one
- * `ExtendedWalkStep` with `triggerKind: 'dom'` and
- * `testKind: 'contract'`. The kernel's `tick` fires it via Driver
- * (DOM-first, fallback to bus). `assertContractEventFired` (pure
- * observer) reads `frame.eventLogDelta.added` to verify the event
- * actually fired and `frame.consoleDelta.newErrors === 0`.
- *
- * Pure. No `Page`. No filesystem. No DOM.
+ * Pure. No filesystem, no DOM.
  *
  * @packageDocumentation
  */
 
-import type { TraitWalkConfig } from '../engine/types.js';
+import type { OrbitalSchema } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
+import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
 
-export interface PlanContractEventsInput {
-  /** Traits the kernel is walking. */
-  traits: ReadonlyArray<TraitWalkConfig>;
-  /**
-   * Event names to test. The consumer extracts these from the
-   * contract registry, filters out optional emits + events already
-   * covered by other planner extensions (interaction tests, walker
-   * pass-1).
-   */
-  events: ReadonlyArray<string>;
+export interface ContractRegistryEntry {
+  emits: ReadonlyArray<{ event: string; optional?: boolean }>;
+  entityAware?: boolean;
 }
 
-/**
- * One step per event. All steps are anchored under the FIRST trait in
- * the input — contract events are pattern-scoped (not trait-scoped),
- * so we just need a routing context. The kernel's `tick` fires via
- * Driver.triggerDOM (DOM-first). If no affordance is found, tick
- * falls back to `sendEvent`. Either way the event lands in
- * `frame.eventLogDelta.added` and the observer sees it.
- *
- * Returns [] if `traits` is empty (no anchor available).
- */
-export function planContractEvents(input: PlanContractEventsInput): ExtendedWalkStep[] {
-  if (input.traits.length === 0 || input.events.length === 0) return [];
+export type ContractRegistry = Record<string, ContractRegistryEntry>;
 
-  const anchor = input.traits[0];
+export function planContractEvents(
+  orbital: OrbitalSchema,
+  registry: ContractRegistry,
+  alreadyCovered?: ReadonlySet<string>,
+): ExtendedWalkStep[] {
   const result: ExtendedWalkStep[] = [];
-  const seen = new Set<string>();
+  const seenEvents = new Set<string>();
 
-  for (const event of input.events) {
-    if (seen.has(event)) continue;
-    seen.add(event);
+  // Collect every pattern actually used in any render-ui across the orbital.
+  const patternsInUse = collectPatternsInUse(orbital);
 
-    result.push({
-      from: anchor.initialState,
-      event,
-      to: anchor.initialState,
-      guardCase: null,
-      payload: {},
-      isRepositioning: false,
-      traitName: anchor.traitName,
-      triggerKind: 'dom',
-      coverageKey: `${anchor.traitName}:${anchor.initialState}+${event}->${anchor.initialState}[contract]`,
-      testKind: 'contract',
-    });
+  // Pick an anchor trait (first inline trait with a state machine).
+  // All contract steps are anchored under it for routing — Phase 4c
+  // events fire from the global bus, so the trait routing is just the
+  // kernel's "where am I right now" hint.
+  const anchor = pickAnchor(orbital);
+  if (anchor === null) return [];
+
+  for (const patternName of patternsInUse) {
+    const entry = registry[patternName];
+    if (entry === undefined) continue;
+    for (const emit of entry.emits) {
+      if (emit.optional === true) continue;
+      if (seenEvents.has(emit.event)) continue;
+      if (alreadyCovered?.has(emit.event) === true) continue;
+      seenEvents.add(emit.event);
+
+      result.push({
+        from: anchor.initialState,
+        event: emit.event,
+        to: anchor.initialState,
+        guardCase: null,
+        payload: {},
+        isRepositioning: false,
+        traitName: anchor.traitName,
+        triggerKind: 'dom',
+        coverageKey: `${anchor.traitName}:${anchor.initialState}+${emit.event}->${anchor.initialState}[contract:${patternName}]`,
+        testKind: 'contract',
+      });
+    }
   }
 
   return result;
+}
+
+// ── internal ─────────────────────────────────────────────────────────
+
+interface Anchor {
+  traitName: string;
+  initialState: string;
+}
+
+function pickAnchor(orbital: OrbitalSchema): Anchor | null {
+  for (const { trait } of eachInlineTrait(orbital)) {
+    if (trait.stateMachine === undefined) continue;
+    const initial = findInitialState(trait.stateMachine);
+    if (initial === null) continue;
+    return { traitName: trait.name, initialState: initial };
+  }
+  return null;
+}
+
+function collectPatternsInUse(orbital: OrbitalSchema): Set<string> {
+  const out = new Set<string>();
+  for (const { trait } of eachInlineTrait(orbital)) {
+    if (trait.stateMachine === undefined) continue;
+    for (const transition of trait.stateMachine.transitions) {
+      for (const effect of transition.effects ?? []) {
+        if (!Array.isArray(effect)) continue;
+        if (effect[0] !== 'render-ui') continue;
+        collectPatternTypes(effect[2], out);
+      }
+    }
+  }
+  return out;
+}
+
+function collectPatternTypes(node: unknown, out: Set<string>): void {
+  if (node === null || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const child of node) collectPatternTypes(child, out);
+    return;
+  }
+  const obj = node as { type?: unknown; [k: string]: unknown };
+  if (typeof obj.type === 'string') out.add(obj.type);
+  for (const value of Object.values(obj)) collectPatternTypes(value, out);
 }

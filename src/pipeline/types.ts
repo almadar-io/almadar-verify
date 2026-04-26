@@ -4,47 +4,32 @@
  * @packageDocumentation
  */
 
+import type { OrbitalSchema } from '@almadar/core';
 import type { Driver, DriverContext } from '../driver/types.js';
-import type { TraitWalkConfig } from '../engine/types.js';
 import type {
   CascadeRule,
   MutationRule,
   PortalExpectation,
   ReportShape,
 } from '../observer/types.js';
-import type { ExtendedWalkStep } from '../planner/types.js';
-
-/**
- * A planner extension. Pure function over the trait list. Returns
- * additional steps to append to the base `planWalk` output. The kernel
- * runs them in the same `tick` loop as the base steps; observers see
- * the combined Frame stream.
- *
- * Tool-specific plan data (orbital's `UnifiedTestPlan`, runtime-verify's
- * `BehaviorSchema`) is captured via lexical scope at the consumer site:
- *
- *   const interactionExtension: PlanExtension =
- *     (traits) => planInteractionTests(traits, orbitalPlan);
- *
- * The kernel never sees tool-shaped data — keeps verify free of
- * `unknown` and free of consumer type imports.
- *
- * Examples:
- *   planInteractionTests, planContractEvents, planDataMutationTests,
- *   planClickPathSamples (lifted from orbital's Phase 4b/4b+/4c/VG3).
- */
-export type PlanExtension = (traits: ReadonlyArray<TraitWalkConfig>) => ReadonlyArray<ExtendedWalkStep>;
+import type { ContractRegistry } from '../planner/plan-contract-events.js';
 
 /**
  * Input to `runVerification`. Generic over `Ctx` so the consumer's
  * choice of transport (Playwright, Puppeteer, Fake) is preserved
  * end-to-end without casts.
+ *
+ * v3.0.0 contract: takes the parsed `OrbitalSchema` directly. Verify
+ * derives traits + render sites + interaction tests + data mutation
+ * tests + contract events internally via the planners. Consumer tools
+ * are pure environment setup — they parse the `.orb`, start the
+ * server, build a Driver, hand off to `runVerification`.
  */
 export interface RunVerificationInput<Ctx extends DriverContext> {
   /** Identifier for the report (e.g. behavior or atom name). */
   itemName: string;
-  /** Traits to walk in order. */
-  traits: ReadonlyArray<TraitWalkConfig>;
+  /** Parsed orbital schema from `@almadar/core`'s `parseOrbitalSchema`. */
+  orbital: OrbitalSchema;
   /** Driver impl that exposes the four required methods. */
   driver: Driver<Ctx>;
   /**
@@ -53,36 +38,22 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
    * is opaque.
    */
   ctx: Omit<Ctx, 'trait'>;
-  /** Optional rules consumed by `assertCascade` / `assertMutation` / `assertPortalPerStep`. */
-  rules?: {
-    cascade?: ReadonlyArray<CascadeRule>;
-    mutation?: ReadonlyArray<MutationRule>;
-    /** VG1 — per-transition portal slot expectations. */
-    portal?: ReadonlyArray<PortalExpectation>;
-  };
-  /**
-   * Optional planner extensions. Each is a pure function called once
-   * per `runVerification` call (with the full trait list); their
-   * `ExtendedWalkStep[]` outputs are appended to the base walk and
-   * fired via the same `tick` loop. Observers see the combined Frame
-   * stream.
-   *
-   * Tool-specific plan data is captured via closure at the consumer
-   * site, so the kernel never sees tool-shaped types:
-   *
-   *   const ext: PlanExtension =
-   *     (traits) => planInteractionTests(traits, orbitalPlan);
-   *
-   * orbital wires its lifted Phase 4b/4b+/4c/VG3 logic here:
-   *   planExtensions: [
-   *     (t) => planInteractionTests(t, plan),
-   *     (t) => planContractEvents(t, plan, contractRegistry),
-   *     (t) => planDataMutationTests(t, plan),
-   *     (t) => planClickPathSamples(t, plan),
-   *   ]
-   */
-  planExtensions?: ReadonlyArray<PlanExtension>;
   options?: {
+    /** Run Phase 4b interaction tests (DOM-trigger render-ui patterns). Default: true. */
+    enableInteractionTests?: boolean;
+    /** Run Phase 4c contract event coverage. Requires `contractRegistry`. Default: true. */
+    enableContractEvents?: boolean;
+    /** Run Phase 4b+ data mutation tests (CRUD). Default: true. */
+    enableDataMutationTests?: boolean;
+    /** Run VG3 click-path samples. Default: true. */
+    enableClickPathSamples?: boolean;
+    /** Run VG1 portal-per-step (built from render-ui in transitions). Default: true. */
+    enablePortalPerStep?: boolean;
+    /**
+     * Pattern → emit registry from `event-contracts.json` files.
+     * Required when `enableContractEvents` is true.
+     */
+    contractRegistry?: ContractRegistry;
     /** Per-trait time budget in ms. Default: 60000. */
     maxWalkMs?: number;
     /** Safety bound on the total Frame stream length. Default: 5000. */

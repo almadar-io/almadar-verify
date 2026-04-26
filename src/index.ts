@@ -130,85 +130,34 @@ export {
   type MutatingEffect,
 } from './schema/walker.js';
 
-// VG1 — portal slot presence probe. After render-ui-to-portal
-// transitions, asserts the matching `#slot-<name>` element mounted
-// with at least one child.
+// Pure data exports from browser/portal-slots.ts. The Page-bound
+// `probePortalSlots*` functions are internal to the kernel's
+// `assertPortalPerStep` observer; consumers don't call them directly.
 export {
   PORTAL_SLOTS,
   isPortalSlot,
   portalRendersFromTransition,
-  probePortalSlots,
-  probePortalSlotsAfterTransition,
   findTransition,
   type PortalSlot,
-  type PortalSlotCheck,
   type ExpectedPortalRender,
-  type PortalProbeOptions,
 } from './browser/portal-slots.js';
 
-// VG6 — ref-trait invariant. Every trait reported via
-// `getTraitSnapshots()` must have a non-empty state + event list.
-export {
-  checkRefTraitInvariant,
-  assertRefTraitInvariant,
-  type RefTraitInvariantCheck,
-  type RefTraitInvariantResult,
-} from './browser/ref-trait-invariant.js';
-
-// Catalog-effect helpers — pure schema-shape functions PLUS the
-// Page-bound probe* helpers consumers haven't yet migrated to the
-// Frame-based observers. The pure helpers are the canonical surface;
-// the probe* helpers stay re-exported as a transitional convenience
-// for tooling that calls them outside the new pipeline (e.g.
-// orbital-verify-unified's interaction tests). They WILL be removed
-// once their callers migrate to observer/assert-mutation +
-// observer/assert-cascade + observer/probe-bindings.
+// Pure data exports from browser/catalog-probes.ts. Page-bound `probe*`
+// helpers were removed in v3.0.0 — every check now happens via
+// observers consuming `Frame[]` (see `observer/`).
 export {
   collectCatalogBindings,
   pickBySegments,
   valueToText,
   collectMutationEffects,
   collectEmitDeclarations,
-  probeBindingsForTransition,
-  probeMutationDelta,
-  probeCascadeCount,
-  probeCascadeFlowDelta,
-  probeEntityRowContent,
-  probeListRender,
   type TransitionLike,
   type TraitListenerLike,
   type CatalogBinding,
-  type BindingProbeResult,
   type MutationEffect,
-  type MutationCheckResult,
   type EmitDeclaration,
-  type CascadeCheckResult,
-  type CascadeFlowDeltaResult,
   type EntityFieldLike,
-  type FieldContentCheck,
-  type EntityRowContentResult,
-  type ListRenderResult,
 } from './browser/catalog-probes.js';
-
-// Transitional re-exports — orbital-verify-unified still calls these
-// outside the kernel walker. Will be removed once their callers
-// migrate to the Frame-based observers. The Page-bound impls live in
-// browser/* and continue to work; they're just not part of the
-// pipeline.
-export {
-  probeBindingsAfterTransition,
-  probeAllTraitBindings,
-  type BindingCheck,
-  type BindingAssertionResult,
-} from './browser/binding-assertions.js';
-export {
-  sampleClickPath,
-  sampleClickPathsPerSite,
-  type ClickPathSampleCheck,
-  type ClickPathTraitInput,
-  type ClickPathOptions,
-  type ClickPathRenderSite,
-} from './browser/click-path.js';
 
 // `TraitWalkConfig` is the per-trait input shape `runVerification`
 // consumes. The legacy `StateWalkEngine` / `EngineAdapter` /
@@ -272,25 +221,15 @@ export {
   decorateWithTriggerKind,
   type DecorateInput,
 } from './planner/plan-dom-decoration.js';
-export {
-  planClickPathSamples,
-  type PlanClickPathInput,
-  type RenderSiteSpec,
-} from './planner/plan-click-path-samples.js';
+export { planClickPathSamples } from './planner/plan-click-path-samples.js';
+export { extractTraitWalkConfigs } from './planner/extract-trait-walk-configs.js';
 export {
   planContractEvents,
-  type PlanContractEventsInput,
+  type ContractRegistry,
+  type ContractRegistryEntry,
 } from './planner/plan-contract-events.js';
-export {
-  planDataMutationTests,
-  type PlanDataMutationTestsInput,
-  type DataMutationTestSpec,
-} from './planner/plan-data-mutation-tests.js';
-export {
-  planInteractionTests,
-  type PlanInteractionTestsInput,
-  type InteractionTestSpec,
-} from './planner/plan-interaction-tests.js';
+export { planDataMutationTests } from './planner/plan-data-mutation-tests.js';
+export { planInteractionTests } from './planner/plan-interaction-tests.js';
 
 // Observer — pure consumers of the Frame stream
 export type {

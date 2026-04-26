@@ -1,112 +1,134 @@
 import { describe, it, expect } from 'vitest';
-import type { ReplayStep } from '@almadar/core';
-import { planInteractionTests, type InteractionTestSpec } from '../plan-interaction-tests.js';
-import type { TraitWalkConfig } from '../../engine/types.js';
+import type { OrbitalSchema } from '@almadar/core';
+import { planInteractionTests } from '../plan-interaction-tests.js';
 
-const trait: TraitWalkConfig = {
-  traitName: 'CartItemAddItem',
-  initialState: 'browsing',
-  transitions: [],
-};
-
-const baseTest: InteractionTestSpec = {
-  trait: 'CartItemAddItem',
-  event: 'ADD_ITEM',
-  fromState: 'browsing',
-  toState: 'form',
-  slot: 'modal',
-  targetPattern: 'modal',
-  patternCategory: 'component',
-  linkedEntity: 'CartItem',
-  needsEntityData: false,
-  payloadSchema: [],
-  replayPath: [],
-  guardBranch: 'unguarded',
+const cart: OrbitalSchema = {
+  name: 'cart',
+  designTokens: {},
+  customPatterns: {},
+  orbitals: [
+    {
+      name: 'CartOrbital',
+      entity: {
+        name: 'CartItem',
+        persistence: 'persistent',
+        fields: [
+          { name: 'id', type: 'string', required: true },
+          { name: 'name', type: 'string', required: true },
+          { name: 'description', type: 'string' },
+        ],
+      },
+      pages: [],
+      traits: [
+        {
+          name: 'CartItemAddItem',
+          scope: 'instance',
+          linkedEntity: 'CartItem',
+          stateMachine: {
+            states: [
+              { name: 'idle', isInitial: true },
+              { name: 'form' },
+            ],
+            events: [
+              { key: 'INIT', name: 'Init' },
+              { key: 'ADD_ITEM', name: 'Add' },
+              {
+                key: 'SAVE',
+                name: 'Save',
+                payloadSchema: [
+                  { name: 'name', type: 'string', required: true },
+                  { name: 'description', type: 'string' },
+                ],
+              },
+              { key: 'CANCEL', name: 'Cancel' },
+            ],
+            transitions: [
+              {
+                from: 'idle',
+                to: 'form',
+                event: 'ADD_ITEM',
+                effects: [['render-ui', 'modal', { type: 'modal', children: [] }]],
+              },
+              {
+                from: 'form',
+                to: 'idle',
+                event: 'SAVE',
+                effects: [['render-ui', 'modal', { type: 'form-section', fields: [{ name: 'name' }] }]],
+              },
+              {
+                from: 'form',
+                to: 'idle',
+                event: 'CANCEL',
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
 };
 
 describe('planInteractionTests', () => {
-  it('emits one dom step per test, tagged interaction, with expectedPattern', () => {
-    const steps = planInteractionTests({ traits: [trait], tests: [baseTest] });
-    expect(steps).toHaveLength(1);
-    expect(steps[0].triggerKind).toBe('dom');
-    expect(steps[0].testKind).toBe('interaction');
-    expect(steps[0].event).toBe('ADD_ITEM');
-    expect(steps[0].expectedPattern).toBe('modal');
-    expect(steps[0].coverageKey).toMatch(/\[interaction\]$/);
+  it('emits a dom step per transition with a render-ui target', () => {
+    const steps = planInteractionTests(cart);
+    // Two render-ui transitions: ADD_ITEM (modal), SAVE (form-section).
+    // CANCEL has no render-ui → no test.
+    const interactions = steps.filter((s) => s.testKind === 'interaction');
+    expect(interactions).toHaveLength(2);
   });
 
-  it('includes formData when target pattern is a form', () => {
-    const formTest: InteractionTestSpec = {
-      ...baseTest,
-      event: 'SAVE',
-      toState: 'idle',
-      targetPattern: 'form-section',
-      patternCategory: 'form',
-      payloadSchema: [
-        { name: 'name', type: 'string', required: true },
-        { name: 'description', type: 'string', required: true },
+  it('marks the form transition with formData built from the payload schema', () => {
+    const steps = planInteractionTests(cart);
+    const save = steps.find((s) => s.event === 'SAVE');
+    expect(save?.expectedPattern).toBe('form-section');
+    expect(save?.formData).toBeDefined();
+    expect(save?.formData?.name).toBeDefined();
+    expect(save?.formData?.description).toBeDefined();
+  });
+
+  it('non-form interactions get expectedPattern but no formData', () => {
+    const steps = planInteractionTests(cart);
+    const add = steps.find((s) => s.event === 'ADD_ITEM');
+    expect(add?.expectedPattern).toBe('modal');
+    expect(add?.formData).toBeUndefined();
+  });
+
+  it('replay path is expanded inline as triggerKind: replay steps before each interaction', () => {
+    const steps = planInteractionTests(cart);
+    // SAVE fires from `form`, which is reachable from `idle` via ADD_ITEM.
+    // So SAVE's interaction step should be preceded by a replay step.
+    const idx = steps.findIndex((s) => s.event === 'SAVE' && s.testKind === 'interaction');
+    expect(idx).toBeGreaterThan(0);
+    const prev = steps[idx - 1];
+    expect(prev.triggerKind).toBe('replay');
+    expect(prev.event).toBe('ADD_ITEM');
+  });
+
+  it('skips transitions with no render-ui (e.g. CANCEL)', () => {
+    const steps = planInteractionTests(cart);
+    expect(steps.find((s) => s.event === 'CANCEL')).toBeUndefined();
+  });
+
+  it('returns [] for an orbital with no render-ui transitions', () => {
+    const noUi: OrbitalSchema = {
+      ...cart,
+      orbitals: [
+        {
+          ...cart.orbitals[0],
+          traits: [
+            {
+              name: 'X',
+              scope: 'instance',
+              stateMachine: {
+                states: [{ name: 'a', isInitial: true }, { name: 'b' }],
+                events: [{ key: 'GO', name: 'Go' }],
+                transitions: [{ from: 'a', to: 'b', event: 'GO' }],
+              },
+            },
+          ],
+        },
       ],
     };
-    const steps = planInteractionTests({
-      traits: [trait],
-      tests: [formTest],
-      entityFields: { CartItem: [{ name: 'name', type: 'string' }, { name: 'description', type: 'string' }] },
-    });
-    expect(steps).toHaveLength(1);
-    expect(steps[0].formData).toBeDefined();
-    expect(steps[0].formData?.name).toBeDefined();
-    expect(steps[0].formData?.description).toBeDefined();
-  });
-
-  it('omits formData for non-form patterns', () => {
-    const steps = planInteractionTests({ traits: [trait], tests: [baseTest] });
-    expect(steps[0].formData).toBeUndefined();
-  });
-
-  it('expands replay path inline as triggerKind: replay steps', () => {
-    const replayPath: ReplayStep[] = [
-      { event: 'OPEN', fromState: 'browsing', toState: 'form', slot: 'modal', needsEntityData: false },
-    ];
-    const test: InteractionTestSpec = {
-      ...baseTest,
-      event: 'SAVE',
-      fromState: 'form',
-      replayPath,
-    };
-    const steps = planInteractionTests({ traits: [trait], tests: [test] });
-    expect(steps).toHaveLength(2);
-    expect(steps[0].triggerKind).toBe('replay');
-    expect(steps[0].event).toBe('OPEN');
-    expect(steps[1].triggerKind).toBe('dom');
-  });
-
-  it('emits guarded steps with guardCase set + guardPayload as payload', () => {
-    const guardedPass: InteractionTestSpec = {
-      ...baseTest,
-      event: 'SAVE',
-      guardBranch: 'pass',
-      guardPayload: { qty: 5 },
-    };
-    const guardedFail: InteractionTestSpec = {
-      ...baseTest,
-      event: 'SAVE',
-      guardBranch: 'fail',
-      guardPayload: { qty: -1 },
-    };
-    const steps = planInteractionTests({ traits: [trait], tests: [guardedPass, guardedFail] });
-    expect(steps).toHaveLength(2);
-    expect(steps[0].guardCase).toBe('pass');
-    expect(steps[0].payload).toEqual({ qty: 5 });
-    expect(steps[1].guardCase).toBe('fail');
-    expect(steps[1].payload).toEqual({ qty: -1 });
-  });
-
-  it('skips tests whose trait is not in the traits list', () => {
-    const orphan: InteractionTestSpec = { ...baseTest, trait: 'GhostTrait' };
-    expect(planInteractionTests({ traits: [trait], tests: [orphan] })).toEqual([]);
-  });
-
-  it('returns [] for the empty test list', () => {
-    expect(planInteractionTests({ traits: [trait], tests: [] })).toEqual([]);
+    expect(planInteractionTests(noUi)).toEqual([]);
   });
 });

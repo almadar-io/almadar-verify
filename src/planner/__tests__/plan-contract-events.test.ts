@@ -1,46 +1,87 @@
 import { describe, it, expect } from 'vitest';
-import { planContractEvents } from '../plan-contract-events.js';
-import type { TraitWalkConfig } from '../../engine/types.js';
+import type { OrbitalSchema } from '@almadar/core';
+import {
+  planContractEvents,
+  type ContractRegistry,
+} from '../plan-contract-events.js';
 
-const trait: TraitWalkConfig = {
-  traitName: 'CartItemBrowse',
-  initialState: 'browsing',
-  transitions: [],
+const cart: OrbitalSchema = {
+  name: 'cart',
+  designTokens: {},
+  customPatterns: {},
+  orbitals: [
+    {
+      name: 'CartOrbital',
+      entity: { name: 'CartItem', persistence: 'runtime', fields: [{ name: 'id', type: 'string', required: true }] },
+      pages: [],
+      traits: [
+        {
+          name: 'CartItemBrowse',
+          scope: 'collection',
+          stateMachine: {
+            states: [{ name: 'browsing', isInitial: true }],
+            events: [{ key: 'INIT', name: 'Init' }],
+            transitions: [
+              {
+                from: 'browsing',
+                to: 'browsing',
+                event: 'INIT',
+                effects: [
+                  ['render-ui', 'main', {
+                    type: 'data-grid',
+                    entity: 'CartItem',
+                    fields: [{ type: 'typography', name: 'name' }],
+                  }],
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
 };
 
 describe('planContractEvents', () => {
-  it('emits one dom step per event, all anchored to the first trait', () => {
-    const steps = planContractEvents({
-      traits: [trait],
-      events: ['SELECT_ITEM', 'UPDATE_ITEM', 'DELETE_ITEM'],
-    });
-
+  it('emits one dom step per non-optional contract emit for patterns actually used', () => {
+    const registry: ContractRegistry = {
+      'data-grid': { emits: [{ event: 'SELECT' }, { event: 'UPDATE' }, { event: 'DELETE' }] },
+      'unused-pattern': { emits: [{ event: 'NOPE' }] },
+    };
+    const steps = planContractEvents(cart, registry);
     expect(steps).toHaveLength(3);
+    expect(steps.map((s) => s.event).sort()).toEqual(['DELETE', 'SELECT', 'UPDATE']);
     for (const step of steps) {
-      expect(step.triggerKind).toBe('dom');
       expect(step.testKind).toBe('contract');
-      expect(step.traitName).toBe('CartItemBrowse');
-      expect(step.from).toBe('browsing');
-      expect(step.to).toBe('browsing');
-      expect(step.coverageKey).toMatch(/\[contract\]$/);
+      expect(step.triggerKind).toBe('dom');
+      expect(step.coverageKey).toMatch(/\[contract:data-grid\]/);
     }
-    expect(steps.map((s) => s.event).sort()).toEqual(['DELETE_ITEM', 'SELECT_ITEM', 'UPDATE_ITEM']);
   });
 
-  it('deduplicates repeated event names', () => {
-    const steps = planContractEvents({
-      traits: [trait],
-      events: ['SAVE', 'SAVE', 'SAVE'],
-    });
+  it('skips optional emits', () => {
+    const registry: ContractRegistry = {
+      'data-grid': { emits: [{ event: 'SELECT' }, { event: 'HOVER', optional: true }] },
+    };
+    const steps = planContractEvents(cart, registry);
     expect(steps).toHaveLength(1);
-    expect(steps[0].event).toBe('SAVE');
+    expect(steps[0].event).toBe('SELECT');
   });
 
-  it('returns [] when traits is empty', () => {
-    expect(planContractEvents({ traits: [], events: ['SAVE'] })).toEqual([]);
+  it('skips events already covered (passed via alreadyCovered set)', () => {
+    const registry: ContractRegistry = {
+      'data-grid': { emits: [{ event: 'SELECT' }, { event: 'UPDATE' }] },
+    };
+    const steps = planContractEvents(cart, registry, new Set(['SELECT']));
+    expect(steps).toHaveLength(1);
+    expect(steps[0].event).toBe('UPDATE');
   });
 
-  it('returns [] when events is empty', () => {
-    expect(planContractEvents({ traits: [trait], events: [] })).toEqual([]);
+  it('returns [] when no patterns in the registry are used by the orbital', () => {
+    const registry: ContractRegistry = { 'unused': { emits: [{ event: 'X' }] } };
+    expect(planContractEvents(cart, registry)).toEqual([]);
+  });
+
+  it('returns [] when registry is empty', () => {
+    expect(planContractEvents(cart, {})).toEqual([]);
   });
 });
