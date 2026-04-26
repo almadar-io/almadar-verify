@@ -230,3 +230,70 @@ export {
   buildReplayPaths,
   buildEdgeCoveringWalk,
 } from '@almadar/core';
+
+// ── Phase 0 lift — Frame-based temporal pipeline ────────────────────
+//
+// New three-layer architecture: pure planner → thin driver → pure
+// observers. The kernel never imports playwright; only `driver/impls/`
+// (added in Phase 1) does. See `docs/Almadar_Verify_Frames.md` /
+// `/home/osamah/.claude/plans/structured-hatching-music.md` for the
+// full design.
+
+// Frame — the temporal unit
+export type {
+  Frame,
+  FrameCause,
+  TriggerKind,
+  ConsoleDelta,
+  EventLogDelta,
+  EntityChange,
+  EntityRowChange,
+  DomSnapshot,
+} from './frame/types.js';
+export {
+  keyOf,
+  diffConsole,
+  diffEventLog,
+  diffEntities,
+  makeWalkFrame,
+  makeInitFrame,
+  type MakeFrameInput,
+  type MakeInitFrameInput,
+} from './frame/factory.js';
+
+// Planner — pure planners over @almadar/core types
+export type {
+  ExtendedWalkStep,
+  PlanWalkInput,
+  PlanEmitInput,
+  PlanReplayInput,
+} from './planner/types.js';
+export { planWalk } from './planner/plan-walk.js';
+export { planInitCredit } from './planner/plan-init-credit.js';
+export { planEmitSweep } from './planner/plan-emit-sweep.js';
+export { planReplayTo } from './planner/plan-replay-to.js';
+export {
+  decorateWithTriggerKind,
+  type DecorateInput,
+} from './planner/plan-dom-decoration.js';
+
+// Observer — pure consumers of the Frame stream
+export type {
+  Observer,
+  CoverageMetric,
+  BindingDelta,
+  BindingMatch,
+  CascadeRule,
+  MutationRule,
+  FieldContentCheck as ObserverFieldContentCheck,
+  EntityRowContentVerdict,
+  Verdict,
+  ReportShape,
+} from './observer/types.js';
+export { coverage } from './observer/coverage.js';
+export { assertMutation } from './observer/assert-mutation.js';
+export { assertCascade } from './observer/assert-cascade.js';
+export { assertPortalSlots } from './observer/assert-portal.js';
+export { probeBindings as probeBindingsFromFrame } from './observer/probe-bindings.js';
+export { assertRefTraitInvariantOverFrames } from './observer/assert-ref-trait-invariant.js';
+export { report as buildFrameReport, type ReportInput } from './observer/report.js';

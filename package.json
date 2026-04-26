@@ -1,6 +1,6 @@
 {
   "name": "@almadar-io/verify",
-  "version": "1.26.0",
+  "version": "1.27.0",
   "description": "Shared Playwright verification utilities for Almadar runtime and compiled projects",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,12 +22,13 @@
   "scripts": {
     "build": "tsup",
     "build:watch": "tsup --watch",
+    "test": "vitest",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm run build",
     "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "@almadar/core": ">=5.5.0",
+    "@almadar/core": ">=5.9.0",
     "@faker-js/faker": "^9.9.0"
   },
   "peerDependencies": {
@@ -40,7 +41,8 @@
     "eslint": "10.0.0",
     "playwright": "1.50.1",
     "tsup": "^8.0.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   },
   "repository": {
     "type": "git",
