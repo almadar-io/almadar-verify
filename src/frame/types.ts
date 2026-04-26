@@ -42,8 +42,20 @@ import type { PortalSlot } from '../browser/portal-slots.js';
 export type TriggerKind = 'bus' | 'dom' | 'auto-init' | 'replay';
 
 /**
+ * Tag that lets observers categorize the verdicts they emit. The base
+ * planners (`planWalk`, `planInitCredit`, `planEmitSweep`,
+ * `planReplayTo`) leave this undefined; v3.0.0 planner extensions
+ * (`planClickPathSamples`, `planInteractionTests`, etc.) stamp it with
+ * the matching kind. Mirrors `ExtendedWalkStep.testKind`.
+ */
+export type TestKind = 'interaction' | 'data-mutation' | 'contract' | 'click-path';
+
+/**
  * The cause that produced a frame. Carries the same information as a
- * `WalkStep` plus the trait it targeted and how it was fired.
+ * `WalkStep` plus the trait it targeted, how it was fired, and any
+ * observation hints (`expectedRowDelta`, `expectedPattern`) the
+ * planner attached to the originating step. Observers read these
+ * directly from the cause — no need to thread the plan separately.
  */
 export interface FrameCause {
   traitName: string;
@@ -53,6 +65,25 @@ export interface FrameCause {
   guardCase: 'pass' | 'fail' | null;
   triggerKind: TriggerKind;
   isRepositioning: boolean;
+  /**
+   * v3.0.0: test-kind tag carried from the originating
+   * `ExtendedWalkStep.testKind`. Observers like `assertClickPathSample`
+   * use this to filter `Frame[]` to just the frames their verdicts
+   * apply to.
+   */
+  testKind?: TestKind;
+  /**
+   * v3.0.0: per-entity row-count delta the originating step expects
+   * the observer to see in `frame.entityChanges` after settle.
+   * Carried from `ExtendedWalkStep.expectedRowDelta`.
+   */
+  expectedRowDelta?: { entityName: string; delta: number };
+  /**
+   * v3.0.0: pattern observer expects to find mounted in
+   * `frame.domSnapshot.portals` after this step settles.
+   * Carried from `ExtendedWalkStep.expectedPattern`.
+   */
+  expectedPattern?: string;
 }
 
 /**

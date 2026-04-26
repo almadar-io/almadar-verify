@@ -20,3 +20,22 @@ export {
   decorateWithTriggerKind,
   type DecorateInput,
 } from './plan-dom-decoration.js';
+export {
+  planClickPathSamples,
+  type PlanClickPathInput,
+  type RenderSiteSpec,
+} from './plan-click-path-samples.js';
+export {
+  planContractEvents,
+  type PlanContractEventsInput,
+} from './plan-contract-events.js';
+export {
+  planDataMutationTests,
+  type PlanDataMutationTestsInput,
+  type DataMutationTestSpec,
+} from './plan-data-mutation-tests.js';
+export {
+  planInteractionTests,
+  type PlanInteractionTestsInput,
+  type InteractionTestSpec,
+} from './plan-interaction-tests.js';

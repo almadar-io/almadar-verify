@@ -8,6 +8,7 @@ export type {
   Frame,
   FrameCause,
   TriggerKind,
+  TestKind,
   ConsoleDelta,
   EventLogDelta,
   EntityChange,

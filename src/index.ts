@@ -239,6 +239,7 @@ export type {
   Frame,
   FrameCause,
   TriggerKind,
+  TestKind,
   ConsoleDelta,
   EventLogDelta,
   EntityChange,
@@ -271,6 +272,25 @@ export {
   decorateWithTriggerKind,
   type DecorateInput,
 } from './planner/plan-dom-decoration.js';
+export {
+  planClickPathSamples,
+  type PlanClickPathInput,
+  type RenderSiteSpec,
+} from './planner/plan-click-path-samples.js';
+export {
+  planContractEvents,
+  type PlanContractEventsInput,
+} from './planner/plan-contract-events.js';
+export {
+  planDataMutationTests,
+  type PlanDataMutationTestsInput,
+  type DataMutationTestSpec,
+} from './planner/plan-data-mutation-tests.js';
+export {
+  planInteractionTests,
+  type PlanInteractionTestsInput,
+  type InteractionTestSpec,
+} from './planner/plan-interaction-tests.js';
 
 // Observer — pure consumers of the Frame stream
 export type {
@@ -280,6 +300,7 @@ export type {
   BindingMatch,
   CascadeRule,
   MutationRule,
+  PortalExpectation,
   FieldContentCheck as ObserverFieldContentCheck,
   EntityRowContentVerdict,
   Verdict,
@@ -291,6 +312,11 @@ export { assertCascade } from './observer/assert-cascade.js';
 export { assertPortalSlots } from './observer/assert-portal.js';
 export { probeBindings as probeBindingsFromFrame } from './observer/probe-bindings.js';
 export { assertRefTraitInvariantOverFrames } from './observer/assert-ref-trait-invariant.js';
+export { assertClickPathSample } from './observer/assert-click-path-sample.js';
+export { assertContractEventFired } from './observer/assert-contract-event-fired.js';
+export { assertDataMutation } from './observer/assert-data-mutation.js';
+export { assertPortalPerStep } from './observer/assert-portal-per-step.js';
+export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
 
 // Driver — the I/O boundary. `Driver<Ctx>` is generic over context;

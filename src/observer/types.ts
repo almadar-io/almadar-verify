@@ -71,6 +71,28 @@ export interface CascadeRule {
 }
 
 /**
+ * Per-transition portal expectation fed to `assertPortalPerStep`.
+ * For each accepted, non-repositioning, non-guard-fail frame matching
+ * `(traitName, from, event, to)`, the observer asserts the named slot
+ * is mounted with `childCount > 0` (or absent if `pattern === null`,
+ * meaning the transition explicitly clears that slot).
+ *
+ * Pre-v3.0.0 this lived as orbital's per-step `probePortalSlots` call
+ * inside the legacy `EngineAdapter.onTransition`. Consumers compute
+ * these from their schema (orbital's `portalRendersFromTransition`)
+ * and hand them to the kernel via `RunVerificationInput.rules.portal`.
+ */
+export interface PortalExpectation {
+  traitName: string;
+  from: string;
+  event: string;
+  to: string;
+  slot: string;
+  /** Pattern name expected in the slot, or `null` to assert the slot is empty/unmounted. */
+  pattern: string | null;
+}
+
+/**
  * Rule fed to `assertMutation` — replaces both VG11b/d (count delta)
  * AND VG11f (per-field content). When `requiredFields` is set, the
  * observer also asserts every required field on every added EntityRow
@@ -125,6 +147,14 @@ export interface ReportShape {
     portal?: Verdict;
     binding?: Verdict;
     refTrait?: Verdict;
+    /** VG3 — one verdict per click-path sample, combined. */
+    clickPath?: Verdict;
+    /** Phase 4c — one verdict per contract emit, combined. */
+    contract?: Verdict;
+    /** Phase 4b+ — one verdict per data-mutation test, combined. */
+    dataMutation?: Verdict;
+    /** Phase 4b — one verdict per interaction test, combined. */
+    interaction?: Verdict;
   };
   /** Aggregate pass/fail/warning counts in core's canonical shape. */
   summary: VerificationSummary;

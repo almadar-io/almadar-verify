@@ -435,6 +435,84 @@ export async function fillFormFields(
   return result.count;
 }
 
+// ── Targeted form fill (Frame pipeline) ─────────────────────────────
+
+import type { FieldValue } from '@almadar/core';
+
+/**
+ * Fill specific form fields with caller-supplied values, keyed by the
+ * input's `name` attribute. Used by the Frame pipeline's Driver when a
+ * planner extension produces a step with `step.formData` set —
+ * deterministic test inputs (e.g. an interaction test that wants to
+ * SAVE a CartItem with name="Apple", description="red fruit") instead
+ * of faker-generated noise.
+ *
+ * Fields not present in `formData` are ignored. Fields in `formData`
+ * with no matching input are silently skipped (the planner may know
+ * about logical payload fields the rendered form doesn't expose).
+ *
+ * Returns the count of inputs actually filled.
+ */
+export async function fillFormFieldsFromMap(
+  page: Page,
+  containerSelector: string,
+  formData: Record<string, FieldValue>,
+): Promise<number> {
+  const container = page.locator(containerSelector).first();
+  const containerVisible = await container.isVisible({ timeout: 500 }).catch(() => false);
+  if (!containerVisible) return 0;
+
+  let count = 0;
+
+  for (const [name, value] of Object.entries(formData)) {
+    if (value === null || value === undefined) continue;
+    const stringValue = fieldValueToString(value);
+    if (stringValue === null) continue;
+
+    // Try input/textarea first.
+    const input = container.locator(`input[name="${name}"]:visible, textarea[name="${name}"]:visible`).first();
+    const inputVisible = await input.isVisible({ timeout: 200 }).catch(() => false);
+    if (inputVisible) {
+      try {
+        await input.fill(stringValue);
+        count++;
+        continue;
+      } catch {
+        // Try select fallback below.
+      }
+    }
+
+    // Try select.
+    const select = container.locator(`select[name="${name}"]:visible`).first();
+    const selectVisible = await select.isVisible({ timeout: 200 }).catch(() => false);
+    if (selectVisible) {
+      try {
+        await select.selectOption(stringValue);
+        count++;
+      } catch {
+        // Skip — value not in options.
+      }
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Project a `FieldValue` into the string form Playwright's
+ * `input.fill()` and `select.selectOption()` accept. Booleans become
+ * `'true'`/`'false'`. Dates become ISO strings. Arrays/objects are not
+ * fillable as form inputs and return `null` (caller skips the field).
+ */
+function fieldValueToString(value: FieldValue): string | null {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (value instanceof Date) return value.toISOString();
+  // Arrays + nested objects: not directly fillable into a form input.
+  return null;
+}
+
 // ── Submit/Save Button Clicking ─────────────────────────────────────
 
 /**
