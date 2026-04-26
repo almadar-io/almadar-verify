@@ -505,13 +505,52 @@ export async function fillFormFieldsFromMap(
       try {
         await select.selectOption(stringValue);
         count++;
+        continue;
       } catch {
-        // Skip — value not in options.
+        // Try label fallback below.
       }
     }
+
+    // Final fallback: accessible-name resolution via `getByLabel`. Catches
+    // forms whose React-controlled inputs don't expose name / id / data-
+    // field-name (only the visible label maps fields to inputs). Tries
+    // exact-case, capitalized, and " *" suffix forms — real markup labels
+    // required fields with an asterisk that the verifier should ignore.
+    const labelCandidates = [
+      name,
+      capitalize(name),
+      `${capitalize(name)} *`,
+    ];
+    let filled = false;
+    for (const candidate of labelCandidates) {
+      try {
+        const labeled = container.getByLabel(candidate, { exact: false }).first();
+        const labeledVisible = await labeled.isVisible({ timeout: 200 }).catch(() => false);
+        if (!labeledVisible) continue;
+        // selectOption when the labeled element is a <select>; fill
+        // otherwise. Probe the element's tag name.
+        const tag = await labeled.evaluate((el) => el.tagName.toLowerCase()).catch(() => 'input');
+        if (tag === 'select') {
+          await labeled.selectOption(stringValue);
+        } else {
+          await labeled.fill(stringValue);
+        }
+        count++;
+        filled = true;
+        break;
+      } catch {
+        // Try next candidate.
+      }
+    }
+    if (filled) continue;
   }
 
   return count;
+}
+
+function capitalize(s: string): string {
+  if (s.length === 0) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /**

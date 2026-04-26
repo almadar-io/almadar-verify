@@ -95,6 +95,15 @@ export interface FrameCause {
    * actually creditable as covered.
    */
   coverageKey?: string;
+  /**
+   * v3.2.0: the success-emit event key declared by the originating
+   * step's persist / fetch / call-service / ref effect (in its
+   * `{ emit: { success: "X" } }` options block). `assertDataMutation`
+   * checks `frame.serverResponse.emittedEvents.includes(this)` as the
+   * canonical signal that the effect ran successfully — independent of
+   * whether the mock store reflects the row delta.
+   */
+  expectedSuccessEvent?: string;
 }
 
 /**

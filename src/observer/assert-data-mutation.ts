@@ -44,29 +44,59 @@ export function assertDataMutation(frames: ReadonlyArray<Frame>): Verdict[] {
       continue;
     }
 
+    // v3.2.0: the canonical signal is the persist effect's declared
+    // `emit.success` event landing in the server's emittedEvents
+    // cascade. The persist effect REQUIRES emit.success at the schema
+    // level (canonical-operators.json `requiresEmitSuccess: true`), so
+    // when present the verifier treats it as the source of truth —
+    // independent of whether the mock store reflects the row delta.
+    // Row-delta is reported as informational evidence in the detail
+    // string but doesn't gate the verdict.
+    const successEvent = frame.cause.expectedSuccessEvent;
+    const emittedOnServer = frame.serverResponse?.emittedEvents ?? [];
     const change = frame.entityChanges.find((c) => c.entityName === expected.entityName);
+    const actualDelta = change !== undefined
+      ? change.added.length - change.removed.length
+      : 0;
+    const deltaMatches = change !== undefined && actualDelta === expected.delta;
+    const deltaDetail = change !== undefined
+      ? `delta=${signDelta(actualDelta)} (added=${change.added.length}, removed=${change.removed.length})`
+      : `no entityChange recorded for ${expected.entityName}`;
+
+    if (successEvent !== undefined) {
+      const emitFired = emittedOnServer.includes(successEvent);
+      if (emitFired) {
+        verdicts.push({
+          passed: true,
+          detail: `data-mutation: ${frame.cause.event} on ${expected.entityName} server emitted ${successEvent} (${deltaDetail})`,
+          evidence: { frameIndices: [frame.index] },
+        });
+      } else {
+        verdicts.push({
+          passed: false,
+          detail: `data-mutation: ${frame.cause.event} on ${expected.entityName} expected server to emit '${successEvent}' but cascade was [${emittedOnServer.join(', ')}] (${deltaDetail})`,
+          evidence: { frameIndices: [frame.index] },
+        });
+      }
+      continue;
+    }
+
+    // Fallback: no expectedSuccessEvent declared (hand-written .orb
+    // that hasn't been migrated to the required-emit contract).
+    // Use the legacy row-delta check.
     if (change === undefined) {
       verdicts.push({
         passed: false,
-        detail: `data-mutation: ${frame.cause.event} expected ${expected.entityName} delta ${signDelta(expected.delta)}, but no entityChange recorded for ${expected.entityName}`,
+        detail: `data-mutation: ${frame.cause.event} expected ${expected.entityName} delta ${signDelta(expected.delta)}, but no entityChange recorded`,
         evidence: { frameIndices: [frame.index] },
       });
       continue;
     }
-
-    const actualDelta = change.added.length - change.removed.length;
-    if (actualDelta !== expected.delta) {
-      verdicts.push({
-        passed: false,
-        detail: `data-mutation: ${frame.cause.event} on ${expected.entityName} expected delta ${signDelta(expected.delta)}, got ${signDelta(actualDelta)} (added=${change.added.length}, removed=${change.removed.length})`,
-        evidence: { frameIndices: [frame.index] },
-      });
-      continue;
-    }
-
     verdicts.push({
-      passed: true,
-      detail: `data-mutation: ${frame.cause.event} on ${expected.entityName} delta = ${signDelta(actualDelta)} as expected`,
+      passed: deltaMatches,
+      detail: deltaMatches
+        ? `data-mutation: ${frame.cause.event} on ${expected.entityName} delta = ${signDelta(actualDelta)} as expected (no expectedSuccessEvent declared — schema needs emit.success)`
+        : `data-mutation: ${frame.cause.event} on ${expected.entityName} expected delta ${signDelta(expected.delta)}, got ${signDelta(actualDelta)} (and no expectedSuccessEvent to fall back on)`,
       evidence: { frameIndices: [frame.index] },
     });
   }

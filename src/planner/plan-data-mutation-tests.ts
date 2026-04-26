@@ -65,6 +65,7 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
         coverageKey: `${trait.name}:${transition.from}+${transition.event}->${transition.to}[data-mutation:${persist.kind}]`,
         testKind: 'data-mutation',
         expectedRowDelta: { entityName, delta: deltaFor(persist.kind) },
+        ...(persist.successEvent !== undefined && { expectedSuccessEvent: persist.successEvent }),
       });
     }
   }
@@ -77,6 +78,14 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
 interface PersistEffectInfo {
   kind: 'create' | 'update' | 'delete';
   entity: string;
+  /** v3.2.0: the success-emit event key declared on the persist's
+   *  `{ emit: { success: "X" } }` options block. Required by canonical-
+   *  operators.json's `requiresEmitSuccess: true` on persist; the
+   *  validator catches missing values upstream so the planner can
+   *  trust this is populated when present in the schema. Falls back
+   *  to undefined for hand-written .orb that hasn't been migrated yet —
+   *  observer skips the emit-success path in that case. */
+  successEvent?: string;
 }
 
 function findPersistKind(effects: ReadonlyArray<unknown>): PersistEffectInfo | null {
@@ -86,7 +95,21 @@ function findPersistKind(effects: ReadonlyArray<unknown>): PersistEffectInfo | n
     const kind = effect[1];
     if (kind !== 'create' && kind !== 'update' && kind !== 'delete') continue;
     if (typeof effect[2] !== 'string') continue;     // malformed schema — skip
-    return { kind, entity: effect[2] };
+
+    // Walk args [3..] for the trailing options object's `emit.success`.
+    let successEvent: string | undefined;
+    for (let i = 3; i < effect.length; i++) {
+      const arg = effect[i];
+      if (arg === null || typeof arg !== 'object' || Array.isArray(arg)) continue;
+      const emit = (arg as { emit?: { success?: unknown } }).emit;
+      if (emit === undefined) continue;
+      if (typeof emit.success === 'string' && emit.success.length > 0) {
+        successEvent = emit.success;
+        break;
+      }
+    }
+
+    return { kind, entity: effect[2], ...(successEvent !== undefined && { successEvent }) };
   }
   return null;
 }

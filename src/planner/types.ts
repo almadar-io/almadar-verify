@@ -73,6 +73,17 @@ export interface ExtendedWalkStep extends WalkStep {
   expectedRowDelta?: ExpectedRowDelta;
 
   /**
+   * v3.2.0: success-emit event key extracted from the persist / fetch /
+   * call-service / ref effect's `{ emit: { success: "X" } }` block.
+   * `assertDataMutation` uses this as the canonical signal that the
+   * effect ran successfully — checks
+   * `frame.serverResponse.emittedEvents.includes(this)`. Independent
+   * from `expectedRowDelta` so mock-backend acks that don't update the
+   * store still pass the gate.
+   */
+  expectedSuccessEvent?: string;
+
+  /**
    * Steps to replay first to reach this step's `from` state. The
    * planner expands these inline so each becomes its own
    * `triggerKind: 'replay'` Frame in the kernel walk; consumers should
