@@ -579,9 +579,17 @@ export async function clickSubmitAction(
   page: Page,
   containerSelector: string
 ): Promise<boolean> {
+  // Critical: containerSelector is a comma-separated CSS selector union
+  // (e.g. `[data-pattern="form-section"], [data-pattern="form"], form`).
+  // String-concatenating ` button` onto it parses as N-1 unscoped
+  // selectors plus 1 scoped — the form ELEMENT matches, not its
+  // descendants. Use Playwright `.locator()` chaining instead so the
+  // descendant selector applies to ALL container variants uniformly.
+  const container = page.locator(containerSelector).first();
+
   // Strategy 1: data-testid="action-SAVE" or data-testid="action-SUBMIT"
   for (const testId of ['action-SAVE', 'action-SUBMIT']) {
-    const btn = page.locator(`${containerSelector} [data-testid="${testId}"]`).first();
+    const btn = container.locator(`[data-testid="${testId}"]`).first();
     try {
       if (await btn.isVisible({ timeout: 1000 })) {
         await btn.click();
@@ -593,7 +601,7 @@ export async function clickSubmitAction(
   }
 
   // Strategy 2: button[type="submit"]
-  const submitBtn = page.locator(`${containerSelector} button[type="submit"]`).first();
+  const submitBtn = container.locator('button[type="submit"]').first();
   try {
     if (await submitBtn.isVisible({ timeout: 1000 })) {
       await submitBtn.click();
@@ -605,7 +613,7 @@ export async function clickSubmitAction(
 
   // Strategy 3: Button with text matching save/submit/add/create/log
   for (const label of ['Save', 'Submit', 'Log', 'Add', 'Create']) {
-    const textBtn = page.locator(`${containerSelector} button`).filter({ hasText: new RegExp(`^${label}`, 'i') }).first();
+    const textBtn = container.locator('button').filter({ hasText: new RegExp(`^${label}`, 'i') }).first();
     try {
       if (await textBtn.isVisible({ timeout: 500 })) {
         await textBtn.click();
