@@ -84,6 +84,17 @@ export interface FrameCause {
    * Carried from `ExtendedWalkStep.expectedPattern`.
    */
   expectedPattern?: string;
+  /**
+   * v3.0.3: full coverage key carried from the originating step. The
+   * coverage observer's numerator (deduped `keyOf(cause)`) needs to
+   * match the denominator (deduped `step.coverageKey`) — and extension
+   * planners encode test-kind suffixes into their keys
+   * (`[interaction]`, `[click-path:slot]`, `[data-mutation:create]`,
+   * etc.) that the legacy `keyOf` formula doesn't reproduce. Carrying
+   * the key on the cause closes that gap so extension steps are
+   * actually creditable as covered.
+   */
+  coverageKey?: string;
 }
 
 /**

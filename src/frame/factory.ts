@@ -37,6 +37,12 @@ import type {
  * applied to the `ExtendedWalkStep[]` plan.
  */
 export function keyOf(cause: FrameCause): string {
+  // Prefer the originating step's coverageKey when carried — it
+  // already encodes test-kind suffixes (`[interaction]`,
+  // `[click-path:slot]`, `[data-mutation:kind]`) so extension steps
+  // become creditable. Falls back to the legacy formula for causes
+  // that don't carry one (older drivers, hand-built test fixtures).
+  if (cause.coverageKey !== undefined) return cause.coverageKey;
   const base = `${cause.traitName}:${cause.from}+${cause.event}->${cause.to}`;
   if (cause.guardCase === null) return base;
   return `${base}[${cause.guardCase}]`;

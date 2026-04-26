@@ -45,6 +45,7 @@ export async function tick<Ctx extends DriverContext>(
     guardCase: step.guardCase,
     triggerKind: step.triggerKind,
     isRepositioning: step.isRepositioning,
+    coverageKey: step.coverageKey,
     ...(step.testKind !== undefined && { testKind: step.testKind }),
     ...(step.expectedRowDelta !== undefined && { expectedRowDelta: step.expectedRowDelta }),
     ...(step.expectedPattern !== undefined && { expectedPattern: step.expectedPattern }),
