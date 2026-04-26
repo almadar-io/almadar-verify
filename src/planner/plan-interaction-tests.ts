@@ -79,21 +79,34 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
         });
       }
 
-      // Build form data — three derivation strategies, in priority order:
-      //   1. Nested form-section inside the render-ui (e.g. modal opens
-      //      a form-section whose `submitEvent` cascades to SAVE).
-      //      Drives the form-fill regardless of where the form lives in
-      //      the render tree. Used by std-cart's ADD_ITEM → modal[
-      //      form-section{ name, description, status, submitEvent: SAVE }].
-      //   2. Top-level pattern is a form (`form`, `form-section`, or
-      //      object with `fields:` directly).
-      //   3. Otherwise: undefined → driver just clicks the affordance.
+      // Build form data — derivation strategies, in priority order:
+      //   1. Nested form-section with explicit `fields: [...]` —
+      //      drives the form-fill regardless of where the form lives
+      //      in the render tree.
+      //   2. Nested form-section with empty `fields: []` (form pattern
+      //      delegates to the linked entity's fields at render time —
+      //      std-modal's default form-section shape). Synthesize from
+      //      `entityFields[linkedEntity]`.
+      //   3. Top-level pattern is itself a form (`form`, `form-section`,
+      //      or object with `fields:` directly) — use the event's
+      //      payloadSchema.
+      //   4. Otherwise: undefined → driver just clicks the affordance.
       const linkedEntity = trait.linkedEntity;
       const nestedForm = findNestedForm(transition);
       let formData: Record<string, FieldValue> | undefined;
-      if (nestedForm !== null) {
+      if (nestedForm !== null && nestedForm.fields.length > 0) {
         const fieldNames = nestedForm.fields.map((n) => ({ name: n, type: 'string' as const }));
         formData = buildFormData(fieldNames, linkedEntity, entityFieldsByName);
+      } else if (nestedForm !== null && linkedEntity !== undefined) {
+        // Form-section delegated to the linked entity — synthesize
+        // form values from the entity's fields directly.
+        const entityFields = entityFieldsByName[linkedEntity] ?? [];
+        const synthSchema = entityFields
+          .filter((f) => f.name !== 'id' && f.name !== 'createdAt' && f.name !== 'updatedAt')
+          .map((f) => ({ name: f.name, type: f.type ?? 'string' }));
+        formData = synthSchema.length > 0
+          ? buildFormData(synthSchema, linkedEntity, entityFieldsByName)
+          : undefined;
       } else {
         const payloadSchema = extractPayloadSchema(trait, transition.event);
         formData = renderTarget.isForm && payloadSchema.length > 0
