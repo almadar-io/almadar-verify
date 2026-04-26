@@ -61,7 +61,9 @@ export {
   formatTestReport,
   formatTestReportPlain,
   writeTestReport,
+  framesToReportTransitions,
   type TestReportEntry,
+  type ReportTransition,
 } from './report/test-report.js';
 
 // Shared types
@@ -70,7 +72,6 @@ export type {
   RuntimeState,
   ConsoleEntry,
   VerifyReport,
-  TransitionLogEntry,
   VerifyCheck,
 } from './util/types.js';
 
@@ -154,71 +155,28 @@ export {
   type RefTraitInvariantResult,
 } from './browser/ref-trait-invariant.js';
 
-// VG11a — binding-to-DOM assertions. For every binding the schema
-// says the trait's current state renders, resolve the expected value
-// from config/payload/entity and assert it lands in the target slot.
-export {
-  probeBindingsAfterTransition,
-  probeAllTraitBindings,
-  type BindingCheck,
-  type BindingAssertionResult,
-} from './browser/binding-assertions.js';
-
-// VG4 / VG11a / VG11b / VG11c / VG11d — catalog-effect probes. Operate on
-// raw SExpr effect arrays; both runtime-verify's CatalogTransition and
-// orbital-verify-unified's UnifiedTransition satisfy `TransitionLike` so
-// each tool shares one binding / cascade / mutation implementation.
-// `probeCascadeFlowDelta` is the VG11d gate — end-to-end row-count delta
-// through a user-click → cross-trait listens cascade → persist/fetch.
+// Catalog-effect helpers — pure schema-shape functions still useful to
+// the planner / observer layer. The Page-bound probe* / assert*
+// helpers that used to live here were lifted to `observer/` in
+// v2.0.0. Only the type-only and pure-data exports remain.
 export {
   collectCatalogBindings,
   pickBySegments,
   valueToText,
-  probeBindingsForTransition,
   collectMutationEffects,
-  probeMutationDelta,
   collectEmitDeclarations,
-  probeCascadeCount,
-  probeCascadeFlowDelta,
-  probeEntityRowContent,
-  probeListRender,
-  type ListRenderResult,
   type TransitionLike,
   type TraitListenerLike,
   type CatalogBinding,
-  type BindingProbeResult,
   type MutationEffect,
-  type MutationCheckResult,
   type EmitDeclaration,
-  type CascadeCheckResult,
-  type CascadeFlowDeltaResult,
   type EntityFieldLike,
-  type FieldContentCheck,
-  type EntityRowContentResult,
 } from './browser/catalog-probes.js';
 
-// VG3 — click-path sample. After the programmatic engine walk, pick
-// one user-dispatchable transition per trait and fire it via an actual
-// DOM click so the button → bus → reducer plumbing is proven at least
-// once per trait. Pass1's sendEvent coverage stays untouched; this
-// augments with real click-through.
-export {
-  sampleClickPath,
-  sampleClickPathsPerSite,
-  type ClickPathSampleCheck,
-  type ClickPathTraitInput,
-  type ClickPathOptions,
-  type ClickPathRenderSite,
-} from './browser/click-path.js';
-
-// State walk engine (shared two-pass verification)
-export { StateWalkEngine } from './engine/StateWalkEngine.js';
-export type {
-  EngineAdapter,
-  TraitWalkConfig,
-  EngineConfig,
-  WalkResult,
-} from './engine/types.js';
+// `TraitWalkConfig` is the per-trait input shape `runVerification`
+// consumes. The legacy `StateWalkEngine` / `EngineAdapter` /
+// `EngineConfig` / `WalkResult` types were removed in v2.0.0.
+export type { TraitWalkConfig } from './engine/types.js';
 
 // Re-export state machine algorithms from @almadar/core
 export {
@@ -297,3 +255,40 @@ export { assertPortalSlots } from './observer/assert-portal.js';
 export { probeBindings as probeBindingsFromFrame } from './observer/probe-bindings.js';
 export { assertRefTraitInvariantOverFrames } from './observer/assert-ref-trait-invariant.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
+
+// Driver — the I/O boundary. `Driver<Ctx>` is generic over context;
+// impls live under `driver/impls/<transport>.ts` and are the only files
+// that import transport libraries.
+export type {
+  Driver,
+  DriverContext,
+  SendResult,
+  SnapshotResult,
+} from './driver/types.js';
+export { tick } from './driver/tick.js';
+export {
+  createPlaywrightDriver,
+  type PlaywrightDriverContext,
+  type PlaywrightBridge,
+  type CreatePlaywrightDriverOptions,
+} from './driver/impls/playwright.js';
+export {
+  createFakeDriver,
+  FakeRuntime,
+  type FakeDriverContext,
+} from './driver/impls/fake.js';
+export {
+  createDefaultSnapshot,
+  type DefaultSnapshotOptions,
+} from './driver/helpers/default-snapshot.js';
+export {
+  createDefaultDomTrigger,
+  type DefaultDomTriggerOptions,
+} from './driver/helpers/default-dom-trigger.js';
+
+// Pipeline — composes plan → fold(tick) → observers → report.
+export {
+  runVerification,
+  type RunVerificationInput,
+  type RunVerificationOutput,
+} from './pipeline/index.js';

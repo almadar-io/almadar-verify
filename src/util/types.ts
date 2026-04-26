@@ -30,23 +30,6 @@ export interface ConsoleEntry {
   timestamp: number;
 }
 
-/** A single transition captured during browser verification */
-export interface TransitionLogEntry {
-  timestamp: string;
-  trait: string;
-  from: string;
-  event: string;
-  payload: Record<string, unknown>;
-  serverResponse: Record<string, unknown> | null;
-  to: string;
-  serverDataCounts: Record<string, number>;
-  effectResults: unknown[];
-  domEntityCount: number;
-  screenshot?: string;
-  /** Captured [almadar:*] log lines (client + server) during this transition */
-  logs?: string[];
-}
-
 /** A single verification check result (used by orbital-verify) */
 export interface VerifyCheck {
   label: string;

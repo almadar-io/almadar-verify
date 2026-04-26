@@ -9,15 +9,41 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { TransitionLogEntry, VerifyCheck } from '../util/types.js';
+import type { VerifyCheck } from '../util/types.js';
+import type { Frame } from '../frame/types.js';
+
+/**
+ * Per-frame summary in the test report. Built from the temporal stream
+ * `runVerification` produces; replaces the legacy `TransitionLogEntry`.
+ */
+export interface ReportTransition {
+  event: string;
+  from: string;
+  to: string;
+  payload: Record<string, unknown>;
+  triggerKind: string;
+  accepted: boolean;
+}
 
 /** A single behavior's test report entry */
 export interface TestReportEntry {
   name: string;
   checks: VerifyCheck[];
   consoleErrors: string[];
-  transitionLog: TransitionLogEntry[];
+  transitionLog: ReportTransition[];
   durationMs: number;
+}
+
+/** Project a Frame stream into the report's transition shape. */
+export function framesToReportTransitions(frames: ReadonlyArray<Frame>): ReportTransition[] {
+  return frames.map((f) => ({
+    event: f.cause.event,
+    from: f.cause.from,
+    to: f.stateAfter ?? f.cause.to,
+    payload: f.payload,
+    triggerKind: f.cause.triggerKind,
+    accepted: f.accepted,
+  }));
 }
 
 /**

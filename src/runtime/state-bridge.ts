@@ -135,14 +135,16 @@ export async function readTraitSnapshots(
 }
 
 /**
- * Read the event log from the verification API.
+ * Read the event log from the verification API. Returns the canonical
+ * `EventLogEntry[]` shape from `@almadar/core`.
  */
 export async function readEventLog(
   page: Page
-): Promise<Array<{ event: string; listenerCount?: number }>> {
+): Promise<import('@almadar/core').EventLogEntry[]> {
   return page.evaluate(() => {
+    type Entry = import('@almadar/core').EventLogEntry;
     const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-      | { eventLog?: Array<{ event: string; listenerCount?: number }> }
+      | { eventLog?: Entry[] }
       | undefined;
     return api?.eventLog ?? [];
   });

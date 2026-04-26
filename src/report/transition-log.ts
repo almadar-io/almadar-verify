@@ -1,108 +1,114 @@
 /**
  * Transition log writers (JSONL + ASCII TXT).
  *
- * Shared by orbital-verify and runtime-verify for writing
- * transition logs captured during browser verification.
+ * Consume `Frame[]` (the temporal stream produced by `runVerification`)
+ * directly. Older callers that fed `TransitionLogEntry[]` were removed
+ * in v2.0.0 along with that type — migrate to passing `Frame[]`.
  *
  * @packageDocumentation
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { TransitionLogEntry } from '../util/types.js';
+import type { Frame } from '../frame/types.js';
 
-/**
- * Write transition log entries as JSONL (one JSON object per line).
- */
-export function writeTransitionLogJsonl(
-  entries: TransitionLogEntry[],
-  outputPath: string,
-): void {
+/** Write the frame stream as JSONL (one JSON object per line). */
+export function writeTransitionLogJsonl(frames: ReadonlyArray<Frame>, outputPath: string): void {
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(
     outputPath,
-    entries.map((e) => JSON.stringify(e)).join('\n') + '\n',
+    frames.map((f) => JSON.stringify(frameToLogRecord(f))).join('\n') + '\n',
     'utf-8',
   );
 }
 
-/**
- * Build an ASCII-formatted transition log string.
- */
-export function buildTransitionLogTxt(
-  schemaName: string,
-  entries: TransitionLogEntry[],
-): string {
+/** Build an ASCII-formatted transition log string from frames. */
+export function buildTransitionLogTxt(itemName: string, frames: ReadonlyArray<Frame>): string {
   const lines: string[] = [];
-  lines.push(
-    '\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557',
-  );
-  lines.push(
-    `\u2551  Transition Log: ${schemaName.padEnd(43)}\u2551`,
-  );
-  lines.push(
-    '\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D',
-  );
+  lines.push('╔' + '═'.repeat(64) + '╗');
+  lines.push(`║  Transition Log: ${itemName.padEnd(43)}║`);
+  lines.push('╚' + '═'.repeat(64) + '╝');
   lines.push('');
 
-  for (const entry of entries) {
-    const dashLen = Math.max(0, 59 - entry.event.length);
-    lines.push(
-      `\u2500\u2500\u2500 ${entry.event} ${'\u2500'.repeat(dashLen)}`,
-    );
-    lines.push(`  State: ${entry.from} \u2192 ${entry.to}`);
-    lines.push(`  Payload: ${JSON.stringify(entry.payload)}`);
+  for (const frame of frames) {
+    const event = frame.cause.event;
+    const dashLen = Math.max(0, 59 - event.length);
+    lines.push('─── ' + event + ' ' + '─'.repeat(dashLen));
+    lines.push(`  Trigger: ${frame.cause.triggerKind}${frame.cause.isRepositioning ? ' (repositioning)' : ''}`);
+    lines.push(`  State: ${frame.stateBefore ?? '∅'} → ${frame.stateAfter ?? '∅'}`);
+    lines.push(`  Payload: ${JSON.stringify(frame.payload)}`);
 
-    const resp = entry.serverResponse;
-    if (resp) {
-      const status = resp.success ? '200 OK' : 'ERROR: ' + (resp.error ?? 'unknown');
+    if (frame.serverResponse !== null) {
+      const status = frame.serverResponse.success ? '200 OK' : 'ERROR: ' + (frame.serverResponse.error ?? 'unknown');
       lines.push(`  Server: ${status}`);
-      for (const [entityName, count] of Object.entries(entry.serverDataCounts)) {
-        lines.push(`    data.${entityName}: ${count} items`);
-      }
-      if (Array.isArray(entry.effectResults)) {
-        for (const eff of entry.effectResults) {
-          const e = eff as Record<string, unknown>;
-          const effType = e.effect ?? 'unknown';
-          const success = e.success ? 'success' : 'failed';
-          const dataLen = Array.isArray(e.data) ? ` (${(e.data as unknown[]).length} items)` : '';
-          lines.push(`    effectResults: [${effType} ${e.entityType ?? ''}: ${success}${dataLen}]`);
-        }
-      }
-    } else {
-      lines.push('  Server: no response captured');
-    }
-
-    const domStr = entry.domEntityCount === -1
-      ? 'no entity container'
-      : `${entry.domEntityCount} entity rows`;
-    lines.push(`  DOM: ${domStr} in #slot-main`);
-
-    if (entry.screenshot) {
-      lines.push(`  Screenshot: ${entry.screenshot}`);
-    }
-
-    // Append captured almadar logs for this transition
-    if (entry.logs && entry.logs.length > 0) {
-      lines.push('  Logs:');
-      for (const logLine of entry.logs) {
-        lines.push(`    ${logLine}`);
+      for (const [name, count] of Object.entries(frame.serverResponse.dataEntities)) {
+        lines.push(`    data.${name}: ${count} items`);
       }
     }
+
+    for (const eff of frame.effectResults) {
+      lines.push(`    effectResults: [${eff.type}: ${eff.status}${eff.error !== undefined ? ' ' + eff.error : ''}]`);
+    }
+
+    for (const change of frame.entityChanges) {
+      const delta = change.added.length - change.removed.length;
+      if (delta !== 0 || change.changed.length > 0) {
+        lines.push(`  Entity ${change.entityName}: +${change.added.length}/-${change.removed.length}/~${change.changed.length}`);
+      }
+    }
+
+    if (frame.consoleDelta.newErrors > 0 || frame.consoleDelta.newWarnings > 0) {
+      lines.push(`  Console: ${frame.consoleDelta.newErrors} error(s), ${frame.consoleDelta.newWarnings} warning(s)`);
+    }
+
+    if (frame.screenshotPath !== null) {
+      lines.push(`  Screenshot: ${frame.screenshotPath}`);
+    }
+
+    if (!frame.accepted) {
+      lines.push(`  REJECTED`);
+    }
+
     lines.push('');
   }
 
   return lines.join('\n');
 }
 
-/**
- * Write an ASCII-formatted transition log to disk.
- */
+/** Write the ASCII transition log to disk. */
 export function writeTransitionLogTxt(
-  schemaName: string,
-  entries: TransitionLogEntry[],
+  itemName: string,
+  frames: ReadonlyArray<Frame>,
   outputPath: string,
 ): void {
   mkdirSync(dirname(outputPath), { recursive: true });
-  writeFileSync(outputPath, buildTransitionLogTxt(schemaName, entries), 'utf-8');
+  writeFileSync(outputPath, buildTransitionLogTxt(itemName, frames), 'utf-8');
+}
+
+// ── internal ─────────────────────────────────────────────────────────
+
+function frameToLogRecord(frame: Frame): Record<string, unknown> {
+  // Compact projection of the Frame for JSONL — drop bulky snapshots.
+  return {
+    index: frame.index,
+    timestamp: frame.timestamp,
+    cause: frame.cause,
+    stateBefore: frame.stateBefore,
+    stateAfter: frame.stateAfter,
+    payload: frame.payload,
+    accepted: frame.accepted,
+    effectResults: frame.effectResults,
+    serverResponse: frame.serverResponse,
+    entityDeltas: frame.entityChanges.map((c) => ({
+      entityName: c.entityName,
+      added: c.added.length,
+      removed: c.removed.length,
+      changed: c.changed.length,
+    })),
+    consoleDelta: { errors: frame.consoleDelta.newErrors, warnings: frame.consoleDelta.newWarnings },
+    eventLogDelta: frame.eventLogDelta.added.length,
+    screenshotPath: frame.screenshotPath,
+    errors: frame.errors,
+    warnings: frame.warnings,
+  };
 }
