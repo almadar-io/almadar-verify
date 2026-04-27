@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@almadar/core':
-        specifier: '>=6.0.0'
-        version: 6.0.0
+        specifier: '>=7.0.0'
+        version: 7.0.0
       '@almadar/patterns':
         specifier: '>=2.18.2'
         version: 2.18.2
@@ -45,8 +45,8 @@ importers:
 
 packages:
 
-  '@almadar/core@6.0.0':
-    resolution: {integrity: sha512-EySBts2DZEo+KG6jivsweQk2w9rUIdO+AiFcaUgcbQ4vNBy49H6CrWyFhxU1VJA0BECoFzlgOuWBLqFuYKY72Q==}
+  '@almadar/core@7.0.0':
+    resolution: {integrity: sha512-KctcZNgyP6xVGVq3G024fmb1qgQ8zx0bwB1NGVltIHTwkl7fjeBAKAVGhsEgYTyhdWCETnHf1VTg967Wa5kBzA==}
 
   '@almadar/eslint-plugin@2.8.0':
     resolution: {integrity: sha512-8abtGsVP+YBaUEchSfGfQV3ZHEPtWt+4Swtu3P0AFofr+OMSfHLnor4aIwULzag+nHD9FQ7cQkVCTfBVgTHgiw==}
@@ -1290,7 +1290,7 @@ packages:
 
 snapshots:
 
-  '@almadar/core@6.0.0':
+  '@almadar/core@7.0.0':
     dependencies:
       '@almadar/patterns': 2.18.2
       zod: 3.25.76
@@ -1302,7 +1302,7 @@ snapshots:
 
   '@almadar/patterns@2.18.2':
     dependencies:
-      '@almadar/core': 6.0.0
+      '@almadar/core': 7.0.0
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true
