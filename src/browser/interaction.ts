@@ -302,7 +302,45 @@ export function buildMinimalPayload(
         }
         break;
       default:
-        payload[name] = faker.lorem.words(2);
+        // Entity-typed payload field. When `type` isn't a recognised
+        // primitive / array / object marker but `entityFields` carries
+        // a populated schema, treat the type as an entity-name reference
+        // and expand it the same way as `'object' | 'any'` — i.e. build
+        // a row from the entity's field definitions, including a
+        // synthesized `id` that the persist op's id-resolution chain
+        // (`data?.id ?? entity?.id ?? payload.entityId ?? payload.id`)
+        // will pick up. Without this, std-list's
+        // `listens { DO_UPDATE { data : ListItem } }` produced
+        // `payload.data = 'lorem ipsum'` (a string) and the persistor's
+        // update branch silently no-op'd because `data.id` was undefined.
+        if (entityFields && entityFields.length > 0) {
+          const row: EventPayload = { id: faker.string.uuid() };
+          for (const ef of entityFields) {
+            if (ef.values && ef.values.length > 0) {
+              row[ef.name] = ef.values[0];
+              continue;
+            }
+            switch (ef.type) {
+              case 'number':
+              case 'integer':
+              case 'float':
+                row[ef.name] = faker.number.float({ min: 1, max: 999, fractionDigits: 2 });
+                break;
+              case 'boolean':
+                row[ef.name] = faker.datatype.boolean();
+                break;
+              case 'date':
+                row[ef.name] = faker.date.recent().toISOString();
+                break;
+              default:
+                row[ef.name] = faker.lorem.words(2);
+                break;
+            }
+          }
+          payload[name] = row;
+        } else {
+          payload[name] = faker.lorem.words(2);
+        }
         break;
     }
   }
