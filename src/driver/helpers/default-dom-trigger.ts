@@ -28,6 +28,12 @@
 import type { Page } from 'playwright';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import { fillFormFieldsFromMap } from '../../browser/interaction.js';
+import { createLogger } from '../../logger.js';
+
+// Shared with the rest of the verify:dom namespace (interaction.ts,
+// default-snapshot.ts) so operators see the full DOM-side timeline
+// when they enable `ALMADAR_DEBUG=almadar:verify:dom`.
+const domLog = createLogger('almadar:verify:dom');
 
 export interface DefaultDomTriggerOptions {
   /** Click timeout in ms. Default: 2000. */
@@ -97,6 +103,24 @@ export function createDefaultDomTrigger(
       const followUpEvent = step.submitEvent ?? step.confirmEvent;
       if (followUpEvent !== undefined) {
         await page.waitForTimeout(formMountTimeoutMs);
+
+        // Capture the snapshot's transition count BEFORE the submit
+        // click so the post-click predicate can detect the cascade
+        // landing rather than waiting a fixed wall-clock duration.
+        const baselineTransitionCount = await page.evaluate(() => {
+          const w = window as unknown as {
+            __orbitalVerification?: {
+              getSnapshot?: () => { transitions?: ReadonlyArray<unknown> };
+            };
+          };
+          return w.__orbitalVerification?.getSnapshot?.()?.transitions?.length ?? 0;
+        });
+        domLog.debug('dom:cascade:wait-start', {
+          step: step.coverageKey,
+          baselineTransitionCount,
+          expectedSuccessEvent: step.expectedSuccessEvent,
+        });
+
         const followUpLocator = page.locator(`[data-testid="action-${followUpEvent}"]`).first();
         try {
           const visible = await followUpLocator.isVisible({ timeout: 500 });
@@ -108,20 +132,70 @@ export function createDefaultDomTrigger(
           // diagnostic detail. Don't bail; let the rest of the tick
           // settle so the snapshot captures the partial state.
         }
-        // Wait long enough for the persist cascade to land before
-        // the kernel takes its post-tick snapshot. The chain on a
-        // CRUD step is multi-hop:
+
+        // Wait for the persist cascade to actually land instead of
+        // guessing wall-clock time. The chain on a CRUD step is
+        // multi-hop:
         //   submit click → modal SAVE emit → persistor DO_X →
         //   server persist → server emits ITEM_X → bus delivers to
         //   browse trait → browse INIT → server fetch → state update.
-        // The default 800ms settle covers single-event cascades but
-        // multi-hop chains routinely run 1.2-1.5s. Without this
-        // explicit wait, `frame.entityChanges` and DOM count read
-        // pre-cascade state and the diff/dom axes report ✗ even
-        // when the persist actually succeeded. 1500ms is an upper
-        // bound observed for std-list / std-cart / std-agent-builder
-        // on a warm server.
-        await page.waitForTimeout(1500);
+        //
+        // The earlier 1500ms blanket wait raced this chain on slower
+        // runs (1521ms observed for std-list crud-edit) and snapshot
+        // read mid-cascade. Polling the snapshot's transitions array
+        // for the persist's success event is a real signal: the
+        // predicate exits the moment the event lands, with a generous
+        // timeout cap. Falls back to the small grace-period wait if
+        // expectedSuccessEvent is absent (e.g. legacy schemas missing
+        // emit.success) so we don't deadlock waiting on a phantom.
+        const startWaitAt = Date.now();
+        const expectedEvent = step.expectedSuccessEvent ?? null;
+        if (expectedEvent !== null) {
+          try {
+            await page.waitForFunction(
+              (args: { baseline: number; expectedEvent: string }) => {
+                const w = window as unknown as {
+                  __orbitalVerification?: {
+                    getSnapshot?: () => {
+                      transitions?: ReadonlyArray<{ event?: string }>;
+                    };
+                  };
+                };
+                const txs = w.__orbitalVerification?.getSnapshot?.()?.transitions ?? [];
+                const slice = txs.slice(args.baseline);
+                return slice.some((t) => t.event === args.expectedEvent);
+              },
+              { baseline: baselineTransitionCount, expectedEvent },
+              { timeout: 8000, polling: 50 },
+            );
+            domLog.debug('dom:cascade:wait-resolved', {
+              step: step.coverageKey,
+              elapsedMs: Date.now() - startWaitAt,
+              expectedSuccessEvent: expectedEvent,
+            });
+          } catch (err) {
+            domLog.warn('dom:cascade:wait-timeout', {
+              step: step.coverageKey,
+              elapsedMs: Date.now() - startWaitAt,
+              baselineTransitionCount,
+              expectedSuccessEvent: expectedEvent,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        } else {
+          await page.waitForTimeout(1500);
+          domLog.debug('dom:cascade:wait-fallback', {
+            step: step.coverageKey,
+            elapsedMs: Date.now() - startWaitAt,
+            reason: 'no-expected-success-event',
+          });
+        }
+        // Small grace period after the cascade event lands so the
+        // listening trait's INIT/fetch/state-update can complete
+        // and React can render the new data before the snapshot
+        // reads it. 250ms is an empirical floor for the post-event
+        // settling, NOT a wall-clock guess for the whole cascade.
+        await page.waitForTimeout(250);
       }
       return true;
     }
