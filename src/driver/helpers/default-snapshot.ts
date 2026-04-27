@@ -30,7 +30,18 @@ import type { ConsoleCollector } from '../../browser/console.js';
 import { readVerificationSnapshot, readEventLog } from '../../runtime/state-bridge.js';
 import { takeScreenshot, safeFileName } from '../../browser/screenshot.js';
 import { PORTAL_SLOTS, type PortalSlot } from '../../browser/portal-slots.js';
+import { createLogger } from '../../logger.js';
 import { join } from 'node:path';
+
+// Permanent observability for the verifier's snapshot capture moment.
+// Surfaces stale-state vs cascade-not-fired without re-instrumenting:
+// each snapshot call logs which trait owns the frame, the per-entity
+// row counts mergeEntityData saw, and the source of the
+// trait-tagged serverResponse. Operators correlate these timestamps
+// with `[almadar:server:data] list { count: N }` lines in server.log
+// to determine whether a stale frame is a cascade-race or a
+// snapshot-read-before-cascade.
+const domLog = createLogger('almadar:verify:dom');
 
 export interface DefaultSnapshotOptions {
   /** ConsoleCollector instance bound to the Page; used to capture JS-console deltas. */
@@ -77,6 +88,28 @@ export function createDefaultSnapshot(
     // `data` maps. Each TraitStateSnapshot.data is keyed by entity name.
     const entityData = mergeEntityData(runtimeSnapshot);
 
+    // Per-entity row counts the snapshot saw. Operators compare these
+    // against `[almadar:server:data] list { count: N }` lines in
+    // `<outputDir>/server.log` (timestamps line up via process clock)
+    // to detect snapshot-staleness: server-side count grew but
+    // verifier-side count didn't, which means the cascading
+    // ListItem*.INIT re-fetch hadn't refreshed the React state at the
+    // moment the snapshot was captured.
+    const entityCountsForLog: Record<string, number> = {};
+    for (const [name, rows] of Object.entries(entityData)) {
+      entityCountsForLog[name] = rows.length;
+    }
+    const transitionCount = runtimeSnapshot.transitions.length;
+    const traitCount = runtimeSnapshot.traits.length;
+    domLog.debug('dom:snapshot:entity-data', {
+      traitName,
+      stepEvent: step?.event,
+      stepTestKind: step?.testKind,
+      entityCounts: entityCountsForLog as unknown as import('@almadar/core').LogMeta,
+      traitCount,
+      transitionCount,
+    });
+
     // Effect results from the most recent transition for the named trait.
     const effectResults = lastEffectResultsFor(runtimeSnapshot, traitName);
     // Server response: try the trait-named transition first, then fall
@@ -90,6 +123,15 @@ export function createDefaultSnapshot(
       traitName,
       step?.event,
     );
+    domLog.debug('dom:snapshot:server-response', {
+      traitName,
+      stepEvent: step?.event,
+      hasServerResponse: serverResponse !== null,
+      serverResponseTrait: serverResponse?.orbitalName,
+      success: serverResponse?.success,
+      emittedEvents: serverResponse?.emittedEvents.join(','),
+      error: serverResponse?.error,
+    });
 
     // Probe portal slots from the live DOM. The runtime stamps
     // `id="slot-{name}"` on every mounted slot and `data-pattern` on

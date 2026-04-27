@@ -16,6 +16,15 @@
 import type { Page } from 'playwright';
 import type { EventPayload, EventPayloadValue } from '@almadar/core';
 import { faker } from '@faker-js/faker';
+import { createLogger } from '../logger.js';
+
+// Permanent observability for the DOM-side form-fill path. Surfaces
+// the modal/form-mount race that earlier surfaces couldn't tell apart:
+// container not visible vs container visible but fields not rendered
+// vs fields rendered but fill failed. Gated by ALMADAR_DEBUG with
+// namespace `almadar:verify:dom` so production verifier runs aren't
+// noisy unless the operator opts in.
+const domLog = createLogger('almadar:verify:dom');
 
 // ── Pattern Classification ──────────────────────────────────────────
 
@@ -496,26 +505,71 @@ export async function fillFormFieldsFromMap(
   containerSelector: string,
   formData: Record<string, FieldValue>,
 ): Promise<number> {
+  const expectedKeys = Object.keys(formData);
+  domLog.debug('dom:fill:enter', {
+    containerSelector,
+    expectedKeyCount: expectedKeys.length,
+    expectedKeys: expectedKeys.join(','),
+  });
+
   const container = page.locator(containerSelector).first();
   const containerVisible = await container.isVisible({ timeout: 500 }).catch(() => false);
-  if (!containerVisible) return 0;
+  domLog.debug('dom:fill:container-visible', {
+    containerSelector,
+    visible: containerVisible,
+  });
+  if (!containerVisible) {
+    domLog.debug('dom:fill:exit', {
+      containerSelector,
+      attempted: 0,
+      filled: 0,
+      containerVisible: false,
+      reason: 'container-not-visible',
+    });
+    return 0;
+  }
 
   let count = 0;
+  let attempted = 0;
 
   for (const [name, value] of Object.entries(formData)) {
-    if (value === null || value === undefined) continue;
+    if (value === null || value === undefined) {
+      domLog.debug('dom:fill:field-result', { name, result: 'skipped-null-value' });
+      continue;
+    }
     const stringValue = fieldValueToString(value);
-    if (stringValue === null) continue;
+    if (stringValue === null) {
+      domLog.debug('dom:fill:field-result', { name, result: 'skipped-no-string-form' });
+      continue;
+    }
+
+    attempted++;
 
     // ONE deterministic selector: `data-field-name="<name>"`. Every
     // form-rendering path in `@almadar/ui` (Form.tsx commonProps,
     // InputPattern/TextareaPattern/SelectPattern) stamps this attribute
     // at source. If a render is missing it, that's a UI bug to fix in
     // `@almadar/ui` — never add fallback strategies here.
-    const field = container.locator(`[data-field-name="${name}"]`).first();
+    const fieldSelector = `[data-field-name="${name}"]`;
+    const field = container.locator(fieldSelector).first();
     const visible = await field.isVisible({ timeout: 200 }).catch(() => false);
-    if (!visible) continue;
-    const tag = await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => 'input');
+    const tag = visible
+      ? await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => null)
+      : null;
+    domLog.debug('dom:fill:field-attempt', {
+      name,
+      selector: fieldSelector,
+      visible,
+      tag,
+    });
+    if (!visible) {
+      domLog.debug('dom:fill:field-result', {
+        name,
+        result: 'skipped-not-visible',
+        value: stringValue,
+      });
+      continue;
+    }
     try {
       if (tag === 'select') {
         await field.selectOption(stringValue);
@@ -523,13 +577,32 @@ export async function fillFormFieldsFromMap(
         await field.fill(stringValue);
       }
       count++;
-    } catch {
+      domLog.debug('dom:fill:field-result', {
+        name,
+        result: 'filled',
+        value: stringValue,
+        tag,
+      });
+    } catch (err) {
       // Field exists with the right tag but value couldn't be set
       // (e.g. select option not in the list). Surface as 0 contribution
       // to count — the planner needs to align with the entity's enum.
+      domLog.debug('dom:fill:field-result', {
+        name,
+        result: 'errored',
+        value: stringValue,
+        tag,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
+  domLog.debug('dom:fill:exit', {
+    containerSelector,
+    attempted,
+    filled: count,
+    containerVisible: true,
+  });
   return count;
 }
 
