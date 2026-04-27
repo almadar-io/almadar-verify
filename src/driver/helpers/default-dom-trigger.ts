@@ -108,6 +108,20 @@ export function createDefaultDomTrigger(
           // diagnostic detail. Don't bail; let the rest of the tick
           // settle so the snapshot captures the partial state.
         }
+        // Wait long enough for the persist cascade to land before
+        // the kernel takes its post-tick snapshot. The chain on a
+        // CRUD step is multi-hop:
+        //   submit click → modal SAVE emit → persistor DO_X →
+        //   server persist → server emits ITEM_X → bus delivers to
+        //   browse trait → browse INIT → server fetch → state update.
+        // The default 800ms settle covers single-event cascades but
+        // multi-hop chains routinely run 1.2-1.5s. Without this
+        // explicit wait, `frame.entityChanges` and DOM count read
+        // pre-cascade state and the diff/dom axes report ✗ even
+        // when the persist actually succeeded. 1500ms is an upper
+        // bound observed for std-list / std-cart / std-agent-builder
+        // on a warm server.
+        await page.waitForTimeout(1500);
       }
       return true;
     }
