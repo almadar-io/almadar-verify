@@ -188,12 +188,57 @@ function emptySnapshot(): VerificationSnapshot {
 }
 
 function mergeEntityData(snap: VerificationSnapshot): EntityData {
-  const out: EntityData = {};
+  // Earlier last-writer-wins merge missed post-cascade refreshes:
+  // when ListItemBrowse fetches new data after a persist, its
+  // `data[ListItem]` reflects the update, but ListItemCreate/Edit/
+  // Delete still hold their pre-cascade copies. Whichever trait the
+  // snapshot iterates LAST clobbered Browse's fresh data, so the
+  // merged entityData read pre-cascade rows even after the actual
+  // refresh landed. Confirmed via per-trait `updatedAt` divergence
+  // in std-list crud-edit's verify-report.
+  //
+  // New strategy: per entity, union rows across all traits keyed by
+  // id; on collision, prefer the row with the most recent `updatedAt`
+  // (or the longest object — a freshly-fetched row from the server
+  // is shaped fully; a partial pre-cascade copy might be missing
+  // fields). Falls back to last-seen if neither row has a comparable
+  // updatedAt timestamp. The result reflects the freshest known state
+  // of every row across the whole snapshot.
+  const merged: Record<string, Map<string, import('@almadar/core').EntityRow>> = {};
   for (const trait of snap.traits) {
     for (const [name, rows] of Object.entries(trait.data)) {
-      // Last writer wins; per-trait stores typically agree on entity contents.
-      out[name] = rows;
+      const bucket = merged[name] ?? new Map();
+      merged[name] = bucket;
+      for (const row of rows) {
+        const id = row.id;
+        if (typeof id !== 'string') {
+          // Idless rows can't be merged sanely; keep the last seen.
+          bucket.set(`__idless_${bucket.size}`, row);
+          continue;
+        }
+        const existing = bucket.get(id);
+        if (existing === undefined) {
+          bucket.set(id, row);
+          continue;
+        }
+        // Collision: pick the row with the newer updatedAt. Both
+        // updatedAt values must be string ISO dates; if either is
+        // missing or non-string, fall back to last-seen (current
+        // candidate) so we still progress instead of getting stuck
+        // on the first occurrence.
+        const existingUpdated = typeof existing.updatedAt === 'string' ? existing.updatedAt : null;
+        const candidateUpdated = typeof row.updatedAt === 'string' ? row.updatedAt : null;
+        if (candidateUpdated !== null && existingUpdated !== null) {
+          if (candidateUpdated > existingUpdated) bucket.set(id, row);
+        } else if (candidateUpdated !== null && existingUpdated === null) {
+          bucket.set(id, row);
+        }
+      }
     }
+  }
+  const out: EntityData = {};
+  for (const [name, bucket] of Object.entries(merged)) {
+    out[name] = Array.from(bucket.values());
   }
   return out;
 }
