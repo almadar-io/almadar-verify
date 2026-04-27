@@ -205,12 +205,23 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
       const raw = payloadSchema.length > 0
         ? buildMinimalPayload(payloadSchema, [...entityFields])
         : buildMinimalPayload(synthSchema, [...entityFields]);
-      formData = raw as Record<string, FieldValue>;
-      // expectedRowContent excludes payload-wrapper keys (`data`, `id`)
-      // — assertCrudFlow asserts entity-row field values, not payload
-      // keys. If the synthesized form already filled `name` /
-      // `description` etc. directly, use it.
-      const flat = flattenFormPayload(formData, synthSchema.map((s) => s.name));
+      // `raw` is shaped to match the listens block — for std-list edit
+      // that's `{ data : ListItem }`, so `raw = { data: <row> }`. The
+      // form's submit handler emits the wrapped shape, but
+      // fillFormFieldsFromMap needs FLAT keys (one per rendered input)
+      // to match `[data-field-name="<name>"]` selectors. Confirmed via
+      // `[almadar:verify:dom] dom:fill:enter { expectedKeys: 'data' }`
+      // logs on the std-list crud-edit step before this distinction
+      // existed: the driver tried to fill a non-existent `data` field
+      // and skipped every actual form field.
+      const flat = flattenFormPayload(raw as Record<string, FieldValue>, synthSchema.map((s) => s.name));
+      // For the form-fill side: prefer the flat shape if available
+      // (matches rendered field names); fall back to the raw payload-
+      // shape for backward compatibility with payloadSchemas that
+      // already produce flat keys.
+      formData = Object.keys(flat).length > 0
+        ? flat
+        : (raw as Record<string, FieldValue>);
       if (Object.keys(flat).length > 0) {
         expectedRowContent = flat;
       }

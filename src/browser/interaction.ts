@@ -261,6 +261,17 @@ export function buildMinimalPayload(
     }
 
     switch (type) {
+      case 'string':
+        // Explicit string-type fields produce a primitive faker word.
+        // Without this branch, strings fell through to the default's
+        // entity-row expansion below, which produced an object instead
+        // of a string — fillFormFieldsFromMap then `skipped-no-string-form`
+        // because `fieldValueToString({...})` returns null on objects.
+        // Confirmed via `[almadar:verify:dom] dom:fill:field-result
+        // { name: 'description', result: 'skipped-no-string-form' }` on
+        // the std-list crud-create step before this branch existed.
+        payload[name] = faker.lorem.words(2);
+        break;
       case 'number':
       case 'integer':
       case 'float':
