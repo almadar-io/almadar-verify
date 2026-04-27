@@ -373,22 +373,28 @@ function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityField
       const callName = entity.name;
       const callFields = entity.fields;
       if (callName === undefined || callFields === undefined) continue;
-      out[callName] = callFields.map(toFieldDef);
+      out[callName] = callFields.filter(hasName).map(toFieldDef);
       continue;
     }
 
-    out[entity.name] = entity.fields.map(toFieldDef);
+    out[entity.name] = entity.fields.filter(hasName).map(toFieldDef);
   }
   return out;
+}
+
+/**
+ * EntityField.name is optional in @almadar/core 7+ (matches the Rust IR
+ * FieldDefinition.name: Option<String>). Top-level entity fields all
+ * carry a name; nameless nested item descriptors don't.
+ */
+function hasName<T extends { name?: string }>(f: T): f is T & { name: string } {
+  return typeof f.name === 'string' && f.name.length > 0;
 }
 
 function toFieldDef(f: { name: string; type: string; values?: readonly string[] }): EntityFieldDef {
   return {
     name: f.name,
     type: f.type,
-    // EntityField.values is readonly per @almadar/core; the consuming
-    // EntityFieldDef expects mutable. Spread to bridge — the function
-    // doesn't mutate.
     values: f.values !== undefined ? [...f.values] : undefined,
   };
 }

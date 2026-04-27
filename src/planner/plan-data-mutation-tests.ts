@@ -144,11 +144,15 @@ function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityField
     if (entityRef === undefined) continue;
     if (isEntityReference(entityRef) || isEntityCall(entityRef)) continue;
     const fields = entityRef.fields ?? [];
-    out[entityRef.name] = fields.map((f) => ({
-      name: f.name,
-      type: f.type,
-      values: f.values !== undefined ? [...f.values] : undefined,
-    }));
+    out[entityRef.name] = fields
+      .filter((f): f is typeof f & { name: string } =>
+        typeof f.name === 'string' && f.name.length > 0,
+      )
+      .map((f) => ({
+        name: f.name,
+        type: f.type,
+        values: f.values !== undefined ? [...f.values] : undefined,
+      }));
   }
   return out;
 }
