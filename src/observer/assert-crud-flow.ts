@@ -66,8 +66,19 @@ export function assertCrudFlow(frames: ReadonlyArray<Frame>): Verdict[] {
     const entityName = expected.entityName;
     const change = frame.entityChanges.find((c) => c.entityName === entityName);
 
-    // Axis 1 — emit event landed on server cascade.
-    const emittedOnServer = frame.serverResponse?.emittedEvents ?? [];
+    // Axis 1 — emit event landed on server cascade. The CRUD-step frame's
+    // own `serverResponse` is the modal trait's response (e.g. ListItemEdit
+    // for crud-edit), not the persistor's. The persist op runs on a
+    // separate cascading transition (e.g. ListItemPersistor.DO_UPDATE)
+    // whose response carries the success emit. Scan the snapshot's
+    // transitions for any response whose `emittedEvents` carries
+    // `expectedSuccessEvent`; fall back to the frame's own serverResponse
+    // for non-cascading test kinds. Source-tagged via the snapshot's
+    // TransitionTrace[]; no heuristics on trait-name matching.
+    const cascadeEvents = findServerEmitInSnapshot(frame, successEvent);
+    const emittedOnServer = cascadeEvents !== null
+      ? cascadeEvents
+      : (frame.serverResponse?.emittedEvents ?? []);
     const emitOk = emittedOnServer.includes(successEvent);
 
     // Axis 2 — entity diff matches the expected per-kind shape +
@@ -121,6 +132,28 @@ export function assertCrudFlow(frames: ReadonlyArray<Frame>): Verdict[] {
 interface AxisResult {
   ok: boolean;
   detail: string;
+}
+
+/**
+ * Scan `frame.runtimeSnapshot.transitions` for a `serverResponse.emittedEvents`
+ * that includes `successEvent`. Returns the matching response's
+ * `emittedEvents` array, or `null` if no transition in the snapshot
+ * carries the event. Used by `assertCrudFlow` because the persist's
+ * success emit lives on the persistor's transition, not on the modal
+ * trait's frame-local `serverResponse`.
+ */
+function findServerEmitInSnapshot(
+  frame: Frame,
+  successEvent: string,
+): readonly string[] | null {
+  const transitions = frame.runtimeSnapshot.transitions;
+  for (const tx of transitions) {
+    const events = tx.serverResponse?.emittedEvents;
+    if (events !== undefined && events.includes(successEvent)) {
+      return events;
+    }
+  }
+  return null;
 }
 
 function checkEntityDiff(

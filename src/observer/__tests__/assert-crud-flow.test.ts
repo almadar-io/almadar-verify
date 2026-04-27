@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import type { EntityRow, ServerResponseTrace, VerificationSnapshot } from '@almadar/core';
+import type {
+  EntityRow,
+  ServerResponseTrace,
+  TransitionTrace,
+  VerificationSnapshot,
+} from '@almadar/core';
 import { assertCrudFlow } from '../assert-crud-flow.js';
 import type { Frame, FrameCause, EntityChange } from '../../frame/types.js';
 
@@ -10,6 +15,41 @@ const emptySnapshot: VerificationSnapshot = {
   summary: { totalChecks: 0, passed: 0, failed: 0, warnings: 0, pending: 0 },
   traits: [],
 };
+
+/**
+ * Build a snapshot whose `transitions[]` carries a single persistor
+ * `TransitionTrace` with the given `serverResponse.emittedEvents`.
+ * Mirrors the real shape: when a CRUD step's modal-trait frame settles,
+ * the persistor's cascading transition lands in the same snapshot
+ * carrying the persist's `emit.success` event.
+ */
+function snapshotWithCascadingPersistor(
+  emittedEvents: ReadonlyArray<string>,
+  traitName = 'TestPersistor',
+  event = 'DO_UPDATE',
+): VerificationSnapshot {
+  const transition: TransitionTrace = {
+    id: `tx-${traitName}-${event}`,
+    traitName,
+    from: 'idle',
+    to: 'idle',
+    event,
+    effects: [],
+    serverResponse: {
+      orbitalName: traitName,
+      success: true,
+      clientEffects: 0,
+      dataEntities: {},
+      emittedEvents: [...emittedEvents],
+      timestamp: 2000,
+    },
+    timestamp: 2000,
+  };
+  return {
+    ...emptySnapshot,
+    transitions: [transition],
+  };
+}
 
 function dom(entityName: string, count: number): Frame['domSnapshot'] {
   return {
@@ -66,6 +106,10 @@ interface FrameInput {
   entityChanges: ReadonlyArray<EntityChange>;
   domCount: number;
   emitted: ReadonlyArray<string>;
+  /** Optional snapshot override. Defaults to `emptySnapshot`. Use
+   *  `snapshotWithCascadingPersistor` to simulate a real CRUD flow
+   *  where the persist response lands on a sibling transition. */
+  snapshot?: VerificationSnapshot;
 }
 
 function buildFrame(input: FrameInput): Frame {
@@ -78,7 +122,7 @@ function buildFrame(input: FrameInput): Frame {
     stateAfter: input.cause.to,
     payload: {},
     eventFired: input.cause.event,
-    runtimeSnapshot: emptySnapshot,
+    runtimeSnapshot: input.snapshot ?? emptySnapshot,
     domSnapshot: dom(entityName, input.domCount),
     consoleDelta: { added: [], newErrors: 0, newWarnings: 0 },
     eventLogDelta: { added: [] },
@@ -353,6 +397,113 @@ describe('assertCrudFlow', () => {
     const v = assertCrudFlow([f]);
     expect(v[0].passed).toBe(false);
     expect(v[0].detail).toMatch(/removed row id mismatch/);
+  });
+
+  // The CRUD-step frame's own `serverResponse` carries the modal trait's
+  // response (e.g. ListItemEdit for crud-edit). The persist op runs on a
+  // separate cascading transition (e.g. ListItemPersistor.DO_UPDATE)
+  // whose response carries the `emit.success` event. The assertCrudFlow
+  // emit-axis check has to scan `runtimeSnapshot.transitions` for that
+  // cascading response, not just the frame-local one.
+  it('crud-edit emit-axis passes when success event is in a cascading persistor transition', () => {
+    const beforeRow: EntityRow = {
+      id: '1',
+      name: 'Old',
+      description: 'old',
+      status: 'active',
+    };
+    const afterRow: EntityRow = {
+      id: '1',
+      name: 'New',
+      description: 'new',
+      status: 'active',
+    };
+    const cause = crudCause({
+      testKind: 'crud-edit',
+      event: 'EDIT',
+      entityName: 'ListItem',
+      delta: 0,
+      expectedSuccessEvent: 'ITEM_UPDATED',
+      expectedRowChangedFields: ['name', 'description'],
+      expectedRowContent: { name: 'New', description: 'new' },
+    });
+    const prev = buildFrame({
+      index: 0,
+      cause: { ...cause, testKind: undefined } as unknown as FrameCause,
+      entityChanges: [],
+      domCount: 1,
+      emitted: [],
+    });
+    const f = buildFrame({
+      index: 1,
+      cause,
+      entityChanges: [updateChange('ListItem', beforeRow, afterRow, ['name', 'description'])],
+      domCount: 1,
+      // Modal-trait response — does NOT carry ITEM_UPDATED. Earlier
+      // versions of assertCrudFlow stopped here and reported emit ✗.
+      emitted: ['ListItemEditSaved'],
+      // Cascading persistor transition — DOES carry ITEM_UPDATED.
+      snapshot: snapshotWithCascadingPersistor(['ITEM_UPDATED']),
+    });
+    const v = assertCrudFlow([prev, f]);
+    expect(v[0].passed).toBe(true);
+    expect(v[0].detail).toMatch(/emit ✓ \(ITEM_UPDATED\)/);
+  });
+
+  it('crud-edit emit-axis fails when neither cascade nor frame.serverResponse carries the success event', () => {
+    const beforeRow: EntityRow = { id: '1', name: 'Old' };
+    const afterRow: EntityRow = { id: '1', name: 'New' };
+    const cause = crudCause({
+      testKind: 'crud-edit',
+      event: 'EDIT',
+      entityName: 'ListItem',
+      delta: 0,
+      expectedSuccessEvent: 'ITEM_UPDATED',
+      expectedRowChangedFields: ['name'],
+    });
+    const prev = buildFrame({
+      index: 0,
+      cause: { ...cause, testKind: undefined } as unknown as FrameCause,
+      entityChanges: [],
+      domCount: 1,
+      emitted: [],
+    });
+    const f = buildFrame({
+      index: 1,
+      cause,
+      entityChanges: [updateChange('ListItem', beforeRow, afterRow, ['name'])],
+      domCount: 1,
+      emitted: ['SomethingElse'],
+      // Snapshot has a persistor transition but it emits a different event.
+      snapshot: snapshotWithCascadingPersistor(['ITEM_DRAFTED']),
+    });
+    const v = assertCrudFlow([prev, f]);
+    expect(v[0].passed).toBe(false);
+    expect(v[0].detail).toMatch(/emit ✗.*ITEM_UPDATED/);
+  });
+
+  it('crud-create emit-axis falls back to frame.serverResponse when snapshot has no matching transition', () => {
+    const cause = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'ITEM_CREATED',
+    });
+    const f = buildFrame({
+      index: 0,
+      cause,
+      entityChanges: [createChange('ListItem', [{ id: 'new-1' }])],
+      domCount: 1,
+      // Frame's own response carries the event — non-cascading test
+      // case where the modal IS the source of truth.
+      emitted: ['ITEM_CREATED'],
+      // Snapshot is empty: no cascading persistor transition.
+      snapshot: emptySnapshot,
+    });
+    const v = assertCrudFlow([f]);
+    expect(v[0].passed).toBe(true);
+    expect(v[0].detail).toMatch(/emit ✓ \(ITEM_CREATED\)/);
   });
 
   it('fails when expectedSuccessEvent is missing on the cause (planner bug)', () => {
