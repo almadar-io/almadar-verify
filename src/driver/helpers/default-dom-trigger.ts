@@ -157,13 +157,28 @@ export function createDefaultDomTrigger(
                 const w = window as unknown as {
                   __orbitalVerification?: {
                     getSnapshot?: () => {
-                      transitions?: ReadonlyArray<{ event?: string }>;
+                      transitions?: ReadonlyArray<{
+                        event?: string;
+                        serverResponse?: { emittedEvents?: ReadonlyArray<string> };
+                      }>;
                     };
                   };
                 };
                 const txs = w.__orbitalVerification?.getSnapshot?.()?.transitions ?? [];
                 const slice = txs.slice(args.baseline);
-                return slice.some((t) => t.event === args.expectedEvent);
+                // Check both the trait's own event field AND the
+                // serverResponse's emittedEvents cascade. The persist's
+                // success event (e.g. ITEM_UPDATED) lands in the
+                // persistor's TransitionTrace.serverResponse.emittedEvents,
+                // NOT as the trait's `event` field — the trait's event
+                // is what triggered the transition (e.g. DO_UPDATE),
+                // while emittedEvents is what the persist op fired
+                // out as a side-effect via `emit: { success: "X" }`.
+                return slice.some((t) => {
+                  if (t.event === args.expectedEvent) return true;
+                  const emitted = t.serverResponse?.emittedEvents ?? [];
+                  return emitted.includes(args.expectedEvent);
+                });
               },
               { baseline: baselineTransitionCount, expectedEvent },
               { timeout: 8000, polling: 50 },
