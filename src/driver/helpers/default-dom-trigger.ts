@@ -104,20 +104,56 @@ export function createDefaultDomTrigger(
       if (followUpEvent !== undefined) {
         await page.waitForTimeout(formMountTimeoutMs);
 
-        // Capture the snapshot's transition count BEFORE the submit
-        // click so the post-click predicate can detect the cascade
-        // landing rather than waiting a fixed wall-clock duration.
-        const baselineTransitionCount = await page.evaluate(() => {
+        // Capture two baselines BEFORE the submit click:
+        //   1. transition count — the cascade event will append to it
+        //   2. entity-data signature for the targeted entity — this is
+        //      the actual signal the verifier's diff axis cares about,
+        //      since ListItemBrowse.data only refreshes after the
+        //      cascading INIT/fetch chain completes (the success event
+        //      itself fires earlier; waiting only on the event misses
+        //      the data-update tail of the cascade).
+        const targetEntityName = step.expectedRowDelta?.entityName ?? null;
+        const baseline = await page.evaluate((entityName: string | null) => {
           const w = window as unknown as {
             __orbitalVerification?: {
-              getSnapshot?: () => { transitions?: ReadonlyArray<unknown> };
+              getSnapshot?: () => {
+                transitions?: ReadonlyArray<unknown>;
+                traits?: ReadonlyArray<{
+                  data?: Record<string, ReadonlyArray<{ id?: string; updatedAt?: string }>>;
+                }>;
+              };
             };
           };
-          return w.__orbitalVerification?.getSnapshot?.()?.transitions?.length ?? 0;
-        });
+          const snap = w.__orbitalVerification?.getSnapshot?.();
+          const txCount = snap?.transitions?.length ?? 0;
+          if (entityName === null) {
+            return { txCount, dataSignature: '' };
+          }
+          // Build signature from ANY trait that holds the entity's
+          // rows; mergeEntityData later uses the same per-trait `data`
+          // maps. Sort by id so order changes don't false-positive.
+          const rows: Array<{ id: string; updatedAt: string }> = [];
+          const seen = new Set<string>();
+          for (const trait of snap?.traits ?? []) {
+            const list = trait.data?.[entityName] ?? [];
+            for (const r of list) {
+              if (typeof r.id === 'string' && !seen.has(r.id)) {
+                seen.add(r.id);
+                rows.push({ id: r.id, updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : '' });
+              }
+            }
+          }
+          rows.sort((a, b) => a.id.localeCompare(b.id));
+          return {
+            txCount,
+            dataSignature: rows.map((r) => `${r.id}:${r.updatedAt}`).join('|'),
+          };
+        }, targetEntityName);
         domLog.debug('dom:cascade:wait-start', {
           step: step.coverageKey,
-          baselineTransitionCount,
+          baselineTransitionCount: baseline.txCount,
+          baselineEntityRows: baseline.dataSignature.split('|').filter((s) => s.length > 0).length,
+          targetEntityName,
           expectedSuccessEvent: step.expectedSuccessEvent,
         });
 
@@ -153,7 +189,12 @@ export function createDefaultDomTrigger(
         if (expectedEvent !== null) {
           try {
             await page.waitForFunction(
-              (args: { baseline: number; expectedEvent: string }) => {
+              (args: {
+                baselineTx: number;
+                baselineSignature: string;
+                expectedEvent: string;
+                targetEntity: string | null;
+              }) => {
                 const w = window as unknown as {
                   __orbitalVerification?: {
                     getSnapshot?: () => {
@@ -161,26 +202,58 @@ export function createDefaultDomTrigger(
                         event?: string;
                         serverResponse?: { emittedEvents?: ReadonlyArray<string> };
                       }>;
+                      traits?: ReadonlyArray<{
+                        data?: Record<string, ReadonlyArray<{ id?: string; updatedAt?: string }>>;
+                      }>;
                     };
                   };
                 };
-                const txs = w.__orbitalVerification?.getSnapshot?.()?.transitions ?? [];
-                const slice = txs.slice(args.baseline);
-                // Check both the trait's own event field AND the
-                // serverResponse's emittedEvents cascade. The persist's
-                // success event (e.g. ITEM_UPDATED) lands in the
-                // persistor's TransitionTrace.serverResponse.emittedEvents,
-                // NOT as the trait's `event` field — the trait's event
-                // is what triggered the transition (e.g. DO_UPDATE),
-                // while emittedEvents is what the persist op fired
-                // out as a side-effect via `emit: { success: "X" }`.
-                return slice.some((t) => {
+                const snap = w.__orbitalVerification?.getSnapshot?.();
+                const txs = snap?.transitions ?? [];
+                const slice = txs.slice(args.baselineTx);
+                // Step 1: the persist's success event must have landed
+                // (either as a trait's own event field — when a
+                // listening trait directly handles it — or in the
+                // persistor's serverResponse.emittedEvents cascade).
+                const eventLanded = slice.some((t) => {
                   if (t.event === args.expectedEvent) return true;
                   const emitted = t.serverResponse?.emittedEvents ?? [];
                   return emitted.includes(args.expectedEvent);
                 });
+                if (!eventLanded) return false;
+                // Step 2: the entity-data signature must have changed
+                // from baseline. The success event fires fast (~80ms)
+                // but the listening trait's INIT → fetch → Loaded
+                // chain that ACTUALLY updates `traits[*].data` lands
+                // a few ticks later. Without this, the predicate
+                // resolves too early and the snapshot reads the
+                // pre-fetch state. If no targetEntity is known, only
+                // the event-landed check applies (caller's choice).
+                if (args.targetEntity === null) return true;
+                const rows: Array<{ id: string; updatedAt: string }> = [];
+                const seen = new Set<string>();
+                for (const trait of snap?.traits ?? []) {
+                  const list = trait.data?.[args.targetEntity] ?? [];
+                  for (const r of list) {
+                    if (typeof r.id === 'string' && !seen.has(r.id)) {
+                      seen.add(r.id);
+                      rows.push({
+                        id: r.id,
+                        updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : '',
+                      });
+                    }
+                  }
+                }
+                rows.sort((a, b) => a.id.localeCompare(b.id));
+                const sig = rows.map((r) => `${r.id}:${r.updatedAt}`).join('|');
+                return sig !== args.baselineSignature;
               },
-              { baseline: baselineTransitionCount, expectedEvent },
+              {
+                baselineTx: baseline.txCount,
+                baselineSignature: baseline.dataSignature,
+                expectedEvent,
+                targetEntity: targetEntityName,
+              },
               { timeout: 8000, polling: 50 },
             );
             domLog.debug('dom:cascade:wait-resolved', {
@@ -192,7 +265,7 @@ export function createDefaultDomTrigger(
             domLog.warn('dom:cascade:wait-timeout', {
               step: step.coverageKey,
               elapsedMs: Date.now() - startWaitAt,
-              baselineTransitionCount,
+              baselineTransitionCount: baseline.txCount,
               expectedSuccessEvent: expectedEvent,
               error: err instanceof Error ? err.message : String(err),
             });
