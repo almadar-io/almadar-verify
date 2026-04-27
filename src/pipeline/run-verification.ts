@@ -17,6 +17,7 @@
  * @packageDocumentation
  */
 
+import { rmSync, mkdirSync } from 'node:fs';
 import type { Frame } from '../frame/types.js';
 import { tick } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
@@ -51,6 +52,21 @@ export async function runVerification<Ctx extends DriverContext>(
   const maxWalkMs = input.options?.maxWalkMs ?? DEFAULT_MAX_WALK_MS;
   const maxFrames = input.options?.maxFrames ?? DEFAULT_MAX_FRAMES;
   const opts = input.options ?? {};
+
+  // ── Wipe the per-behavior output dir before starting ──────────────
+  // Stale frames + transition logs + reports from a previous run
+  // outlive the new run when the new run produces fewer artifacts
+  // (e.g. fewer frames after a planner change), and they show up in
+  // screenshot reviews as "ghost" results that don't reflect the
+  // current state. Recreating the dir at the start gives every run a
+  // clean slate. Skipped when outputDir is empty (test-fixture mode).
+  const outputDir = input.ctx.outputDir;
+  if (outputDir !== undefined && outputDir !== '') {
+    try {
+      rmSync(outputDir, { recursive: true, force: true });
+      mkdirSync(outputDir, { recursive: true });
+    } catch { /* best-effort — keep going if FS errors */ }
+  }
 
   // ── Derive everything from the parsed orbital ─────────────────────
   const traits = extractTraitWalkConfigs(input.orbital);
