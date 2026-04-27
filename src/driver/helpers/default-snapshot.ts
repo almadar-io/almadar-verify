@@ -188,57 +188,57 @@ function emptySnapshot(): VerificationSnapshot {
 }
 
 function mergeEntityData(snap: VerificationSnapshot): EntityData {
-  // Earlier last-writer-wins merge missed post-cascade refreshes:
-  // when ListItemBrowse fetches new data after a persist, its
-  // `data[ListItem]` reflects the update, but ListItemCreate/Edit/
-  // Delete still hold their pre-cascade copies. Whichever trait the
-  // snapshot iterates LAST clobbered Browse's fresh data, so the
-  // merged entityData read pre-cascade rows even after the actual
-  // refresh landed. Confirmed via per-trait `updatedAt` divergence
-  // in std-list crud-edit's verify-report.
+  // For each entity, pick the trait whose MOST RECENT fetch
+  // transition for that entity is the freshest. Use ONLY that
+  // trait's data for that entity in the merged output.
   //
-  // New strategy: per entity, union rows across all traits keyed by
-  // id; on collision, prefer the row with the most recent `updatedAt`
-  // (or the longest object — a freshly-fetched row from the server
-  // is shaped fully; a partial pre-cascade copy might be missing
-  // fields). Falls back to last-seen if neither row has a comparable
-  // updatedAt timestamp. The result reflects the freshest known state
-  // of every row across the whole snapshot.
-  const merged: Record<string, Map<string, import('@almadar/core').EntityRow>> = {};
-  for (const trait of snap.traits) {
-    for (const [name, rows] of Object.entries(trait.data)) {
-      const bucket = merged[name] ?? new Map();
-      merged[name] = bucket;
-      for (const row of rows) {
-        const id = row.id;
-        if (typeof id !== 'string') {
-          // Idless rows can't be merged sanely; keep the last seen.
-          bucket.set(`__idless_${bucket.size}`, row);
-          continue;
-        }
-        const existing = bucket.get(id);
-        if (existing === undefined) {
-          bucket.set(id, row);
-          continue;
-        }
-        // Collision: pick the row with the newer updatedAt. Both
-        // updatedAt values must be string ISO dates; if either is
-        // missing or non-string, fall back to last-seen (current
-        // candidate) so we still progress instead of getting stuck
-        // on the first occurrence.
-        const existingUpdated = typeof existing.updatedAt === 'string' ? existing.updatedAt : null;
-        const candidateUpdated = typeof row.updatedAt === 'string' ? row.updatedAt : null;
-        if (candidateUpdated !== null && existingUpdated !== null) {
-          if (candidateUpdated > existingUpdated) bucket.set(id, row);
-        } else if (candidateUpdated !== null && existingUpdated === null) {
-          bucket.set(id, row);
-        }
+  // Why this shape:
+  // - Earlier last-writer-wins clobbered fresh data with stale.
+  // - Union-by-id-then-pick-newest-updatedAt resurrected deleted
+  //   rows from stale traits because a deleted row still exists
+  //   in those traits with its old updatedAt.
+  //
+  // The verifier records `effects.fetch` + `serverResponse.
+  // dataEntities[entityName]: count` on every transition that
+  // fetched the entity. Pulling the trait that owns the latest such
+  // transition gives us the single source-of-truth fetch per entity.
+  // Confirmed via /tmp/.../verify-report.json: for crud-delete on
+  // std-list, ListItemBrowse had t=1777305045658 (post-delete fetch
+  // with count=9), while the other traits' last fetch was at
+  // t=1777305039542-5 (initial mount, count=10).
+  //
+  // Falls back to a last-writer-wins behaviour for entities whose
+  // fetches were never recorded in transitions (e.g. seed-only
+  // data); that's the original 3.10.2- behaviour, preserved for
+  // schemas that don't fetch the entity at all.
+  const latestFetchTraitByEntity: Record<string, { traitName: string; ts: number }> = {};
+  for (const tx of snap.transitions) {
+    const sr = tx.serverResponse;
+    if (sr === undefined) continue;
+    const fetchedNames = Object.keys(sr.dataEntities ?? {});
+    if (fetchedNames.length === 0) continue;
+    const hasFetchEffect = (tx.effects ?? []).some((e) => e.type === 'fetch');
+    if (!hasFetchEffect) continue;
+    for (const name of fetchedNames) {
+      const current = latestFetchTraitByEntity[name];
+      if (current === undefined || tx.timestamp > current.ts) {
+        latestFetchTraitByEntity[name] = { traitName: tx.traitName, ts: tx.timestamp };
       }
     }
   }
   const out: EntityData = {};
-  for (const [name, bucket] of Object.entries(merged)) {
-    out[name] = Array.from(bucket.values());
+  for (const trait of snap.traits) {
+    for (const [name, rows] of Object.entries(trait.data)) {
+      const winner = latestFetchTraitByEntity[name];
+      if (winner === undefined) {
+        // No fetch recorded — preserve last-writer-wins.
+        out[name] = rows;
+      } else if (winner.traitName === trait.traitName) {
+        // This trait owns the freshest fetch for this entity.
+        out[name] = rows;
+      }
+      // Otherwise: skip — a different trait owns the freshest fetch.
+    }
   }
   return out;
 }
