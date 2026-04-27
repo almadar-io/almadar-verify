@@ -9,7 +9,35 @@ import { dirname } from 'node:path';
 import type { Page, ElementHandle } from 'playwright';
 
 /**
+ * Selectors hidden from every screenshot. Verify mode injects a
+ * RuntimeDebugger overlay (`.runtime-debugger`) and a hud-bottom slot
+ * portal (`#hud-bottom-portal`); both are diagnostic-only and clutter
+ * the captured frame, so we hide them via a stylesheet injected once
+ * per Page.
+ */
+const SCREENSHOT_HIDE_SELECTORS = ['.runtime-debugger', '#hud-bottom-portal'];
+
+/** Per-page idempotency for the hide-stylesheet injection. */
+const stylesInjected = new WeakSet<Page>();
+
+async function ensureHideStyles(page: Page): Promise<void> {
+  if (stylesInjected.has(page)) return;
+  try {
+    await page.addStyleTag({
+      content: `${SCREENSHOT_HIDE_SELECTORS.join(', ')} { display: none !important; }`,
+    });
+    stylesInjected.add(page);
+  } catch {
+    // addStyleTag fails if the page navigated mid-injection. Leave
+    // unmarked so the next screenshot retries.
+  }
+}
+
+/**
  * Capture a screenshot of a specific element or the full page.
+ *
+ * Hides the verify-mode RuntimeDebugger overlay and hud-bottom portal
+ * before capture so screenshots reflect just the app under test.
  *
  * @param page - Playwright page
  * @param outputPath - File path for the screenshot
@@ -23,6 +51,7 @@ export async function takeScreenshot(
 ): Promise<string | null> {
   try {
     mkdirSync(dirname(outputPath), { recursive: true });
+    await ensureHideStyles(page);
 
     if (selector) {
       const element: ElementHandle | null = await page.$(selector);
