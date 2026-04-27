@@ -6,6 +6,7 @@
 
 import type { OrbitalSchema } from '@almadar/core';
 import type { Driver, DriverContext } from '../driver/types.js';
+import type { Frame } from '../frame/types.js';
 import type {
   CascadeRule,
   MutationRule,
@@ -68,6 +69,26 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
     screenshots?: boolean;
     /** Logger used for progress output. Default: `console.log`. */
     log?: (msg: string) => void;
+    /**
+     * Called after each `tick()` returns a settled `Frame`, before
+     * the kernel proceeds to the next step. Lets consumers run
+     * side-effects against the live runtime — e.g. inject the
+     * `Annotator` overlay into the Playwright page for the
+     * interactive `--annotate` mode. The hook receives the kernel's
+     * `ctx` (the same `Omit<Ctx, 'trait'>` the consumer passed in,
+     * with the current trait stamped on) so a Playwright impl can
+     * reach `ctx.page` to drive its overlay.
+     *
+     * Errors thrown from the hook do NOT halt the run — they're
+     * caught and logged via `options.log` so a flaky annotation
+     * round-trip can't take down a long verifier walk. Hooks that
+     * need hard-stop semantics should call `process.exit` themselves.
+     *
+     * Frame-level annotation output (JSONL append, in-memory list,
+     * etc.) is the consumer's responsibility — see `Annotator` in
+     * `@almadar-io/verify` for the canonical Playwright wiring.
+     */
+    onFrameSettle?: (ctx: Ctx, frame: Frame) => Promise<void> | void;
   };
 }
 

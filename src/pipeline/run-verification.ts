@@ -139,6 +139,20 @@ export async function runVerification<Ctx extends DriverContext>(
       log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
       prev = frame;
       stepIdx += 1;
+
+      // Run the per-frame settle hook (e.g. interactive annotation
+      // overlay). Wrapped in try/catch so a hook failure can't take
+      // down a long verifier walk — see `RunVerificationInput.options.
+      // onFrameSettle` jsdoc for the contract. Hooks that need hard-
+      // stop semantics call `process.exit` themselves.
+      const onFrameSettle = input.options?.onFrameSettle;
+      if (onFrameSettle !== undefined) {
+        try {
+          await onFrameSettle(ctx, frame);
+        } catch (err) {
+          log(`  onFrameSettle error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     }
   }
 
