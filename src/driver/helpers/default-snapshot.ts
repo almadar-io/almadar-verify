@@ -79,7 +79,17 @@ export function createDefaultSnapshot(
 
     // Effect results from the most recent transition for the named trait.
     const effectResults = lastEffectResultsFor(runtimeSnapshot, traitName);
-    const serverResponse = lastServerResponseFor(runtimeSnapshot, traitName);
+    // Server response: try the trait-named transition first, then fall
+    // back to the synthetic `server:<orbital>` transition the runtime path
+    // records via recordServerResponse for the same event. Without the
+    // fallback, runtime-verify cascades from server-bridge'd persists
+    // (which carry their emit.success in the synthetic server entry, not
+    // under the trait name) arrive as null.
+    const serverResponse = lastServerResponseFor(
+      runtimeSnapshot,
+      traitName,
+      step?.event,
+    );
 
     // Probe portal slots from the live DOM. The runtime stamps
     // `id="slot-{name}"` on every mounted slot and `data-pattern` on
@@ -159,9 +169,34 @@ function lastEffectResultsFor(snap: VerificationSnapshot, traitName: string): Ef
   return recent?.effects ?? [];
 }
 
-function lastServerResponseFor(snap: VerificationSnapshot, traitName: string): ServerResponseTrace | null {
-  const recent = [...snap.transitions].reverse().find((t) => t.traitName === traitName);
-  return recent?.serverResponse ?? null;
+function lastServerResponseFor(
+  snap: VerificationSnapshot,
+  traitName: string,
+  event?: string,
+): ServerResponseTrace | null {
+  // 1) Per-trait transition (client-side capture of the trait's own emits,
+  //    e.g. from useTraitStateMachine's wrapped handlers.emit).
+  const reversed = [...snap.transitions].reverse();
+  const traitMatch = reversed.find(
+    (t) => t.traitName === traitName && t.serverResponse !== undefined,
+  );
+  if (traitMatch?.serverResponse) return traitMatch.serverResponse;
+
+  // 2) Server-bridge synthetic transition (recordServerResponse writes
+  //    `traitName: "server:<orbital>"` and the response carries the
+  //    cross-trait emit cascade). Match by event so concurrent server
+  //    responses for different events don't collide.
+  if (event !== undefined) {
+    const serverMatch = reversed.find(
+      (t) =>
+        t.traitName.startsWith('server:') &&
+        t.event === event &&
+        t.serverResponse !== undefined,
+    );
+    if (serverMatch?.serverResponse) return serverMatch.serverResponse;
+  }
+
+  return null;
 }
 
 /**
