@@ -20,7 +20,14 @@ import type { EmitDeclaration } from '../browser/catalog-probes.js';
  * `planInitCredit` / `planEmitSweep` / `planReplayTo` planners leave
  * this undefined.
  */
-export type TestKind = 'interaction' | 'data-mutation' | 'contract' | 'click-path';
+export type TestKind =
+  | 'interaction'
+  | 'data-mutation'
+  | 'contract'
+  | 'click-path'
+  | 'crud-create'
+  | 'crud-edit'
+  | 'crud-delete';
 
 /**
  * Per-entity row-count delta the observer expects after a step
@@ -110,6 +117,45 @@ export interface ExtendedWalkStep extends WalkStep {
    * matching kind.
    */
   testKind?: TestKind;
+
+  // ── v3.7.0 CRUD-flow declarative fields (optional, populated by
+  //     planUserCrudFlow) ───────────────────────────────────────────────
+
+  /**
+   * v3.7.0: form payload the observer expects to find on the row that
+   * was added (`crud-create`) or mutated (`crud-edit`). Each key is a
+   * field name on the linked entity; each value is the core
+   * `FieldValue` the form was submitted with. `assertCrudFlow` asserts
+   * the row's after-state matches every key/value pair.
+   */
+  expectedRowContent?: Record<string, FieldValue>;
+
+  /**
+   * v3.7.0: for `crud-edit`, the field names the observer expects to
+   * appear in `EntityRowChange.fieldsChanged`. Lets the observer
+   * distinguish "row changed in the right way" from "row changed in
+   * some unrelated way".
+   */
+  expectedRowChangedFields?: ReadonlyArray<string>;
+
+  /**
+   * v3.7.0: for `crud-edit` / `crud-delete`, the row id this step
+   * targets. The DOM trigger uses
+   * `[data-testid="action-<event>"][data-row-id="<id>"]` to find the
+   * specific affordance on that row. Single deterministic tag per row.
+   * When undefined for a crud-edit/delete step, the trigger picks the
+   * first `[data-row-id]` affordance in the rendered list (deterministic
+   * structural position — not a heuristic).
+   */
+  targetRowId?: string;
+
+  /**
+   * v3.7.0: for `crud-delete`, the affordance event the driver clicks
+   * AFTER the initial open click to actually fire the persist. This is
+   * the confirmation modal's CONFIRM affordance (e.g. `CONFIRM_DELETE`).
+   * For `crud-create` / `crud-edit` use `submitEvent` instead.
+   */
+  confirmEvent?: string;
 }
 
 /**

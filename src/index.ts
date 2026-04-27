@@ -230,6 +230,7 @@ export {
 } from './planner/plan-contract-events.js';
 export { planDataMutationTests } from './planner/plan-data-mutation-tests.js';
 export { planInteractionTests } from './planner/plan-interaction-tests.js';
+export { planUserCrudFlow } from './planner/plan-user-crud-flow.js';
 
 // Observer — pure consumers of the Frame stream
 export type {
@@ -254,6 +255,7 @@ export { assertRefTraitInvariantOverFrames } from './observer/assert-ref-trait-i
 export { assertClickPathSample } from './observer/assert-click-path-sample.js';
 export { assertContractEventFired } from './observer/assert-contract-event-fired.js';
 export { assertDataMutation } from './observer/assert-data-mutation.js';
+export { assertCrudFlow } from './observer/assert-crud-flow.js';
 export { assertPortalPerStep } from './observer/assert-portal-per-step.js';
 export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';

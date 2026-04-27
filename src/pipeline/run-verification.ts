@@ -27,6 +27,7 @@ import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
 import { planInteractionTests } from '../planner/plan-interaction-tests.js';
+import { planUserCrudFlow } from '../planner/plan-user-crud-flow.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import { assertCascade } from '../observer/assert-cascade.js';
 import { assertMutation } from '../observer/assert-mutation.js';
@@ -36,6 +37,7 @@ import { probeBindings } from '../observer/probe-bindings.js';
 import { assertClickPathSample } from '../observer/assert-click-path-sample.js';
 import { assertContractEventFired } from '../observer/assert-contract-event-fired.js';
 import { assertDataMutation } from '../observer/assert-data-mutation.js';
+import { assertCrudFlow } from '../observer/assert-crud-flow.js';
 import { assertPortalPerStep } from '../observer/assert-portal-per-step.js';
 import { assertInteractionPattern } from '../observer/assert-interaction-pattern.js';
 import { report } from '../observer/report.js';
@@ -93,6 +95,9 @@ export async function runVerification<Ctx extends DriverContext>(
   }
   if (opts.enableContractEvents !== false && opts.contractRegistry !== undefined) {
     collectExtension(planContractEvents(input.orbital, opts.contractRegistry));
+  }
+  if (opts.enableUserCrudFlow !== false) {
+    collectExtension(planUserCrudFlow(input.orbital));
   }
 
   // ── Walk every trait through the same tick loop ───────────────────
@@ -177,6 +182,12 @@ export async function runVerification<Ctx extends DriverContext>(
   const interactionVerdicts = assertInteractionPattern(frames);
   if (interactionVerdicts.length > 0) {
     verdicts.interaction = combineVerdicts(interactionVerdicts, 'interaction');
+  }
+
+  // v3.7.0 — CRUD-proof phase: emit + entity diff + DOM list update.
+  const crudVerdicts = assertCrudFlow(frames);
+  if (crudVerdicts.length > 0) {
+    verdicts.crud = combineVerdicts(crudVerdicts, 'crud');
   }
 
   // VG1 per-step — derived from each transition's render-ui declarations.

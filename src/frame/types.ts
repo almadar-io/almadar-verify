@@ -27,6 +27,7 @@ import type {
   VerificationSnapshot,
   EventLogEntry,
   EntityRow,
+  FieldValue,
 } from '@almadar/core';
 import type { ConsoleEntry } from '../util/types.js';
 import type { PortalSlot } from '../browser/portal-slots.js';
@@ -48,7 +49,14 @@ export type TriggerKind = 'bus' | 'dom' | 'auto-init' | 'replay';
  * (`planClickPathSamples`, `planInteractionTests`, etc.) stamp it with
  * the matching kind. Mirrors `ExtendedWalkStep.testKind`.
  */
-export type TestKind = 'interaction' | 'data-mutation' | 'contract' | 'click-path';
+export type TestKind =
+  | 'interaction'
+  | 'data-mutation'
+  | 'contract'
+  | 'click-path'
+  | 'crud-create'
+  | 'crud-edit'
+  | 'crud-delete';
 
 /**
  * The cause that produced a frame. Carries the same information as a
@@ -110,6 +118,30 @@ export interface FrameCause {
    * and click the Save button. No fallback heuristics.
    */
   submitEvent?: string;
+  /**
+   * v3.7.0: form payload the observer expects to find on the row that
+   * was added (`crud-create`) or mutated (`crud-edit`). Carried from
+   * `ExtendedWalkStep.expectedRowContent`. Each value is core's
+   * `FieldValue`.
+   */
+  expectedRowContent?: Record<string, FieldValue>;
+  /**
+   * v3.7.0: for `crud-edit`, the field names the observer expects to
+   * appear in `EntityRowChange.fieldsChanged`. Carried from
+   * `ExtendedWalkStep.expectedRowChangedFields`.
+   */
+  expectedRowChangedFields?: ReadonlyArray<string>;
+  /**
+   * v3.7.0: for `crud-edit` / `crud-delete`, the row id this step
+   * targets. Carried from `ExtendedWalkStep.targetRowId`.
+   */
+  targetRowId?: string;
+  /**
+   * v3.7.0: for `crud-delete`, the confirmation modal's CONFIRM
+   * affordance event the driver clicks after the initial open. Carried
+   * from `ExtendedWalkStep.confirmEvent`.
+   */
+  confirmEvent?: string;
 }
 
 /**

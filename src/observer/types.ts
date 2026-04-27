@@ -155,6 +155,8 @@ export interface ReportShape {
     dataMutation?: Verdict;
     /** Phase 4b — one verdict per interaction test, combined. */
     interaction?: Verdict;
+    /** v3.7.0 — one verdict per CRUD-flow test (create/edit/delete), combined. */
+    crud?: Verdict;
   };
   /** Aggregate pass/fail/warning counts in core's canonical shape. */
   summary: VerificationSummary;

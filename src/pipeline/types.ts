@@ -45,6 +45,12 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
     enableContractEvents?: boolean;
     /** Run Phase 4b+ data mutation tests (CRUD). Default: true. */
     enableDataMutationTests?: boolean;
+    /**
+     * v3.7.0 — run the CRUD-proof phase: per-entity user-flow chains
+     * (CREATE → EDIT → DELETE) with three-axis verdict (emit + entity
+     * diff + DOM list update). Default: true.
+     */
+    enableUserCrudFlow?: boolean;
     /** Run VG3 click-path samples. Default: true. */
     enableClickPathSamples?: boolean;
     /** Run VG1 portal-per-step (built from render-ui in transitions). Default: true. */

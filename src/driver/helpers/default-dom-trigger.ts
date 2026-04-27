@@ -52,7 +52,24 @@ export function createDefaultDomTrigger(
   } = options;
 
   return async function triggerDOM(page, step) {
-    const locator = page.locator(`[data-testid="action-${step.event}"]`).first();
+    const isCrudFlow =
+      step.testKind === 'crud-create' ||
+      step.testKind === 'crud-edit' ||
+      step.testKind === 'crud-delete';
+
+    // For crud-edit / crud-delete, prefer a row-scoped selector — the
+    // affordance lives on a per-row itemAction button stamped with
+    // `data-row-id`. When `targetRowId` is undefined, fall back to the
+    // first row's button (deterministic structural position, not a
+    // heuristic).
+    const baseSelector = `[data-testid="action-${step.event}"]`;
+    const selector = (isCrudFlow && step.targetRowId !== undefined)
+      ? `${baseSelector}[data-row-id="${step.targetRowId}"]`
+      : (isCrudFlow && (step.testKind === 'crud-edit' || step.testKind === 'crud-delete'))
+        ? `${baseSelector}[data-row-id]`
+        : baseSelector;
+
+    const locator = page.locator(selector).first();
     let clicked = false;
     try {
       const visible = await locator.isVisible({ timeout: 250 });
@@ -66,18 +83,39 @@ export function createDefaultDomTrigger(
 
     if (!clicked) return false;
 
-    // No form data → done after the click.
-    if (step.formData === undefined || Object.keys(step.formData).length === 0) {
+    // Form data present → wait for the form to mount, fill it.
+    if (step.formData !== undefined && Object.keys(step.formData).length > 0) {
+      await page.waitForTimeout(formMountTimeoutMs);
+      await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
+    }
+
+    // Crud-flow steps: also click the submit/confirm affordance to
+    // drive the persist round-trip. Interaction tests stop at form
+    // fill; CRUD tests run the full chain so the observer can verify
+    // emit + entity diff + DOM list update on one frame.
+    if (isCrudFlow) {
+      const followUpEvent = step.submitEvent ?? step.confirmEvent;
+      if (followUpEvent !== undefined) {
+        await page.waitForTimeout(formMountTimeoutMs);
+        const followUpLocator = page.locator(`[data-testid="action-${followUpEvent}"]`).first();
+        try {
+          const visible = await followUpLocator.isVisible({ timeout: 500 });
+          if (visible) {
+            await followUpLocator.click({ timeout: clickTimeoutMs });
+          }
+        } catch {
+          // Submit/confirm not found — observer will fail with a
+          // diagnostic detail. Don't bail; let the rest of the tick
+          // settle so the snapshot captures the partial state.
+        }
+      }
       return true;
     }
 
-    // Form data present → wait for the form to mount, fill it. We
-    // intentionally do NOT click submit; the interaction test verdict
-    // checks that the form-section pattern is mounted, not that the
-    // form persists. Submission semantics live in the data-mutation
-    // observer's separate frame.
-    await page.waitForTimeout(formMountTimeoutMs);
-    await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
+    if (step.formData === undefined || Object.keys(step.formData).length === 0) {
+      return true;
+    }
+    // Interaction-test path: form was filled, no submit click.
     return true;
   };
 }
