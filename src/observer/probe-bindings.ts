@@ -46,6 +46,19 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   );
   const causeInLastDispatched = traitSnapshot.lastEventDispatched?.event === frame.cause.event;
 
+  // Skip frames where the dispatch is EXPECTED to be rejected — the
+  // event never lands in the bus log or updates lastEventDispatched.
+  // - auto-init: synthetic boot frame (no actual dispatch)
+  // - guard-fail: guard rejected, no transition
+  // - malformed: validator rejected empty payload, no transition
+  // - isRepositioning: reconcile preamble walking trait state; events
+  //   may or may not log depending on planReplayTo's payload path
+  const skipMissing =
+    frame.cause.triggerKind === 'auto-init' ||
+    frame.cause.guardCase === 'fail' ||
+    frame.cause.payloadCase === 'malformed' ||
+    frame.cause.isRepositioning;
+
   if (causeInEventLog || causeInLastDispatched) {
     matched.push({
       slot: 'lastEventDispatched',
@@ -54,7 +67,7 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
         ? (traitSnapshot.lastEventDispatched as { event: string }).event
         : 'eventLog',
     });
-  } else if (frame.cause.triggerKind !== 'auto-init') {
+  } else if (!skipMissing) {
     missing.push({
       slot: 'lastEventDispatched',
       expected: frame.cause.event,
