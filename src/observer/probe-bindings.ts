@@ -16,6 +16,9 @@
 
 import type { Frame } from '../frame/types.js';
 import type { BindingDelta, BindingMatch } from './types.js';
+import { createLogger } from '../logger.js';
+
+const probeLog = createLogger('almadar:verify:probe-bindings');
 
 export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   const traitSnapshot = frame.runtimeSnapshot.traits.find(
@@ -78,6 +81,20 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
     missing.push({
       slot: 'lastEventDispatched',
       expected: frame.cause.event,
+    });
+    probeLog.debug('binding:missing', {
+      frameIndex: frame.index,
+      trait: frame.cause.traitName,
+      event: frame.cause.event,
+      triggerKind: frame.cause.triggerKind,
+      payloadCase: frame.cause.payloadCase,
+      guardCase: frame.cause.guardCase,
+      isRepositioning: frame.cause.isRepositioning,
+      testKind: frame.cause.testKind,
+      eventLogDeltaCount: frame.eventLogDelta.added.length,
+      eventLogTypes: JSON.stringify(frame.eventLogDelta.added.map((e) => e.type)),
+      lastEventInTrait: traitSnapshot.lastEventDispatched?.event ?? null,
+      serverSuccess: frame.serverResponse?.success ?? null,
     });
   }
 
