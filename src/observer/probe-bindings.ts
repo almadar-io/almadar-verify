@@ -48,6 +48,12 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
     entry.type.split(':').includes(frame.cause.event),
   );
   const causeInLastDispatched = traitSnapshot.lastEventDispatched?.event === frame.cause.event;
+  // The frame's serverResponse landing with success:true is independent
+  // proof the dispatch reached the runtime — server-side traits
+  // (persistor, server-only orbitals) don't always update the client's
+  // lastEventDispatched or echo on the client bus, but a successful
+  // serverResponse means the event was processed.
+  const serverProcessed = frame.serverResponse?.success === true;
 
   // Skip frames where the dispatch is EXPECTED to be rejected, or where
   // the cause event is not the trait's most recent dispatch by snapshot
@@ -69,13 +75,13 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
     frame.serverResponse?.success === false ||
     isCrudFlow;
 
-  if (causeInEventLog || causeInLastDispatched) {
+  if (causeInEventLog || causeInLastDispatched || serverProcessed) {
     matched.push({
       slot: 'lastEventDispatched',
       expected: frame.cause.event,
       actual: causeInLastDispatched
         ? (traitSnapshot.lastEventDispatched as { event: string }).event
-        : 'eventLog',
+        : (causeInEventLog ? 'eventLog' : 'serverResponse'),
     });
   } else if (!skipMissing) {
     missing.push({
