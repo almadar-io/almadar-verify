@@ -46,6 +46,11 @@ export function assertPortalPerStep(
     if (!frame.accepted) continue;
     if (frame.cause.isRepositioning) continue;
     if (frame.cause.guardCase === 'fail') continue;
+    // Malformed-variant frames (planWalk's empty-payload negative-path
+    // coverage) intentionally trigger validator rejection — the
+    // transition doesn't fire, so render-ui never executes, and portal
+    // expectations don't apply.
+    if (frame.cause.payloadCase === 'malformed') continue;
 
     const key = `${frame.cause.traitName}:${frame.cause.from}+${frame.cause.event}->${frame.cause.to}`;
     const matched = expectationsByCause.get(key);
