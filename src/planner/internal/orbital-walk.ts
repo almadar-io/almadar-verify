@@ -55,8 +55,16 @@ export function* eachInlineTrait(orbital: OrbitalSchema): Generator<{ orb: Orbit
 export function toEdgeWalkTransition(t: Transition): EdgeWalkTransition {
   const hasGuard = t.guard !== undefined && t.guard !== null;
   const out: EdgeWalkTransition = { from: t.from, event: t.event, to: t.to, hasGuard };
-  if (hasGuard && Array.isArray(t.guard)) {
-    (out as { guard?: unknown[] }).guard = t.guard;
+  // Pass through the guard regardless of whether it's an array (S-expr
+  // call like `["or", ...]`, `["=", ...]`) or a string atom (bare-
+  // binding existence check like `"@payload.row"` declared by
+  // std-confirmation). Pre-fix, the `Array.isArray` filter dropped
+  // every string-form guard, so `buildGuardPayloads` saw no guard for
+  // single-binding transitions and synthesized `{}` for the pass-case
+  // bus replay — modal stayed closed and the portal observer reported
+  // "slot not mounted" for every single-binding-guarded event.
+  if (hasGuard && t.guard !== undefined && t.guard !== null) {
+    out.guard = t.guard;
   }
   return out;
 }
