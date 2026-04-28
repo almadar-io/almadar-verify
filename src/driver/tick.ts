@@ -92,7 +92,10 @@ export async function tick<Ctx extends DriverContext>(
       serverResponse = send.serverResponse;
     }
   } else {
-    // 'bus' | 'replay'
+    // 'bus' | 'replay' | 'reconcile' — all dispatch via the bus.
+    // `reconcile` frames are kernel-injected preamble steps walking the
+    // trait from its initial state to the next planner step's `from`;
+    // semantically identical to `replay` for dispatch purposes.
     const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload));
     serverResponse = send.serverResponse;
   }

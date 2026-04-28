@@ -33,14 +33,24 @@ import type { ConsoleEntry } from '../util/types.js';
 import type { PortalSlot } from '../browser/portal-slots.js';
 
 /**
- * Why a frame exists. `auto-init` is the synthetic boot-INIT credit the
- * kernel prepends per trait (the runtime auto-fires INIT on mount).
- * `bus` is a programmatic `sendEvent` dispatch. `dom` is a DOM-trigger
- * (button click, form submit). `replay` is a repositioning step inserted
- * by `buildEdgeCoveringWalk` to reach a state with uncovered outgoing
- * edges.
+ * Why a frame exists.
+ * - `auto-init`: synthetic boot-INIT credit the kernel prepends per trait
+ *   (the runtime auto-fires INIT on mount).
+ * - `bus`: programmatic `sendEvent` dispatch (planner-emitted forward step).
+ * - `dom`: DOM-trigger (button click, form submit; planner-emitted).
+ * - `replay`: repositioning step. Legacy from the Eulerian
+ *   `buildEdgeCoveringWalk` chaining; kept for any consumer that still
+ *   produces it.
+ * - `reconcile`: kernel-injected preamble step for hermetic-frame mode.
+ *   Before each non-auto-init step the kernel resets client+server state
+ *   and walks from the trait's initial state to `step.from` via
+ *   `planReplayTo`; each event in that walk-back becomes its own
+ *   `reconcile`-tagged Frame so the audit trail stays honest about what
+ *   dispatched (no silent state munging). Same `sendEvent` dispatch
+ *   semantics as `replay`; verdicts skip both because they carry
+ *   `isRepositioning: true`.
  */
-export type TriggerKind = 'bus' | 'dom' | 'auto-init' | 'replay';
+export type TriggerKind = 'bus' | 'dom' | 'auto-init' | 'replay' | 'reconcile';
 
 /**
  * Tag that lets observers categorize the verdicts they emit. The base

@@ -28,6 +28,7 @@ import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
 import { planInteractionTests } from '../planner/plan-interaction-tests.js';
 import { planUserCrudFlow } from '../planner/plan-user-crud-flow.js';
+import { planReplayTo } from '../planner/plan-replay-to.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import { assertCascade } from '../observer/assert-cascade.js';
 import { assertMutation } from '../observer/assert-mutation.js';
@@ -124,6 +125,23 @@ export async function runVerification<Ctx extends DriverContext>(
     const traitStart = Date.now();
     let prev: Frame | null = null;
     let stepIdx = 0;
+
+    // Hermetic-frame mode (the default as of v3.13). Before each
+    // non-auto-init step the kernel:
+    //   1. Calls `driver.reset(ctx)` — page reload + bridge.reset hook
+    //      (which the consuming tool wires to also POST mock-reset to
+    //      the playground / compiled-server backing store).
+    //   2. Walks the trait from `trait.initialState` to `step.from` via
+    //      `planReplayTo`. Each replay event becomes its own kernel-
+    //      injected `reconcile` Frame so the audit trail stays honest.
+    //   3. Runs the original step.
+    //
+    // The auto-init step (always first per trait) skips the preamble
+    // because it IS the post-reset state credit. After the reset,
+    // walking initial→from gives the planner's `from` precondition for
+    // free without forcing every planner to topology-order its own
+    // emissions, which is what bit `planUserCrudFlow.crud-create` when
+    // `planInteractionTests` left ListItemCreate in `open`.
     for (const step of plan) {
       if (frames.length >= maxFrames) {
         log(`[runVerification] ${trait.traitName}: maxFrames (${maxFrames}) reached`);
@@ -133,6 +151,29 @@ export async function runVerification<Ctx extends DriverContext>(
         log(`[runVerification] ${trait.traitName}: maxWalkMs (${maxWalkMs}) exceeded at step ${stepIdx}/${plan.length}`);
         break;
       }
+
+      // Hermetic preamble (skips for auto-init, which IS the boot
+      // moment and has no prior state to reset from).
+      if (step.triggerKind !== 'auto-init') {
+        await input.driver.reset(ctx);
+
+        if (step.from !== trait.initialState) {
+          const replayPath = planReplayTo({ trait, targetState: step.from });
+          for (const replayStep of replayPath) {
+            if (frames.length >= maxFrames) break;
+            const reconcileStep: ExtendedWalkStep = {
+              ...replayStep,
+              triggerKind: 'reconcile',
+              coverageKey: `${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[reconcile]`,
+            };
+            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep);
+            frames.push(reconcileFrame);
+            log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
+            prev = reconcileFrame;
+          }
+        }
+      }
+
       const frame: Frame = await tick(input.driver, ctx, prev, step);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';

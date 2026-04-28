@@ -108,10 +108,19 @@ describe('runVerification — std-browse end-to-end', () => {
       },
     });
 
-    expect(result.frames).toHaveLength(5);
+    // Hermetic-frame mode (v3.13+): the kernel injects reset +
+    // replay-from-initial preamble before each non-auto-init step.
+    // For std-browse's 4 non-INIT-from-initial transitions, two of
+    // them have `from = loading` (= initial) so need no preamble,
+    // and two have non-initial `from` (browsing, error) requiring a
+    // single replay step each. Total: 1 auto-init + 2 bus + 2×(1
+    // reconcile + 1 bus) = 7 frames.
+    expect(result.frames).toHaveLength(7);
     expect(result.frames.every((f) => f.accepted)).toBe(true);
     expect(result.frames[0].cause.triggerKind).toBe('auto-init');
-    expect(result.frames.slice(1).every((f) => f.cause.triggerKind === 'bus')).toBe(true);
+    expect(result.frames.slice(1).every(
+      (f) => f.cause.triggerKind === 'bus' || f.cause.triggerKind === 'reconcile',
+    )).toBe(true);
   });
 
   it('produces a healthy refTrait verdict', async () => {

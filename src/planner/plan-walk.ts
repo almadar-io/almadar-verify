@@ -2,19 +2,35 @@
  * `planWalk` — pure planner that turns a trait into an ordered list of
  * `ExtendedWalkStep`s the driver can fire one-by-one.
  *
- * Wraps `buildEdgeCoveringWalk` from `@almadar/core` (which guarantees
- * 100% transition coverage via greedy DFS + BFS repositioning), then:
- *  1. Prepends a synthetic auto-init step (unless disabled) so the
- *     coverage observer credits the boot INIT without consumer bookkeeping.
- *  2. Decorates every step with `triggerKind` + `coverageKey`.
+ * Hermetic-frame mode (v3.13+): emits ONE step per transition with
+ * `from = transition.from`, no Eulerian chaining or
+ * `replay`-repositioning steps. The kernel's `runVerification`
+ * preamble (reset + planReplayTo from initial → step.from) handles
+ * getting the trait into `from` before each dispatch, so this planner
+ * no longer needs to thread state continuity across emissions.
+ *
+ * Per-trait output:
+ *  1. Synthetic auto-init step (unless disabled) crediting the boot
+ *     INIT without consumer bookkeeping.
+ *  2. One `triggerKind: 'bus'` step per transition (with pass/fail
+ *     guardCase variants when the transition has a guard, mirroring
+ *     `buildEdgeCoveringWalk`'s behaviour).
+ *
+ * Pre-fix: this used `buildEdgeCoveringWalk` which chained transitions
+ * into a single Eulerian walk so each step's `from` matched the
+ * previous step's `to`. That created cross-frame state dependence —
+ * a frame midway through the walk would inherit terminal trait state
+ * from earlier frames AND from other planners (planInteractionTests,
+ * planUserCrudFlow). The hermetic-frame refactor moved state-setup
+ * responsibility into the kernel; this planner now just enumerates
+ * the edges to cover.
  *
  * Pure. No browser, no I/O. Unit-testable with inline trait fixtures.
  *
  * @packageDocumentation
  */
 
-import { buildEdgeCoveringWalk } from '@almadar/core';
-import type { TriggerKind } from '../frame/types.js';
+import { buildGuardPayloads } from '@almadar/core';
 import type { ExtendedWalkStep, PlanWalkInput } from './types.js';
 
 export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
@@ -26,15 +42,59 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
     result.push(makeAutoInitStep(trait.traitName, trait.initialState));
   }
 
-  const baseSteps = buildEdgeCoveringWalk(trait.transitions, trait.initialState);
-  for (const step of baseSteps) {
-    const triggerKind: TriggerKind = step.isRepositioning ? 'replay' : 'bus';
-    result.push({
-      ...step,
-      traitName: trait.traitName,
-      triggerKind,
-      coverageKey: buildCoverageKey(trait.traitName, step.from, step.event, step.to, step.guardCase),
-    });
+  // One step per transition. Skip INIT-from-initial because the
+  // auto-init step already credits the runtime's boot INIT (firing
+  // it again would double-credit the same edge).
+  for (const transition of trait.transitions) {
+    if (transition.event === 'INIT' && transition.from === trait.initialState) continue;
+
+    if (transition.hasGuard) {
+      // Guarded transitions get pass + fail variants. Synthesize each
+      // variant's payload from the guard expression itself via
+      // `buildGuardPayloads` — pass yields a payload that satisfies
+      // the guard (e.g. `{row: {id, name}}` for `@payload.row`); fail
+      // yields one that doesn't (e.g. `{row: null}`). Pre-fix this
+      // synthesis lived inside `buildEdgeCoveringWalk`; the hermetic-
+      // frame planWalk emits steps directly so we recreate the logic
+      // at the emission site.
+      const guardPayloads = transition.guard !== undefined
+        ? buildGuardPayloads(transition.guard)
+        : { pass: {}, fail: {} };
+      result.push({
+        from: transition.from,
+        event: transition.event,
+        to: transition.to,
+        guardCase: 'pass',
+        payload: guardPayloads.pass,
+        isRepositioning: false,
+        traitName: trait.traitName,
+        triggerKind: 'bus',
+        coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, 'pass'),
+      });
+      result.push({
+        from: transition.from,
+        event: transition.event,
+        to: transition.to,
+        guardCase: 'fail',
+        payload: guardPayloads.fail,
+        isRepositioning: false,
+        traitName: trait.traitName,
+        triggerKind: 'bus',
+        coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, 'fail'),
+      });
+    } else {
+      result.push({
+        from: transition.from,
+        event: transition.event,
+        to: transition.to,
+        guardCase: null,
+        payload: {},
+        isRepositioning: false,
+        traitName: trait.traitName,
+        triggerKind: 'bus',
+        coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, null),
+      });
+    }
   }
 
   return result;
