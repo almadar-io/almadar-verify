@@ -15,14 +15,19 @@
  */
 
 import type { EdgeWalkTransition } from '@almadar/core';
+import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PlanReplayInput } from './types.js';
+import { synthesizeSuccessPayload } from './internal/payload-synth.js';
 
 interface QueueNode {
   state: string;
   path: ReadonlyArray<{ from: string; event: string; to: string }>;
 }
 
-export function planReplayTo(input: PlanReplayInput): ExtendedWalkStep[] {
+export function planReplayTo(
+  input: PlanReplayInput,
+  entityFieldsByName: Record<string, EntityFieldDef[]> = {},
+): ExtendedWalkStep[] {
   const { trait, targetState } = input;
 
   if (targetState === trait.initialState) return [];
@@ -30,17 +35,33 @@ export function planReplayTo(input: PlanReplayInput): ExtendedWalkStep[] {
   const path = bfsShortestPath(trait.transitions, trait.initialState, targetState);
   if (path === null) return [];
 
-  return path.map((step) => ({
-    from: step.from,
-    event: step.event,
-    to: step.to,
-    guardCase: null,
-    payload: {},
-    isRepositioning: true,
-    traitName: trait.traitName,
-    triggerKind: 'replay',
-    coverageKey: `${trait.traitName}:${step.from}+${step.event}->${step.to}[replay]`,
-  }));
+  return path.map((step) => {
+    // Look up the event's declared payloadSchema so the replay
+    // dispatch carries a valid payload — the API-boundary validator
+    // (added in @almadar/runtime 4.x / @almadar/std-shell 7.x) rejects
+    // empty `{}` for events with required fields, which used to make
+    // every replay step that traverses such an event silently no-op,
+    // leaving the trait in a non-`from` state by the time the main
+    // planner step ran. Synthesizing here keeps the replay walk-back
+    // observable AND honest.
+    const eventDecl = trait.events?.find((e) => e.key === step.event);
+    const payload = synthesizeSuccessPayload(
+      eventDecl?.payloadSchema,
+      trait.linkedEntity,
+      entityFieldsByName,
+    );
+    return {
+      from: step.from,
+      event: step.event,
+      to: step.to,
+      guardCase: null,
+      payload,
+      isRepositioning: true,
+      traitName: trait.traitName,
+      triggerKind: 'replay',
+      coverageKey: `${trait.traitName}:${step.from}+${step.event}->${step.to}[replay]`,
+    };
+  });
 }
 
 /**

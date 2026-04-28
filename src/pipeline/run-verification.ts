@@ -163,7 +163,10 @@ export async function runVerification<Ctx extends DriverContext>(
         await input.driver.reset(ctx);
 
         if (step.from !== trait.initialState) {
-          const replayPath = planReplayTo({ trait, targetState: step.from });
+          const replayPath = planReplayTo(
+            { trait, targetState: step.from },
+            entityFieldsByName,
+          );
           for (const replayStep of replayPath) {
             if (frames.length >= maxFrames) break;
             const reconcileStep: ExtendedWalkStep = {
