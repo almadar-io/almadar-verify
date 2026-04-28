@@ -37,6 +37,27 @@ export async function tick<Ctx extends DriverContext>(
   const index = prev === null ? 0 : prev.index + 1;
   const timestamp = Date.now();
 
+  const cause: FrameCause = {
+    traitName: step.traitName,
+    from: step.from,
+    event: step.event,
+    to: step.to,
+    guardCase: step.guardCase,
+    triggerKind: step.triggerKind,
+    isRepositioning: step.isRepositioning,
+    coverageKey: step.coverageKey,
+    ...(step.testKind !== undefined && { testKind: step.testKind }),
+    ...(step.expectedRowDelta !== undefined && { expectedRowDelta: step.expectedRowDelta }),
+    ...(step.expectedPattern !== undefined && { expectedPattern: step.expectedPattern }),
+    ...(step.expectedSuccessEvent !== undefined && { expectedSuccessEvent: step.expectedSuccessEvent }),
+    ...(step.submitEvent !== undefined && { submitEvent: step.submitEvent }),
+    ...(step.expectedRowContent !== undefined && { expectedRowContent: step.expectedRowContent }),
+    ...(step.expectedRowChangedFields !== undefined && { expectedRowChangedFields: step.expectedRowChangedFields }),
+    ...(step.targetRowId !== undefined && { targetRowId: step.targetRowId }),
+    ...(step.confirmEvent !== undefined && { confirmEvent: step.confirmEvent }),
+    ...(step.payloadCase !== undefined && { payloadCase: step.payloadCase }),
+  };
+
   // Auto-init: the runtime already fired INIT on mount. Capture the
   // boot moment as a Frame without dispatching anything.
   if (step.triggerKind === 'auto-init') {
@@ -85,31 +106,6 @@ export async function tick<Ctx extends DriverContext>(
   const snap = await driver.snapshot(ctx, step);
 
   const accepted = decideAccepted(step, stateBefore, stateAfter);
-
-  // Cause is built AFTER the trigger so DOM-flow alterations (e.g.
-  // fillFormFieldsFromMap rewriting a select option that matched the
-  // pre-fill) are reflected in step.expectedRowContent / formData by the
-  // time they're spread into the FrameCause.
-  const cause: FrameCause = {
-    traitName: step.traitName,
-    from: step.from,
-    event: step.event,
-    to: step.to,
-    guardCase: step.guardCase,
-    triggerKind: step.triggerKind,
-    isRepositioning: step.isRepositioning,
-    coverageKey: step.coverageKey,
-    ...(step.testKind !== undefined && { testKind: step.testKind }),
-    ...(step.expectedRowDelta !== undefined && { expectedRowDelta: step.expectedRowDelta }),
-    ...(step.expectedPattern !== undefined && { expectedPattern: step.expectedPattern }),
-    ...(step.expectedSuccessEvent !== undefined && { expectedSuccessEvent: step.expectedSuccessEvent }),
-    ...(step.submitEvent !== undefined && { submitEvent: step.submitEvent }),
-    ...(step.expectedRowContent !== undefined && { expectedRowContent: step.expectedRowContent }),
-    ...(step.expectedRowChangedFields !== undefined && { expectedRowChangedFields: step.expectedRowChangedFields }),
-    ...(step.targetRowId !== undefined && { targetRowId: step.targetRowId }),
-    ...(step.confirmEvent !== undefined && { confirmEvent: step.confirmEvent }),
-    ...(step.payloadCase !== undefined && { payloadCase: step.payloadCase }),
-  };
 
   return makeWalkFrame({
     index,

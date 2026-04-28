@@ -26,7 +26,6 @@
  */
 
 import type { Page } from 'playwright';
-import type { FieldValue } from '@almadar/core';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import { fillFormFieldsFromMap } from '../../browser/interaction.js';
 import { createLogger } from '../../logger.js';
@@ -93,25 +92,7 @@ export function createDefaultDomTrigger(
     // Form data present → wait for the form to mount, fill it.
     if (step.formData !== undefined && Object.keys(step.formData).length > 0) {
       await page.waitForTimeout(formMountTimeoutMs);
-      const fillResult = await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
-
-      // For altered selects (where the planner's synthesized value matched
-      // the row's pre-filled value and the fill chose a different option),
-      // update step.formData + step.expectedRowContent so the cause and
-      // the diff observer's content check both reflect what was actually
-      // submitted. The mutation has to happen BEFORE tick captures cause
-      // (tick was updated to build cause AFTER triggerDOM for this reason).
-      const formDataMut = step.formData as Record<string, FieldValue>;
-      const expectedContentMut = step.expectedRowContent as Record<string, FieldValue> | undefined;
-      for (const [name, actual] of Object.entries(fillResult.actuallyFilled)) {
-        const planned = formDataMut[name];
-        if (typeof planned === 'string' && planned !== actual) {
-          formDataMut[name] = actual;
-          if (expectedContentMut !== undefined && name in expectedContentMut) {
-            expectedContentMut[name] = actual;
-          }
-        }
-      }
+      await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
 
       const postFillDom = await page.evaluate((sel: string) => {
         const container = document.querySelector(sel);

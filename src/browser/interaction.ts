@@ -511,20 +511,11 @@ import type { FieldValue } from '@almadar/core';
  *
  * Returns the count of inputs actually filled.
  */
-export interface FillFormResult {
-  count: number;
-  /** Map of field name → string value actually filled into the DOM. Differs from
-   *  `formData` when a select's pre-filled value matched the synthesized value
-   *  and the trigger picked an alternate option to force a real change. */
-  actuallyFilled: Record<string, string>;
-}
-
 export async function fillFormFieldsFromMap(
   page: Page,
   containerSelector: string,
   formData: Record<string, FieldValue>,
-): Promise<FillFormResult> {
-  const actuallyFilled: Record<string, string> = {};
+): Promise<number> {
   const expectedKeys = Object.keys(formData);
   domLog.debug('dom:fill:enter', {
     containerSelector,
@@ -546,7 +537,7 @@ export async function fillFormFieldsFromMap(
       containerVisible: false,
       reason: 'container-not-visible',
     });
-    return { count: 0, actuallyFilled };
+    return 0;
   }
 
   let count = 0;
@@ -592,37 +583,10 @@ export async function fillFormFieldsFromMap(
     }
     try {
       if (tag === 'select') {
-        const currentValue = await field.inputValue().catch(() => '');
-        let targetValue = stringValue;
-        let altered = false;
-        if (currentValue === stringValue && currentValue !== '') {
-          const otherOption = await field.evaluate((el, current) => {
-            const select = el as HTMLSelectElement;
-            for (const opt of Array.from(select.options)) {
-              if (opt.value !== '' && opt.value !== current) return opt.value;
-            }
-            return null;
-          }, currentValue);
-          if (otherOption !== null) {
-            targetValue = otherOption;
-            altered = true;
-          }
-        }
-        await field.selectOption(targetValue);
-        actuallyFilled[name] = targetValue;
-        count++;
-        domLog.debug('dom:fill:field-result', {
-          name,
-          result: 'filled',
-          value: targetValue,
-          requestedValue: stringValue,
-          altered,
-          tag,
-        });
-        continue;
+        await field.selectOption(stringValue);
+      } else {
+        await field.fill(stringValue);
       }
-      await field.fill(stringValue);
-      actuallyFilled[name] = stringValue;
       count++;
       domLog.debug('dom:fill:field-result', {
         name,
@@ -650,7 +614,7 @@ export async function fillFormFieldsFromMap(
     filled: count,
     containerVisible: true,
   });
-  return { count, actuallyFilled };
+  return count;
 }
 
 /**

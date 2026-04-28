@@ -253,10 +253,18 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
     if (expectedRowContent !== undefined) step.expectedRowContent = expectedRowContent;
     step.submitEvent = submitEvent;
     if (kind === 'edit') {
-      // Field names whose values changed from the pre-fill. Same as the
-      // form-data keys.
+      // Enum-typed fields get excluded from the changed-field expectation:
+      // `buildMinimalPayload` picks `values[0]` deterministically, but mock
+      // seeders pick a random `arrayElement`, so enum fields collide ~1/N
+      // of the time and don't appear in `fieldsChanged`. The row WAS still
+      // edited (other fields changed), so the verdict shouldn't depend on
+      // the enum's outcome. String/number/etc. fields keep faker-randomness
+      // and are reliably different from the seeded value.
+      const enumFieldNames = new Set(
+        entityFields.filter((f) => f.values !== undefined && f.values.length > 0).map((f) => f.name),
+      );
       const changed = expectedRowContent !== undefined
-        ? Object.keys(expectedRowContent)
+        ? Object.keys(expectedRowContent).filter((k) => !enumFieldNames.has(k))
         : [];
       if (changed.length > 0) step.expectedRowChangedFields = changed;
     }
