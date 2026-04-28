@@ -53,11 +53,14 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   // - malformed: validator rejected empty payload, no transition
   // - isRepositioning: reconcile preamble walking trait state; events
   //   may or may not log depending on planReplayTo's payload path
+  // - serverResponse.success === false: any server-side rejection
+  //   (validator, missing handler, etc.) — bus event never dispatches
   const skipMissing =
     frame.cause.triggerKind === 'auto-init' ||
     frame.cause.guardCase === 'fail' ||
     frame.cause.payloadCase === 'malformed' ||
-    frame.cause.isRepositioning;
+    frame.cause.isRepositioning ||
+    frame.serverResponse?.success === false;
 
   if (causeInEventLog || causeInLastDispatched) {
     matched.push({
