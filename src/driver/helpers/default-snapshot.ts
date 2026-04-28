@@ -79,8 +79,15 @@ export function createDefaultSnapshot(
     const consoleAdded = allConsole.slice(consoleSeen);
     consoleSeen = allConsole.length;
 
-    // Pull bus event log deltas.
+    // Hermetic mode reloads the page between non-auto-init steps, which
+    // resets the in-page event log. The closure's `eventLogSeen` counter
+    // would then exceed `allEventLog.length` and `slice` returns empty
+    // for every frame's delta. Detect the reset (length shrank) and
+    // re-anchor at 0 so post-reload events get captured.
     const allEventLog = (await readEventLog(page)) ?? [];
+    if (allEventLog.length < eventLogSeen) {
+      eventLogSeen = 0;
+    }
     const eventLogAdded = allEventLog.slice(eventLogSeen);
     eventLogSeen = allEventLog.length;
 
