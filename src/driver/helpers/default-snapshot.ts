@@ -149,9 +149,17 @@ export function createDefaultSnapshot(
       //
       // Multiple steps with the same `from_event_to` cause (e.g. base
       // walk and interaction-test for the same transition) would
-      // collide on the same filename, last-write-wins. Suffix with the
-      // testKind so each variant gets its own screenshot file.
-      const variant = step.testKind !== undefined ? `__${step.testKind}` : '';
+      // collide on the same filename, last-write-wins. Suffix with
+      // testKind (extension planners) OR payloadCase (planWalk variants:
+      // malformed/success/guard-fail) OR triggerKind=reconcile so each
+      // variant gets its own screenshot file. Without the payloadCase /
+      // reconcile suffix, planWalk's three-variant emission + the
+      // hermetic-mode reconcile preamble would all overwrite the same
+      // path, hiding which variant the user is actually seeing.
+      let variant = '';
+      if (step.testKind !== undefined) variant = `__${step.testKind}`;
+      else if (step.triggerKind === 'reconcile') variant = '__reconcile';
+      else if (step.payloadCase !== undefined) variant = `__${step.payloadCase}`;
       const fileName = `${safeFileName(`${traitName}_${step.from}_${step.event}_${step.to}${variant}`)}.png`;
       screenshotPath = join(outputDir, 'frames', fileName);
       await takeScreenshot(page, screenshotPath);
