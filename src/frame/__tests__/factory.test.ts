@@ -153,9 +153,13 @@ describe('diffEntities', () => {
     const t1 = new Date('2026-01-01');
     const t2 = new Date('2026-01-01');
     const t3 = new Date('2026-02-02');
-    const before: EntityData = { Order: [{ id: '1', createdAt: t1 }] };
-    const sameTime: EntityData = { Order: [{ id: '1', createdAt: t2 }] };
-    const diffTime: EntityData = { Order: [{ id: '1', createdAt: t3 }] };
+    // Use a non-metadata field; `createdAt` and `updatedAt` are
+    // intentionally excluded from the field diff because mock-seed
+    // regen and persist-update both bump them and would report every
+    // row as "changed" across hermetic frames.
+    const before: EntityData = { Order: [{ id: '1', placedAt: t1 }] };
+    const sameTime: EntityData = { Order: [{ id: '1', placedAt: t2 }] };
+    const diffTime: EntityData = { Order: [{ id: '1', placedAt: t3 }] };
     expect(diffEntities(before, sameTime)[0].changed).toHaveLength(0);
     expect(diffEntities(before, diffTime)[0].changed).toHaveLength(1);
   });

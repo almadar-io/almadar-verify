@@ -253,7 +253,14 @@ function diffRowFields(before: EntityRow, after: EntityRow): string[] {
   ]);
   const changed: string[] = [];
   for (const key of keys) {
-    if (key === 'id') continue;
+    // `id` is the row identity (handled at the add/remove level).
+    // `updatedAt`/`createdAt` are persistence-layer metadata that move
+    // with every persist call AND with every mock-seed regeneration —
+    // including them makes the diff churn across hermetic reseeds and
+    // reports every row as "changed" between consecutive frames. The
+    // CRUD verdict cares about content fields (name/description/etc.),
+    // not the row's modification timestamp.
+    if (key === 'id' || key === 'updatedAt' || key === 'createdAt') continue;
     if (!fieldValueEquals(before[key], after[key])) changed.push(key);
   }
   return changed;
