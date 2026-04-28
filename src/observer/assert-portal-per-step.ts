@@ -51,6 +51,11 @@ export function assertPortalPerStep(
     // transition doesn't fire, so render-ui never executes, and portal
     // expectations don't apply.
     if (frame.cause.payloadCase === 'malformed') continue;
+    // CRUD-flow frames capture state AFTER the full open→fill→submit→
+    // cascade flow, so the modal is already closed by snapshot time
+    // even though the planner's expectation matches the OPEN transition.
+    const tk = frame.cause.testKind;
+    if (tk === 'crud-create' || tk === 'crud-edit' || tk === 'crud-delete') continue;
 
     const key = `${frame.cause.traitName}:${frame.cause.from}+${frame.cause.event}->${frame.cause.to}`;
     const matched = expectationsByCause.get(key);
