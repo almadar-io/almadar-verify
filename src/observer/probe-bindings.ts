@@ -46,21 +46,25 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   );
   const causeInLastDispatched = traitSnapshot.lastEventDispatched?.event === frame.cause.event;
 
-  // Skip frames where the dispatch is EXPECTED to be rejected — the
-  // event never lands in the bus log or updates lastEventDispatched.
+  // Skip frames where the dispatch is EXPECTED to be rejected, or where
+  // the cause event is not the trait's most recent dispatch by snapshot
+  // time — bus log + lastEventDispatched legitimately won't reflect it.
   // - auto-init: synthetic boot frame (no actual dispatch)
-  // - guard-fail: guard rejected, no transition
-  // - malformed: validator rejected empty payload, no transition
-  // - isRepositioning: reconcile preamble walking trait state; events
-  //   may or may not log depending on planReplayTo's payload path
-  // - serverResponse.success === false: any server-side rejection
-  //   (validator, missing handler, etc.) — bus event never dispatches
+  // - guard-fail / malformed: rejection variants
+  // - isRepositioning: reconcile preamble events
+  // - serverResponse.success === false: server-side rejection
+  // - crud-flow testKinds: the snapshot is captured AFTER the full
+  //   open→fill→submit chain; cause.event is the OPEN affordance but
+  //   lastEventDispatched ends up reflecting the SAVE/cascade chain
+  const tk = frame.cause.testKind;
+  const isCrudFlow = tk === 'crud-create' || tk === 'crud-edit' || tk === 'crud-delete';
   const skipMissing =
     frame.cause.triggerKind === 'auto-init' ||
     frame.cause.guardCase === 'fail' ||
     frame.cause.payloadCase === 'malformed' ||
     frame.cause.isRepositioning ||
-    frame.serverResponse?.success === false;
+    frame.serverResponse?.success === false ||
+    isCrudFlow;
 
   if (causeInEventLog || causeInLastDispatched) {
     matched.push({
