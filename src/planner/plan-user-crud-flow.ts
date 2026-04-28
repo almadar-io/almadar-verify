@@ -42,9 +42,9 @@ import type {
   TraitEventListener,
   Transition,
 } from '@almadar/core';
-import { isEntityReference, isEntityCall } from '@almadar/core';
 import type { ExtendedWalkStep, TestKind } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
+import { collectEntityFields } from './internal/payload-synth.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
 
 export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
@@ -420,22 +420,3 @@ function flattenFormPayload(
   return payload;
 }
 
-function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityFieldDef[]> {
-  const out: Record<string, EntityFieldDef[]> = {};
-  for (const orb of orbital.orbitals) {
-    const entityRef = orb.entity;
-    if (entityRef === undefined) continue;
-    if (isEntityReference(entityRef) || isEntityCall(entityRef)) continue;
-    const fields = entityRef.fields ?? [];
-    out[entityRef.name] = fields
-      .filter((f): f is typeof f & { name: string } =>
-        typeof f.name === 'string' && f.name.length > 0,
-      )
-      .map((f) => ({
-        name: f.name,
-        type: f.type,
-        values: f.values !== undefined ? [...f.values] : undefined,
-      }));
-  }
-  return out;
-}

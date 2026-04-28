@@ -6,24 +6,35 @@
  * `from = transition.from`, no Eulerian chaining or
  * `replay`-repositioning steps. The kernel's `runVerification`
  * preamble (reset + planReplayTo from initial → step.from) handles
- * getting the trait into `from` before each dispatch, so this planner
- * no longer needs to thread state continuity across emissions.
+ * getting the trait into `from` before each dispatch.
  *
- * Per-trait output:
- *  1. Synthetic auto-init step (unless disabled) crediting the boot
- *     INIT without consumer bookkeeping.
- *  2. One `triggerKind: 'bus'` step per transition (with pass/fail
- *     guardCase variants when the transition has a guard, mirroring
- *     `buildEdgeCoveringWalk`'s behaviour).
+ * Three-variant emission (v3.14+): for each non-INIT-from-initial
+ * transition the planner emits up to three explicit variants so both
+ * the rejection and success paths get coverage:
  *
- * Pre-fix: this used `buildEdgeCoveringWalk` which chained transitions
- * into a single Eulerian walk so each step's `from` matched the
- * previous step's `to`. That created cross-frame state dependence —
- * a frame midway through the walk would inherit terminal trait state
- * from earlier frames AND from other planners (planInteractionTests,
- * planUserCrudFlow). The hermetic-frame refactor moved state-setup
- * responsibility into the kernel; this planner now just enumerates
- * the edges to cover.
+ *   1. `malformed`: empty-payload `{}`. When the event has at least
+ *      one `required: true` payload field, the API-boundary validator
+ *      rejects it and `frame.serverResponse.success === false`. If the
+ *      event has no required fields the `malformed` and `success`
+ *      payloads collapse to the same `{}`, so we skip emission to
+ *      avoid duplicate coverage entries.
+ *   2. `guard-fail` (guarded transitions only): synthesized payload
+ *      merged with `buildGuardPayloads.fail`. Guard rejects, state
+ *      holds. Stamped with `guardCase: 'fail'` so observers
+ *      (`assertPortalPerStep`, `assertCrudFlow`) skip it the same way
+ *      they always have.
+ *   3. `success`: synthesized full payload via `synthesizeSuccessPayload`.
+ *      For guarded transitions the synth is merged with
+ *      `buildGuardPayloads.pass` so the guard is satisfied AND the
+ *      validator sees every required field. Stamped `guardCase: 'pass'`
+ *      when guarded; null otherwise.
+ *
+ * Pre-v3.14 the unguarded path emitted a single `{}` step (which
+ * accidentally exercised the validator's reject branch but never the
+ * success branch for events with required payload fields). The guarded
+ * path emitted pass+fail variants without payload-schema synthesis,
+ * leaving guarded events with required payload fields dispatched on
+ * payloads that the validator rejected even on the pass case.
  *
  * Pure. No browser, no I/O. Unit-testable with inline trait fixtures.
  *
@@ -31,10 +42,15 @@
  */
 
 import { buildGuardPayloads } from '@almadar/core';
-import type { ExtendedWalkStep, PlanWalkInput } from './types.js';
+import type { EntityFieldDef } from '../browser/interaction.js';
+import type { ExtendedWalkStep, PayloadCase, PlanWalkInput } from './types.js';
+import {
+  hasRequiredPayloadFields,
+  synthesizeSuccessPayload,
+} from './internal/payload-synth.js';
 
 export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
-  const { trait, includeAutoInit = true } = input;
+  const { trait, includeAutoInit = true, entityFieldsByName = {} } = input;
 
   const result: ExtendedWalkStep[] = [];
 
@@ -42,62 +58,105 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
     result.push(makeAutoInitStep(trait.traitName, trait.initialState));
   }
 
-  // One step per transition. Skip INIT-from-initial because the
-  // auto-init step already credits the runtime's boot INIT (firing
-  // it again would double-credit the same edge).
   for (const transition of trait.transitions) {
     if (transition.event === 'INIT' && transition.from === trait.initialState) continue;
 
+    const eventDecl = trait.events?.find((e) => e.key === transition.event);
+    const payloadSchema = eventDecl?.payloadSchema;
+    const successPayload = synthesizeSuccessPayload(
+      payloadSchema,
+      trait.linkedEntity,
+      entityFieldsByName,
+    );
+    const emitMalformed = hasRequiredPayloadFields(payloadSchema);
+
     if (transition.hasGuard) {
-      // Guarded transitions get pass + fail variants. Synthesize each
-      // variant's payload from the guard expression itself via
-      // `buildGuardPayloads` — pass yields a payload that satisfies
-      // the guard (e.g. `{row: {id, name}}` for `@payload.row`); fail
-      // yields one that doesn't (e.g. `{row: null}`). Pre-fix this
-      // synthesis lived inside `buildEdgeCoveringWalk`; the hermetic-
-      // frame planWalk emits steps directly so we recreate the logic
-      // at the emission site.
+      // Guarded transitions get pass + fail guard variants. The guard
+      // payload is merged with the synthesized success payload so the
+      // dispatch satisfies both the guard AND the API validator's
+      // required-field check.
       const guardPayloads = transition.guard !== undefined
         ? buildGuardPayloads(transition.guard)
         : { pass: {}, fail: {} };
-      result.push({
-        from: transition.from,
-        event: transition.event,
-        to: transition.to,
+
+      if (emitMalformed) {
+        result.push(makeStep({
+          trait,
+          transition,
+          guardCase: null,
+          payloadCase: 'malformed',
+          payload: {},
+          entityFieldsByName,
+        }));
+      }
+
+      result.push(makeStep({
+        trait,
+        transition,
         guardCase: 'pass',
-        payload: guardPayloads.pass,
-        isRepositioning: false,
-        traitName: trait.traitName,
-        triggerKind: 'bus',
-        coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, 'pass'),
-      });
-      result.push({
-        from: transition.from,
-        event: transition.event,
-        to: transition.to,
+        payloadCase: 'success',
+        payload: { ...successPayload, ...guardPayloads.pass },
+        entityFieldsByName,
+      }));
+
+      result.push(makeStep({
+        trait,
+        transition,
         guardCase: 'fail',
-        payload: guardPayloads.fail,
-        isRepositioning: false,
-        traitName: trait.traitName,
-        triggerKind: 'bus',
-        coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, 'fail'),
-      });
-    } else {
-      result.push({
-        from: transition.from,
-        event: transition.event,
-        to: transition.to,
-        guardCase: null,
-        payload: {},
-        isRepositioning: false,
-        traitName: trait.traitName,
-        triggerKind: 'bus',
-        coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, null),
-      });
+        payloadCase: 'guard-fail',
+        payload: { ...successPayload, ...guardPayloads.fail },
+        entityFieldsByName,
+      }));
+      continue;
     }
+
+    if (emitMalformed) {
+      result.push(makeStep({
+        trait,
+        transition,
+        guardCase: null,
+        payloadCase: 'malformed',
+        payload: {},
+        entityFieldsByName,
+      }));
+    }
+
+    result.push(makeStep({
+      trait,
+      transition,
+      guardCase: null,
+      payloadCase: 'success',
+      payload: successPayload,
+      entityFieldsByName,
+    }));
   }
 
   return result;
+}
+
+interface MakeStepInput {
+  trait: PlanWalkInput['trait'];
+  transition: PlanWalkInput['trait']['transitions'][number];
+  guardCase: 'pass' | 'fail' | null;
+  payloadCase: PayloadCase;
+  payload: Record<string, unknown>;
+  entityFieldsByName: Record<string, EntityFieldDef[]>;
+}
+
+function makeStep(input: MakeStepInput): ExtendedWalkStep {
+  const { trait, transition, guardCase, payloadCase, payload } = input;
+  return {
+    from: transition.from,
+    event: transition.event,
+    to: transition.to,
+    guardCase,
+    payload,
+    isRepositioning: false,
+    traitName: trait.traitName,
+    triggerKind: 'bus',
+    coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, guardCase, payloadCase),
+    payloadCase,
+  };
 }
 
 /**
@@ -115,14 +174,14 @@ function makeAutoInitStep(traitName: string, initialState: string): ExtendedWalk
     isRepositioning: false,
     traitName,
     triggerKind: 'auto-init',
-    coverageKey: buildCoverageKey(traitName, initialState, 'INIT', initialState, null),
+    coverageKey: buildCoverageKey(traitName, initialState, 'INIT', initialState, null, null),
   };
 }
 
 /**
  * Build the canonical coverage key. Format mirrors `frame/keyOf(cause)`:
- *   `${trait}:${from}+${event}->${to}` (unguarded)
- *   `${trait}:${from}+${event}->${to}[pass|fail]` (guarded)
+ *   `${trait}:${from}+${event}->${to}` (unguarded, no payload variant)
+ *   `${trait}:${from}+${event}->${to}[<variant>]` (guarded or variant-tagged)
  *
  * Single source of truth — the coverage observer uses the same scheme,
  * so numerator and denominator match by construction.
@@ -133,7 +192,13 @@ function buildCoverageKey(
   event: string,
   to: string,
   guardCase: 'pass' | 'fail' | null,
+  payloadCase: PayloadCase | null,
 ): string {
   const base = `${traitName}:${from}+${event}->${to}`;
-  return guardCase === null ? base : `${base}[${guardCase}]`;
+  // Variant suffix priority: payloadCase wins (it's the more specific
+  // tag). Guarded transitions emit guardCase + payloadCase (pass+success,
+  // fail+guard-fail) — using payloadCase keeps the suffix unambiguous.
+  if (payloadCase !== null) return `${base}[${payloadCase}]`;
+  if (guardCase !== null) return `${base}[${guardCase}]`;
+  return base;
 }

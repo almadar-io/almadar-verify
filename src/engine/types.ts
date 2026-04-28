@@ -16,7 +16,7 @@
  * @packageDocumentation
  */
 
-import type { EdgeWalkTransition, WalkStep } from '@almadar/core';
+import type { EdgeWalkTransition, Event, WalkStep } from '@almadar/core';
 
 /** Configuration for a single trait's walk. */
 export interface TraitWalkConfig {
@@ -25,6 +25,21 @@ export interface TraitWalkConfig {
   transitions: EdgeWalkTransition[];
   /** Route path for this trait's page (e.g., "products", "orders"). */
   route?: string;
+  /**
+   * The event declarations from `trait.stateMachine.events`. Carries
+   * each event's `payloadSchema` so planners can synthesize the
+   * `success`-variant payload per transition (looking up the event by
+   * `transition.event` key). Optional for backward compat with callers
+   * that build `TraitWalkConfig` by hand; `extractTraitWalkConfigs`
+   * always populates it.
+   */
+  events?: ReadonlyArray<Event>;
+  /**
+   * The trait's `linkedEntity` field. Threaded so payload synthesis
+   * can resolve entity-typed fields (e.g. `data: ListItem`) using the
+   * orbital's entity field defs.
+   */
+  linkedEntity?: string;
 }
 
 export type { WalkStep, EdgeWalkTransition };

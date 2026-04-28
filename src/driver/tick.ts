@@ -55,6 +55,7 @@ export async function tick<Ctx extends DriverContext>(
     ...(step.expectedRowChangedFields !== undefined && { expectedRowChangedFields: step.expectedRowChangedFields }),
     ...(step.targetRowId !== undefined && { targetRowId: step.targetRowId }),
     ...(step.confirmEvent !== undefined && { confirmEvent: step.confirmEvent }),
+    ...(step.payloadCase !== undefined && { payloadCase: step.payloadCase }),
   };
 
   // Auto-init: the runtime already fired INIT on mount. Capture the

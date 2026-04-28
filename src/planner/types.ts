@@ -13,6 +13,29 @@ import type { FieldValue, ReplayStep, WalkStep } from '@almadar/core';
 import type { TriggerKind } from '../frame/types.js';
 import type { TraitWalkConfig } from '../engine/types.js';
 import type { EmitDeclaration } from '../browser/catalog-probes.js';
+import type { EntityFieldDef } from '../browser/interaction.js';
+
+/**
+ * v3.14.0 — explicit per-transition variant tag. `planWalk` emits up to
+ * three variants per transition so the validator/guard/state-machine
+ * gets exercised on both the rejection and success paths:
+ *   - `malformed`: empty payload, expect API-boundary validator to
+ *     reject (frame.serverResponse.success = false, state holds).
+ *   - `success`: synthesized payload from `event.payloadSchema`,
+ *     expect transition to fire end-to-end. For guarded transitions
+ *     this also means the guard is satisfied (we merge in
+ *     `buildGuardPayloads.pass`).
+ *   - `guard-fail`: synthesized payload merged with the guard-fail
+ *     payload, expect guard to reject (state holds, no effects fire).
+ *
+ * Pre-v3.14 planWalk had only the `pass`/`fail` guard cases via
+ * `WalkStep.guardCase` and emitted a single empty-payload step for
+ * unguarded transitions, which masked the validator's reject path
+ * entirely. Encoded as a separate field so observers that want to
+ * branch on it can read `frame.cause.payloadCase` directly without
+ * overloading `guardCase`'s pass/fail/null semantics.
+ */
+export type PayloadCase = 'malformed' | 'success' | 'guard-fail';
 
 /**
  * Tag used by observers to group verdicts produced by the v3.0.0
@@ -156,6 +179,14 @@ export interface ExtendedWalkStep extends WalkStep {
    * For `crud-create` / `crud-edit` use `submitEvent` instead.
    */
   confirmEvent?: string;
+
+  /**
+   * v3.14.0: per-transition variant tag from `planWalk`. See
+   * `PayloadCase` jsdoc. Undefined for steps emitted by extension
+   * planners (`planInteractionTests`, `planUserCrudFlow`, etc.) that
+   * don't fan out into malformed/success/guard-fail variants.
+   */
+  payloadCase?: PayloadCase;
 }
 
 /**
@@ -169,6 +200,14 @@ export interface PlanWalkInput {
   trait: TraitWalkConfig;
   /** Whether to prepend the synthetic auto-init step. Default: `true`. */
   includeAutoInit?: boolean;
+  /**
+   * v3.14.0: orbital-wide entity field defs keyed by entity name.
+   * `planWalk` uses this to expand entity-typed payload fields when
+   * synthesizing the `success` variant. Optional — when omitted,
+   * synthesis still works but entity-typed fields fall back to faker
+   * primitives instead of real entity-shaped rows.
+   */
+  entityFieldsByName?: Record<string, EntityFieldDef[]>;
 }
 
 /** Input to `planEmitSweep`. */

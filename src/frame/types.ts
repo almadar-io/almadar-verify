@@ -152,6 +152,14 @@ export interface FrameCause {
    * from `ExtendedWalkStep.confirmEvent`.
    */
   confirmEvent?: string;
+  /**
+   * v3.14.0: per-transition variant tag from `planWalk`. Mirrors
+   * `ExtendedWalkStep.payloadCase`. Lets observers branch on whether
+   * this frame is a malformed-payload reject test, a success-path
+   * test, or a guard-fail test without re-deriving the variant from
+   * `payload` shape.
+   */
+  payloadCase?: 'malformed' | 'success' | 'guard-fail';
 }
 
 /**

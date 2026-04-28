@@ -52,9 +52,13 @@ describe('planWalk', () => {
   });
 
   it('emits stable coverage keys matching frame/keyOf', () => {
+    // v3.14+: non-init transitions get a `[success]` suffix (no
+    // required-payload events in std-browse → no `[malformed]`
+    // variant). The auto-init step keeps the unsuffixed key.
     const steps = planWalk({ trait: stdBrowseTrait });
     for (const step of steps) {
-      const expected = `BrowseItemBrowse:${step.from}+${step.event}->${step.to}`;
+      const suffix = step.triggerKind === 'auto-init' ? '' : '[success]';
+      const expected = `BrowseItemBrowse:${step.from}+${step.event}->${step.to}${suffix}`;
       expect(step.coverageKey).toBe(expected);
     }
   });
@@ -69,17 +73,17 @@ describe('planWalk', () => {
       'BrowseItemBrowse:loading+INIT->loading',
     ); // auto-init
     expect(nonReplayKeys).toContain(
-      'BrowseItemBrowse:loading+BrowseItemLoaded->browsing',
+      'BrowseItemBrowse:loading+BrowseItemLoaded->browsing[success]',
     );
     expect(nonReplayKeys).toContain(
-      'BrowseItemBrowse:loading+BrowseItemLoadFailed->error',
+      'BrowseItemBrowse:loading+BrowseItemLoadFailed->error[success]',
     );
     expect(nonReplayKeys).toContain(
-      'BrowseItemBrowse:browsing+INIT->loading',
-    ); // refresh — invisible pre-fix
+      'BrowseItemBrowse:browsing+INIT->loading[success]',
+    ); // refresh
     expect(nonReplayKeys).toContain(
-      'BrowseItemBrowse:error+INIT->loading',
-    ); // retry — invisible pre-fix
+      'BrowseItemBrowse:error+INIT->loading[success]',
+    ); // retry
   });
 
   it('handles a trait with no INIT transitions', () => {
@@ -95,11 +99,13 @@ describe('planWalk', () => {
     expect(steps[1].event).toBe('GO');
   });
 
-  it('handles a guarded transition by emitting [pass] and [fail] keys', () => {
-    // Guard uses `gt` (one of the operators buildGuardPayloads understands).
-    // The trait needs a way back to `a` so the walker can attempt both
-    // pass and fail cases — without a return edge, after [pass] fires
-    // and lands at `b`, there's no path back to `a` to try [fail].
+  it('handles a guarded transition by emitting [success] and [guard-fail] keys', () => {
+    // v3.14+: guarded transitions emit `[success]` (guard.pass + valid
+    // payload) and `[guard-fail]` (guard.fail + valid payload) variants.
+    // The legacy `[pass]` / `[fail]` suffixes were replaced by the more
+    // explicit payloadCase tags so observers can branch on intent
+    // (validator-reject vs guard-reject vs success path) without
+    // re-deriving from `payload` shape.
     const guarded: EdgeWalkTransition = {
       from: 'a',
       event: 'TRY',
@@ -116,8 +122,8 @@ describe('planWalk', () => {
     const guardedKeys = steps
       .filter((s) => s.event === 'TRY')
       .map((s) => s.coverageKey);
-    expect(guardedKeys).toContain('Guarded:a+TRY->b[pass]');
-    expect(guardedKeys).toContain('Guarded:a+TRY->b[fail]');
+    expect(guardedKeys).toContain('Guarded:a+TRY->b[success]');
+    expect(guardedKeys).toContain('Guarded:a+TRY->b[guard-fail]');
   });
 
   it('std-browse needs no replays — every edge is reachable in greedy DFS', () => {

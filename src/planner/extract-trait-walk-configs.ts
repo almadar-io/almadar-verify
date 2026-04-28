@@ -31,7 +31,11 @@ export function extractTraitWalkConfigs(orbital: OrbitalSchema): TraitWalkConfig
       traitName: trait.name,
       initialState,
       transitions: trait.stateMachine.transitions.map(toEdgeWalkTransition),
+      events: trait.stateMachine.events,
     };
+    if (trait.linkedEntity !== undefined) {
+      config.linkedEntity = trait.linkedEntity;
+    }
     const route = findRouteForTrait(orb, trait.name) ?? findDefaultRoute(orb);
     if (route !== null) {
       (config as { route?: string }).route = route;

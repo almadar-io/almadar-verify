@@ -23,6 +23,7 @@ import { tick } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
+import { collectEntityFields } from '../planner/internal/payload-synth.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
@@ -73,6 +74,10 @@ export async function runVerification<Ctx extends DriverContext>(
 
   // ── Derive everything from the parsed orbital ─────────────────────
   const traits = extractTraitWalkConfigs(input.orbital);
+  // v3.14.0: orbital-wide entity field defs threaded into `planWalk`
+  // for `success`-variant payload synthesis. Built once here so each
+  // planWalk call doesn't re-walk the orbital.
+  const entityFieldsByName = collectEntityFields(input.orbital);
 
   // Planner extension steps — bucketed by trait so the per-trait walk
   // appends them after the base topology walk.
@@ -113,7 +118,7 @@ export async function runVerification<Ctx extends DriverContext>(
     }
     await input.driver.reset(ctx);
 
-    const baseSteps = planWalk({ trait });
+    const baseSteps = planWalk({ trait, entityFieldsByName });
     const extensionSteps = extensionStepsByTrait.get(trait.traitName) ?? [];
     const plan = [...baseSteps, ...extensionSteps];
     wholePlan.push(...plan);
