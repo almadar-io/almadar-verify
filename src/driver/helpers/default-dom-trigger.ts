@@ -93,6 +93,29 @@ export function createDefaultDomTrigger(
     if (step.formData !== undefined && Object.keys(step.formData).length > 0) {
       await page.waitForTimeout(formMountTimeoutMs);
       await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
+
+      const postFillDom = await page.evaluate((sel: string) => {
+        const container = document.querySelector(sel);
+        if (container === null) return { containerFound: false, fields: [] };
+        const inputs = container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select');
+        const fields: Array<{ name: string; type: string; value: string; dataFieldName: string | null }> = [];
+        inputs.forEach((el) => {
+          fields.push({
+            name: el.name ?? '',
+            type: el.tagName.toLowerCase(),
+            value: String(el.value ?? ''),
+            dataFieldName: el.getAttribute('data-field-name'),
+          });
+        });
+        return { containerFound: true, fields };
+      }, formContainerSelector);
+      domLog.debug('dom:fill:post-fill-state', {
+        step: step.coverageKey,
+        testKind: step.testKind,
+        expectedFormData: JSON.stringify(step.formData),
+        containerFound: postFillDom.containerFound,
+        domFields: JSON.stringify(postFillDom.fields),
+      });
     }
 
     // Crud-flow steps: also click the submit/confirm affordance to
@@ -158,16 +181,22 @@ export function createDefaultDomTrigger(
         });
 
         const followUpLocator = page.locator(`[data-testid="action-${followUpEvent}"]`).first();
+        let followUpClickResult: 'clicked' | 'not-visible' | 'errored' = 'not-visible';
         try {
           const visible = await followUpLocator.isVisible({ timeout: 500 });
           if (visible) {
             await followUpLocator.click({ timeout: clickTimeoutMs });
+            followUpClickResult = 'clicked';
           }
         } catch {
-          // Submit/confirm not found — observer will fail with a
-          // diagnostic detail. Don't bail; let the rest of the tick
-          // settle so the snapshot captures the partial state.
+          followUpClickResult = 'errored';
         }
+        domLog.debug('dom:click:follow-up', {
+          step: step.coverageKey,
+          testKind: step.testKind,
+          followUpEvent,
+          result: followUpClickResult,
+        });
 
         // Wait for the persist cascade to actually land instead of
         // guessing wall-clock time. The chain on a CRUD step is
@@ -284,6 +313,37 @@ export function createDefaultDomTrigger(
         // reads it. 250ms is an empirical floor for the post-event
         // settling, NOT a wall-clock guess for the whole cascade.
         await page.waitForTimeout(250);
+
+        const postSubmitTransitions = await page.evaluate((args: { baselineTx: number; followUpEvent: string }) => {
+          const w = window as unknown as {
+            __orbitalVerification?: {
+              getSnapshot?: () => {
+                transitions?: ReadonlyArray<{
+                  event?: string;
+                  traitName?: string;
+                  payload?: unknown;
+                  serverResponse?: { success?: boolean; emittedEvents?: ReadonlyArray<string>; error?: string };
+                }>;
+              };
+            };
+          };
+          const txs = w.__orbitalVerification?.getSnapshot?.()?.transitions ?? [];
+          return txs.slice(args.baselineTx).map((t) => ({
+            event: t.event ?? '',
+            traitName: t.traitName ?? '',
+            payload: t.payload ?? null,
+            serverSuccess: t.serverResponse?.success ?? null,
+            serverEmits: t.serverResponse?.emittedEvents ?? [],
+            serverError: t.serverResponse?.error ?? null,
+          }));
+        }, { baselineTx: baseline.txCount, followUpEvent });
+        domLog.debug('dom:click:save-payload', {
+          step: step.coverageKey,
+          testKind: step.testKind,
+          followUpEvent,
+          postSubmitTransitionCount: postSubmitTransitions.length,
+          postSubmitTransitions: JSON.stringify(postSubmitTransitions),
+        });
       }
       return true;
     }
