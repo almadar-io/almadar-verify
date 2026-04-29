@@ -157,6 +157,13 @@ export interface ReportShape {
     interaction?: Verdict;
     /** v3.7.0 — one verdict per CRUD-flow test (create/edit/delete), combined. */
     crud?: Verdict;
+    /**
+     * Gap #13 — cross-orbital trait isolation. Fails when a dispatch from
+     * trait T in orbital A drives any trait outside A without a declared
+     * cross-orbital `listens` channel. Defense-in-depth alongside the
+     * `.lolo` parser and orb-validator integrity passes.
+     */
+    orbitalIsolation?: Verdict;
   };
   /** Aggregate pass/fail/warning counts in core's canonical shape. */
   summary: VerificationSummary;

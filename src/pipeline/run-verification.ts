@@ -37,6 +37,7 @@ import { assertPortalSlots } from '../observer/assert-portal.js';
 import { assertRefTraitInvariantOverFrames } from '../observer/assert-ref-trait-invariant.js';
 import { probeBindings } from '../observer/probe-bindings.js';
 import { assertClickPathSample } from '../observer/assert-click-path-sample.js';
+import { assertOrbitalIsolation } from '../observer/assert-orbital-isolation.js';
 import { assertContractEventFired } from '../observer/assert-contract-event-fired.js';
 import { assertDataMutation } from '../observer/assert-data-mutation.js';
 import { assertCrudFlow } from '../observer/assert-crud-flow.js';
@@ -78,6 +79,28 @@ export async function runVerification<Ctx extends DriverContext>(
   // for `success`-variant payload synthesis. Built once here so each
   // planWalk call doesn't re-walk the orbital.
   const entityFieldsByName = collectEntityFields(input.orbital);
+
+  // Gap #13: trait-name → owning-orbital-name map. Threaded into `tick`
+  // so the verifier dispatch bridge can construct the qualified
+  // `UI:Orbital.Trait.EVENT` bus key — same scope shape codegen emits
+  // and `useUIEvents` subscribes under. Without this the verifier
+  // dispatches into a bus key no subscriber matches.
+  const orbitalsByTrait = new Map<string, string>();
+  for (const orb of input.orbital.orbitals) {
+    for (const traitRef of orb.traits) {
+      let name: string | undefined;
+      if (typeof traitRef === 'string') {
+        const parts = traitRef.split('.');
+        name = parts[parts.length - 1];
+      } else if ('ref' in traitRef && typeof traitRef.ref === 'string') {
+        const parts = traitRef.ref.split('.');
+        name = traitRef.name ?? parts[parts.length - 1];
+      } else if ('name' in traitRef && typeof traitRef.name === 'string') {
+        name = traitRef.name;
+      }
+      if (name) orbitalsByTrait.set(name, orb.name);
+    }
+  }
 
   // Planner extension steps — bucketed by trait so the per-trait walk
   // appends them after the base topology walk.
@@ -174,7 +197,7 @@ export async function runVerification<Ctx extends DriverContext>(
               triggerKind: 'reconcile',
               coverageKey: `${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[reconcile]`,
             };
-            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep);
+            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait);
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
             prev = reconcileFrame;
@@ -182,7 +205,7 @@ export async function runVerification<Ctx extends DriverContext>(
         }
       }
 
-      const frame: Frame = await tick(input.driver, ctx, prev, step);
+      const frame: Frame = await tick(input.driver, ctx, prev, step, orbitalsByTrait);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';
       log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
@@ -227,6 +250,16 @@ export async function runVerification<Ctx extends DriverContext>(
   const clickPathVerdicts = assertClickPathSample(frames);
   if (clickPathVerdicts.length > 0) {
     verdicts.clickPath = combineVerdicts(clickPathVerdicts, 'click-path');
+  }
+
+  // Gap #13 — orbital isolation. Detects cross-orbital trait
+  // contamination at runtime: a dispatch from trait T in orbital A
+  // shouldn't drive any trait outside A unless an explicit
+  // cross-orbital `listens` channel is declared for that source.
+  // Defense-in-depth alongside the L1/L2 listens-integrity checks.
+  const orbitalIsolationVerdicts = assertOrbitalIsolation(frames, input.orbital);
+  if (orbitalIsolationVerdicts.length > 0) {
+    verdicts.orbitalIsolation = combineVerdicts(orbitalIsolationVerdicts, 'orbital-isolation');
   }
 
   // Phase 4c — contract event coverage.

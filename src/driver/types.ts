@@ -72,8 +72,23 @@ export interface SnapshotResult {
  * own runtime handle without the kernel knowing.
  */
 export interface Driver<Ctx extends DriverContext = DriverContext> {
-  /** Send an event programmatically via the runtime bus. */
-  sendEvent(ctx: Ctx, event: string, payload: EventPayload): Promise<SendResult>;
+  /**
+   * Send an event programmatically via the runtime bus.
+   *
+   * `traitScope` is the qualified `App.Trait` (or `Orbital.Trait`)
+   * scope under which the dispatching trait subscribes — codegen
+   * emits `useUIEvents(enqueueEvent, '${traitScope}', ...)` and the
+   * bus key becomes `UI:${traitScope}.${event}`. The kernel passes
+   * the dispatching step's scope so the bridge can construct the
+   * qualified key (gap #13). Optional for legacy / system-scope
+   * dispatches.
+   */
+  sendEvent(
+    ctx: Ctx,
+    event: string,
+    payload: EventPayload,
+    traitScope?: string,
+  ): Promise<SendResult>;
 
   /** Read the current state for the given trait. Returns null if unknown. */
   getState(ctx: Ctx, traitName: string): Promise<string | null>;

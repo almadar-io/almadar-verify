@@ -43,16 +43,27 @@ export interface PlaywrightBridge {
    * `page.evaluate(() => window.__orbitalVerification.sendEvent(ev, pl))`;
    * consumers can override to add tool-specific cascade capture, etc.
    */
-  sendEvent?(page: Page, event: string, payload: EventPayload): Promise<SendResult>;
+  sendEvent?(
+    page: Page,
+    event: string,
+    payload: EventPayload,
+    traitScope?: string,
+  ): Promise<SendResult>;
   /**
    * Read the current state for a trait. Default reads
    * `window.__orbitalVerification.getTraitState(name)`.
    */
   getState?(page: Page, traitName: string): Promise<string | null>;
   /**
-   * Reset the runtime. Default: page reload + waitForRuntime.
+   * Reset the runtime to a hermetic per-step starting state. The
+   * kernel passes the dispatching trait's owning-page `route` (e.g.
+   * `/deals` for DealBrowse) so the bridge can navigate to the
+   * correct page before each step. Without this, every step reverts
+   * to `baseUrl` (the index route) and sub-traits / non-default-orbital
+   * traits get walked on the wrong page — their `*View` components
+   * aren't mounted there, so the test exercises nothing real.
    */
-  reset?(page: Page): Promise<void>;
+  reset?(page: Page, route?: string): Promise<void>;
   /**
    * Per-trait setup. Default: navigate to `trait.route` if defined.
    */
@@ -84,11 +95,11 @@ export function createPlaywrightDriver(
   const domTriggerImpl = createDefaultDomTrigger();
 
   return {
-    async sendEvent(ctx, event, payload): Promise<SendResult> {
+    async sendEvent(ctx, event, payload, traitScope): Promise<SendResult> {
       if (bridge.sendEvent !== undefined) {
-        return bridge.sendEvent(ctx.page, event, payload);
+        return bridge.sendEvent(ctx.page, event, payload, traitScope);
       }
-      const sent = await dispatchInBrowser(ctx.page, event, payload);
+      const sent = await dispatchInBrowser(ctx.page, event, payload, traitScope);
       const serverResponse: ServerResponseTrace | null = null;
       return { sent, serverResponse };
     },
@@ -123,8 +134,14 @@ export function createPlaywrightDriver(
     },
 
     async reset(ctx) {
+      // Forward the dispatching trait's route so the bridge can land on
+      // the right page. `ctx.trait.route` is populated by
+      // `extractTraitWalkConfigs` (`findRouteForTrait` ?? `findDefaultRoute`),
+      // so every trait knows its owning orbital's page. Without this,
+      // sub-traits / non-default-orbital traits get tested on `/`.
+      const route = ctx.trait?.route;
       if (bridge.reset !== undefined) {
-        return bridge.reset(ctx.page);
+        return bridge.reset(ctx.page, route);
       }
       await ctx.page.reload();
     },
@@ -149,7 +166,12 @@ export function createPlaywrightDriver(
 // page.evaluate callback signature through Playwright's overload
 // chain on every call site (which trips the "excessively deep" check).
 
-async function dispatchInBrowser(page: Page, event: string, payload: EventPayload): Promise<boolean> {
+async function dispatchInBrowser(
+  page: Page,
+  event: string,
+  payload: EventPayload,
+  traitScope?: string,
+): Promise<boolean> {
   // page.evaluate's `arg` parameter wants a serializable type.
   // EventPayload is recursively-typed (values can be EventPayload),
   // which trips Playwright's overload inference into "excessively
@@ -157,14 +179,28 @@ async function dispatchInBrowser(page: Page, event: string, payload: EventPayloa
   // record at the boundary to break the inference chain — the runtime
   // payload IS still EventPayload-shaped, the cast is purely a TS
   // erasure to avoid the overload explosion.
-  const args = { ev: event, pl: payload as unknown as Record<string, unknown> };
+  const args = {
+    ev: event,
+    pl: payload as unknown as Record<string, unknown>,
+    sc: traitScope,
+  };
   const result = await page.evaluate(browserSendEvent, args);
   return result === true;
 }
 
-function browserSendEvent(a: { ev: string; pl: Record<string, unknown> }): boolean {
-  const api = (window as unknown as { __orbitalVerification?: { sendEvent?: (e: string, p?: Record<string, unknown>) => void } }).__orbitalVerification;
+function browserSendEvent(a: {
+  ev: string;
+  pl: Record<string, unknown>;
+  sc: string | undefined;
+}): boolean {
+  const api = (
+    window as unknown as {
+      __orbitalVerification?: {
+        sendEvent?: (e: string, p?: Record<string, unknown>, s?: string) => void;
+      };
+    }
+  ).__orbitalVerification;
   if (api?.sendEvent === undefined) return false;
-  api.sendEvent(a.ev, a.pl);
+  api.sendEvent(a.ev, a.pl, a.sc);
   return true;
 }

@@ -33,9 +33,19 @@ export async function tick<Ctx extends DriverContext>(
   ctx: Ctx,
   prev: Frame | null,
   step: ExtendedWalkStep,
+  orbitalsByTrait?: ReadonlyMap<string, string>,
 ): Promise<Frame> {
   const index = prev === null ? 0 : prev.index + 1;
   const timestamp = Date.now();
+  // Gap #13: qualified `${orbital}.${trait}` scope under which the
+  // dispatching trait subscribes (codegen emits `useUIEvents(_, scope, ...)`).
+  // The bridge concatenates `UI:${scope}.${event}` to match the trait's
+  // own subscription. Lookup uses the schema's `orbitals[].traits[]`
+  // mapping the caller built from `input.orbital`. Undefined when the
+  // trait isn't found; the bridge falls back to bare `UI:${event}`.
+  const orbitalName = orbitalsByTrait?.get(step.traitName);
+  const traitScope =
+    orbitalName !== undefined ? `${orbitalName}.${step.traitName}` : undefined;
 
   const cause: FrameCause = {
     traitName: step.traitName,
@@ -89,7 +99,7 @@ export async function tick<Ctx extends DriverContext>(
   if (step.triggerKind === 'dom') {
     const triggered = await driver.triggerDOM(ctx, step);
     if (!triggered) {
-      const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload));
+      const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload), traitScope);
       serverResponse = send.serverResponse;
     }
   } else {
@@ -97,7 +107,7 @@ export async function tick<Ctx extends DriverContext>(
     // `reconcile` frames are kernel-injected preamble steps walking the
     // trait from its initial state to the next planner step's `from`;
     // semantically identical to `replay` for dispatch purposes.
-    const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload));
+    const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload), traitScope);
     serverResponse = send.serverResponse;
   }
 
