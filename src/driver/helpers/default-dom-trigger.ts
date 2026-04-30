@@ -45,7 +45,12 @@ export interface DefaultDomTriggerOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 2000;
-const DEFAULT_FORM_MOUNT_MS = 600;
+// Wait on the actual `form-section` selector (not a fixed sleep) so the
+// kernel proceeds to fill as soon as the form is visible, and gives a
+// realistic ceiling for animated modal mount + fetch round-trip + React
+// render. Pre-fix this was a 600ms `waitForTimeout`, which raced the
+// modal mount in playground runs.
+const DEFAULT_FORM_MOUNT_MS = 3000;
 const DEFAULT_FORM_SELECTOR = '[data-pattern="form-section"]';
 
 export function createDefaultDomTrigger(
@@ -77,26 +82,73 @@ export function createDefaultDomTrigger(
 
     const locator = page.locator(selector).first();
     let clicked = false;
+    let clickError: string | undefined;
+    let visibleProbe = false;
     try {
-      const visible = await locator.isVisible({ timeout: 250 });
-      if (visible) {
+      visibleProbe = await locator.isVisible({ timeout: 250 });
+      if (visibleProbe) {
         await locator.click({ timeout: clickTimeoutMs });
         clicked = true;
       }
-    } catch {
-      // Affordance not found or not clickable — kernel falls back to sendEvent.
+    } catch (err) {
+      clickError = err instanceof Error ? err.message : String(err);
     }
+    domLog.debug('dom:fill:trigger-click', {
+      step: step.coverageKey,
+      selector,
+      visibleProbe,
+      clicked,
+      ...(clickError !== undefined && { clickError }),
+    });
 
     if (!clicked) return false;
 
-    // Form data present → wait for the form to mount, fill it.
+    // Form data present → wait for the form to actually mount, then fill.
+    // Pre-fix this used a fixed `waitForTimeout(formMountTimeoutMs)` (default
+    // 600ms), but modal + form-section mount latency can exceed that under
+    // animation / async render. The DOM dump on a missed fill showed only
+    // the parent page's patterns — the modal had not yet attached when the
+    // 600ms expired, so the fill walked the still-closed page and noted
+    // `containerVisible: false`. Wait on the actual selector instead so
+    // the verifier sees the form regardless of mount jitter.
     if (step.formData !== undefined && Object.keys(step.formData).length > 0) {
-      await page.waitForTimeout(formMountTimeoutMs);
+      const formAppeared = await page
+        .waitForSelector(formContainerSelector, { state: 'visible', timeout: formMountTimeoutMs })
+        .then(() => true)
+        .catch(() => false);
+      domLog.debug('dom:fill:form-mount-wait', {
+        step: step.coverageKey,
+        selector: formContainerSelector,
+        appeared: formAppeared,
+        timeoutMs: formMountTimeoutMs,
+      });
       await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
 
       const postFillDom = await page.evaluate((sel: string) => {
         const container = document.querySelector(sel);
-        if (container === null) return { containerFound: false, fields: [] };
+        if (container === null) {
+          // Probe ALL data-pattern attributes currently mounted so we can
+          // see whether the form-section wrapper is present under a
+          // different attribute or selector. This is gated on the
+          // not-found path so it only fires when the verifier is
+          // actually blind.
+          const allPatterns = Array.from(document.querySelectorAll<HTMLElement>('[data-pattern]'))
+            .map((el) => ({
+              pattern: el.getAttribute('data-pattern'),
+              tag: el.tagName.toLowerCase(),
+              hasInputs: el.querySelectorAll('input, textarea, select').length,
+              dataFieldNames: Array.from(el.querySelectorAll<HTMLElement>('[data-field-name]'))
+                .map((f) => f.getAttribute('data-field-name')),
+            }));
+          const allInputs = Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select'))
+            .map((el) => ({
+              name: el.name ?? '',
+              tag: el.tagName.toLowerCase(),
+              dataFieldName: el.getAttribute('data-field-name'),
+              visible: !!(el.offsetParent || el.getClientRects().length > 0),
+            }));
+          return { containerFound: false, fields: [], allPatterns, allInputs };
+        }
         const inputs = container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select');
         const fields: Array<{ name: string; type: string; value: string; dataFieldName: string | null }> = [];
         inputs.forEach((el) => {
@@ -107,7 +159,7 @@ export function createDefaultDomTrigger(
             dataFieldName: el.getAttribute('data-field-name'),
           });
         });
-        return { containerFound: true, fields };
+        return { containerFound: true, fields, allPatterns: [], allInputs: [] };
       }, formContainerSelector);
       domLog.debug('dom:fill:post-fill-state', {
         step: step.coverageKey,
@@ -115,6 +167,10 @@ export function createDefaultDomTrigger(
         expectedFormData: JSON.stringify(step.formData),
         containerFound: postFillDom.containerFound,
         domFields: JSON.stringify(postFillDom.fields),
+        ...(!postFillDom.containerFound && {
+          allPatterns: JSON.stringify(postFillDom.allPatterns),
+          allInputs: JSON.stringify(postFillDom.allInputs),
+        }),
       });
     }
 
