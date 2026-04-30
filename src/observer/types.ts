@@ -164,6 +164,12 @@ export interface ReportShape {
      * `.lolo` parser and orb-validator integrity passes.
      */
     orbitalIsolation?: Verdict;
+    /**
+     * Gap #0 — bus:click-no-listener. Fails when a DOM click emits a bus
+     * event with zero matching trait subscribers (neither self-targeting
+     * transition nor cross-trait `listens` cascade).
+     */
+    clickNoListener?: Verdict;
   };
   /** Aggregate pass/fail/warning counts in core's canonical shape. */
   summary: VerificationSummary;

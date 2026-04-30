@@ -43,6 +43,7 @@ import { assertDataMutation } from '../observer/assert-data-mutation.js';
 import { assertCrudFlow } from '../observer/assert-crud-flow.js';
 import { assertPortalPerStep } from '../observer/assert-portal-per-step.js';
 import { assertInteractionPattern } from '../observer/assert-interaction-pattern.js';
+import { assertClickNoListener } from '../observer/assert-click-no-listener.js';
 import { report } from '../observer/report.js';
 import type { Verdict } from '../observer/types.js';
 import type { RunVerificationInput, RunVerificationOutput } from './types.js';
@@ -260,6 +261,13 @@ export async function runVerification<Ctx extends DriverContext>(
   const orbitalIsolationVerdicts = assertOrbitalIsolation(frames, input.orbital);
   if (orbitalIsolationVerdicts.length > 0) {
     verdicts.orbitalIsolation = combineVerdicts(orbitalIsolationVerdicts, 'orbital-isolation');
+  }
+
+  // Gap #0 — bus:click-no-listener. Fails when a DOM click emits a bus
+  // event with zero matching trait subscribers.
+  const clickNoListenerVerdicts = assertClickNoListener(frames, input.orbital);
+  if (clickNoListenerVerdicts.length > 0) {
+    verdicts.clickNoListener = combineVerdicts(clickNoListenerVerdicts, 'click-no-listener');
   }
 
   // Phase 4c — contract event coverage.
