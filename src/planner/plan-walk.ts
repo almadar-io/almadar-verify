@@ -41,7 +41,7 @@
  * @packageDocumentation
  */
 
-import { buildGuardPayloads } from '@almadar/core';
+import { buildGuardPayloads, type EventPayload } from '@almadar/core';
 import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PayloadCase, PlanWalkInput } from './types.js';
 import {
@@ -95,7 +95,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
         transition,
         guardCase: 'pass',
         payloadCase: 'success',
-        payload: { ...successPayload, ...guardPayloads.pass },
+        payload: { ...successPayload, ...guardPayloads.pass } as EventPayload,
         entityFieldsByName,
       }));
 
@@ -104,7 +104,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
         transition,
         guardCase: 'fail',
         payloadCase: 'guard-fail',
-        payload: { ...successPayload, ...guardPayloads.fail },
+        payload: { ...successPayload, ...guardPayloads.fail } as EventPayload,
         entityFieldsByName,
       }));
       continue;
@@ -139,7 +139,7 @@ interface MakeStepInput {
   transition: PlanWalkInput['trait']['transitions'][number];
   guardCase: 'pass' | 'fail' | null;
   payloadCase: PayloadCase;
-  payload: Record<string, unknown>;
+  payload: EventPayload;
   entityFieldsByName: Record<string, EntityFieldDef[]>;
 }
 
