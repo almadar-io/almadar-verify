@@ -95,14 +95,69 @@ export async function takeScreenshot(
       }
     }
 
-    // Fallback to page screenshot. `fullPage: true` so anything in a
-    // scrollable area below the viewport is captured — molecules like
-    // std-filtered-list compose multiple traits vertically (Search +
-    // Filter + Browse + Pagination), and viewport-only screenshots cut
-    // off the lower traits, masking gaps in their rendering. Playwright
-    // scrolls + stitches the full document; cost is a slightly larger
-    // PNG and ~50ms extra per frame, both acceptable for verifier runs.
+    // Fallback to page screenshot. `fullPage: true` only captures
+    // `document.documentElement.scrollHeight`, which is bounded by the
+    // viewport when the app puts its content inside an inner scrollable
+    // container (`<main style="overflow:auto; height:100vh">` and the
+    // like). Playwright never sees the overflow because it lives inside
+    // the container, not the document.
+    //
+    // Workaround: before capture, walk the DOM for any element where
+    // `overflow{,Y} ∈ {auto,scroll}` AND `scrollHeight > clientHeight`,
+    // then temporarily flatten it (`overflow: visible`, `height: auto`,
+    // `maxHeight: none`) so its content joins the document flow. After
+    // Playwright stitches the screenshot, restore every mutated style.
+    // Result: a single PNG that contains the entire scrollable area
+    // even when the app uses a `100vh` shell with inner scrollers.
+    const restoreSnapshot = await page.evaluate(() => {
+      type Snap = { el: Element; style: string };
+      const snaps: Snap[] = [];
+      const walk = (el: Element): void => {
+        const cs = getComputedStyle(el);
+        const overflowsY =
+          cs.overflowY === 'auto' || cs.overflowY === 'scroll' ||
+          cs.overflow === 'auto' || cs.overflow === 'scroll';
+        const e = el as HTMLElement;
+        if (overflowsY && e.scrollHeight > e.clientHeight + 4 && e.clientHeight > 0) {
+          snaps.push({ el, style: e.getAttribute('style') ?? '' });
+          e.style.overflow = 'visible';
+          e.style.overflowY = 'visible';
+          e.style.height = 'auto';
+          e.style.maxHeight = 'none';
+        }
+        for (const child of Array.from(el.children)) walk(child);
+      };
+      // Also let html/body grow with the unrolled content.
+      const html = document.documentElement;
+      const body = document.body;
+      snaps.push({ el: html, style: html.getAttribute('style') ?? '' });
+      snaps.push({ el: body, style: body.getAttribute('style') ?? '' });
+      html.style.height = 'auto';
+      html.style.overflow = 'visible';
+      body.style.height = 'auto';
+      body.style.minHeight = 'auto';
+      body.style.overflow = 'visible';
+      walk(html);
+      // Stash on window for the restore round-trip (DOM nodes don't
+      // serialize across page.evaluate boundaries).
+      (window as unknown as { __screenshotRestoreSnaps__: Snap[] }).__screenshotRestoreSnaps__ = snaps;
+      return snaps.length;
+    }).catch(() => 0);
+
     await page.screenshot({ path: outputPath, fullPage: true });
+
+    if (restoreSnapshot > 0) {
+      await page.evaluate(() => {
+        const snaps = (window as unknown as { __screenshotRestoreSnaps__?: Array<{ el: Element; style: string }> }).__screenshotRestoreSnaps__;
+        if (!snaps) return;
+        for (const { el, style } of snaps) {
+          if (style) el.setAttribute('style', style);
+          else el.removeAttribute('style');
+        }
+        delete (window as unknown as { __screenshotRestoreSnaps__?: unknown }).__screenshotRestoreSnaps__;
+      }).catch(() => undefined);
+    }
+
     return outputPath;
   } catch {
     return null;
