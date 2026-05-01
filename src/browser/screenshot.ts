@@ -95,8 +95,14 @@ export async function takeScreenshot(
       }
     }
 
-    // Fallback to page screenshot
-    await page.screenshot({ path: outputPath, fullPage: false });
+    // Fallback to page screenshot. `fullPage: true` so anything in a
+    // scrollable area below the viewport is captured — molecules like
+    // std-filtered-list compose multiple traits vertically (Search +
+    // Filter + Browse + Pagination), and viewport-only screenshots cut
+    // off the lower traits, masking gaps in their rendering. Playwright
+    // scrolls + stitches the full document; cost is a slightly larger
+    // PNG and ~50ms extra per frame, both acceptable for verifier runs.
+    await page.screenshot({ path: outputPath, fullPage: true });
     return outputPath;
   } catch {
     return null;
