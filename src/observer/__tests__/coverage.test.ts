@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { VerificationSnapshot } from '@almadar/core';
+import type { TransitionTrace, VerificationSnapshot } from '@almadar/core';
 import { coverage } from '../coverage.js';
 import type { Frame, FrameCause } from '../../frame/types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
@@ -13,7 +13,25 @@ const emptySnapshot: VerificationSnapshot = {
 };
 const emptyDom = { url: '', rowsByEntity: {}, portals: [], visibleTextSample: '' };
 
-function frame(cause: FrameCause, index: number): Frame {
+function snapshotWithTransition(
+  traitName: string,
+  from: string,
+  event: string,
+  to: string,
+): VerificationSnapshot {
+  const tx: TransitionTrace = {
+    id: `tx-${traitName}-${event}`,
+    traitName,
+    from,
+    to,
+    event,
+    effects: [],
+    timestamp: 2000,
+  };
+  return { ...emptySnapshot, transitions: [tx] };
+}
+
+function frame(cause: FrameCause, index: number, snapshot: VerificationSnapshot = emptySnapshot): Frame {
   return {
     index,
     timestamp: 1000 + index,
@@ -22,7 +40,7 @@ function frame(cause: FrameCause, index: number): Frame {
     stateAfter: cause.to,
     payload: {},
     eventFired: cause.event,
-    runtimeSnapshot: emptySnapshot,
+    runtimeSnapshot: snapshot,
     domSnapshot: emptyDom,
     consoleDelta: { added: [], newErrors: 0, newWarnings: 0 },
     eventLogDelta: { added: [] },
@@ -162,5 +180,136 @@ describe('coverage', () => {
     expect(c.totalItems).toBe(0);
     expect(c.coveredItems).toBe(0);
     expect(c.ratio).toBe(0);
+  });
+
+  // V-3: server-emit cascade credit. The walker can't directly dispatch
+  // events that have no DOM affordance (e.g. XLoaded fired by a fetch's
+  // emit.success). Those transitions still land in the cascading frame's
+  // runtimeSnapshot.transitions[]. Coverage should credit a planned key
+  // when the transition is observed there, even if no frame's cause is
+  // that transition.
+  it('credits planned key when transition fires on the server cascade (success variant)', () => {
+    const plan: ExtendedWalkStep[] = [
+      step('Browse', 'loading', 'INIT', 'loading', 'auto-init'),
+      // Plan key the walker can't dispatch — emit.success only.
+      {
+        ...step('Browse', 'loading', 'XLoaded', 'browsing', 'bus'),
+        coverageKey: 'Browse:loading+XLoaded->browsing[success]',
+        payloadCase: 'success',
+      },
+    ];
+    const autoInit = frame({
+      traitName: 'Browse',
+      from: 'loading',
+      event: 'INIT',
+      to: 'loading',
+      guardCase: null,
+      triggerKind: 'auto-init',
+      isRepositioning: false,
+    }, 0);
+    // Auto-init's snapshot contains the cascading XLoaded transition
+    // — the fetch's emit.success fired and was recorded.
+    const withCascade = frame(
+      {
+        traitName: 'Other',
+        from: 'a',
+        event: 'TICK',
+        to: 'a',
+        guardCase: null,
+        triggerKind: 'bus',
+        isRepositioning: false,
+      },
+      1,
+      snapshotWithTransition('Browse', 'loading', 'XLoaded', 'browsing'),
+    );
+    const c = coverage([autoInit, withCascade], plan);
+    expect(c.totalItems).toBe(2);
+    expect(c.coveredItems).toBe(2);
+    expect(c.uncovered).toEqual([]);
+  });
+
+  it('credits planned base key (no payload variant) when transition fires on cascade', () => {
+    const plan: ExtendedWalkStep[] = [
+      step('Browse', 'loading', 'XLoaded', 'browsing', 'bus'),
+    ];
+    const f = frame(
+      {
+        traitName: 'Browse',
+        from: 'loading',
+        event: 'INIT',
+        to: 'loading',
+        guardCase: null,
+        triggerKind: 'auto-init',
+        isRepositioning: false,
+      },
+      0,
+      snapshotWithTransition('Browse', 'loading', 'XLoaded', 'browsing'),
+    );
+    const c = coverage([f], plan);
+    expect(c.coveredItems).toBe(1);
+  });
+
+  it('cascade credit does NOT over-credit: only planned keys are added', () => {
+    const plan: ExtendedWalkStep[] = [
+      step('Browse', 'loading', 'INIT', 'loading', 'auto-init'),
+    ];
+    const f = frame(
+      {
+        traitName: 'Browse',
+        from: 'loading',
+        event: 'INIT',
+        to: 'loading',
+        guardCase: null,
+        triggerKind: 'auto-init',
+        isRepositioning: false,
+      },
+      0,
+      // Cascade includes XLoaded but the plan never asked for it —
+      // must NOT inflate the numerator beyond the planned key.
+      snapshotWithTransition('Browse', 'loading', 'XLoaded', 'browsing'),
+    );
+    const c = coverage([f], plan);
+    expect(c.totalItems).toBe(1);
+    expect(c.coveredItems).toBe(1);
+  });
+
+  it('cascade credit does not double-count a key the walker also dispatched directly', () => {
+    const plan: ExtendedWalkStep[] = [
+      step('Browse', 'loading', 'INIT', 'loading', 'auto-init'),
+      {
+        ...step('Browse', 'loading', 'XLoaded', 'browsing', 'bus'),
+        coverageKey: 'Browse:loading+XLoaded->browsing[success]',
+        payloadCase: 'success',
+      },
+    ];
+    // Walker dispatched XLoaded directly AND it also landed in the
+    // cascade — still 1 covered item, not 2.
+    const f1 = frame({
+      traitName: 'Browse',
+      from: 'loading',
+      event: 'INIT',
+      to: 'loading',
+      guardCase: null,
+      triggerKind: 'auto-init',
+      isRepositioning: false,
+      coverageKey: 'Browse:loading+INIT->loading',
+    }, 0);
+    const f2 = frame(
+      {
+        traitName: 'Browse',
+        from: 'loading',
+        event: 'XLoaded',
+        to: 'browsing',
+        guardCase: null,
+        triggerKind: 'bus',
+        isRepositioning: false,
+        coverageKey: 'Browse:loading+XLoaded->browsing[success]',
+        payloadCase: 'success',
+      },
+      1,
+      snapshotWithTransition('Browse', 'loading', 'XLoaded', 'browsing'),
+    );
+    const c = coverage([f1, f2], plan);
+    expect(c.coveredItems).toBe(2);
   });
 });

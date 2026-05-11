@@ -9,6 +9,17 @@
  * the orbital-vs-runtime discrepancy at its root: there is no place
  * for the two consumer tools to diverge.
  *
+ * Server-emit cascade credit: in addition to crediting keys via
+ * `keyOf(frame.cause)` (transitions the walker explicitly dispatched),
+ * the observer also credits planned keys whose transitions fired on the
+ * server cascade — events like `XLoaded` from a fetch's `emit.success`
+ * that have no DOM affordance for the walker to dispatch directly but
+ * land as observable transitions inside some other frame's
+ * `runtimeSnapshot.transitions[]`. Without this, the canonical
+ * `loading + XLoaded -> browsing[success]` edge stays uncovered on
+ * every fetch-driven atom even though it demonstrably ran. Matched
+ * against `planKeys` so we never over-credit unplanned transitions.
+ *
  * Pure.
  *
  * @packageDocumentation
@@ -25,16 +36,33 @@ export function coverage(
   frames: ReadonlyArray<Frame>,
   plan: ReadonlyArray<ExtendedWalkStep>,
 ): CoverageMetric {
-  // Numerator: every coverage key the kernel actually produced.
+  // Denominator: every key the plan declared.
+  const planKeys = new Set<string>();
+  for (const step of plan) {
+    planKeys.add(step.coverageKey);
+  }
+
+  // Numerator (1/2): every coverage key the kernel observed via a
+  // frame whose cause IS that transition.
   const coveredSet = new Set<string>();
   for (const frame of frames) {
     coveredSet.add(keyOf(frame.cause));
   }
 
-  // Denominator: every key the plan declared.
-  const planKeys = new Set<string>();
-  for (const step of plan) {
-    planKeys.add(step.coverageKey);
+  // Numerator (2/2): server-emit cascade credit. Walk every observed
+  // transition across all frames' runtime snapshots. Build candidate
+  // keys in the same shape planWalk emits (base + [success] variant for
+  // unguarded transitions), and credit any that matches a planned key.
+  // Guard / malformed / guard-fail variants are intentionally NOT
+  // credited this way — those test the validator's reject paths and a
+  // healthy cascade observation says nothing about them.
+  for (const frame of frames) {
+    for (const tx of frame.runtimeSnapshot.transitions) {
+      const base = `${tx.traitName}:${tx.from}+${tx.event}->${tx.to}`;
+      if (planKeys.has(base)) coveredSet.add(base);
+      const withSuccess = `${base}[success]`;
+      if (planKeys.has(withSuccess)) coveredSet.add(withSuccess);
+    }
   }
 
   // Intersection — only credit keys that were both planned and observed.

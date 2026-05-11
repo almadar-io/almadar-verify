@@ -110,10 +110,15 @@ interface FrameInput {
    *  `snapshotWithCascadingPersistor` to simulate a real CRUD flow
    *  where the persist response lands on a sibling transition. */
   snapshot?: VerificationSnapshot;
+  /** Override the dom snapshot's entity key. Defaults to the cause's
+   *  expectedRowDelta.entityName. Used when the frame's cause is NOT a
+   *  CRUD step (e.g. a cascading Browse listener frame) but the dom
+   *  must still report rows under the CRUD entity name. */
+  domEntityName?: string;
 }
 
 function buildFrame(input: FrameInput): Frame {
-  const entityName = input.cause.expectedRowDelta?.entityName ?? '';
+  const entityName = input.domEntityName ?? input.cause.expectedRowDelta?.entityName ?? '';
   return {
     index: input.index,
     timestamp: 1000 + input.index,
@@ -504,6 +509,349 @@ describe('assertCrudFlow', () => {
     const v = assertCrudFlow([f]);
     expect(v[0].passed).toBe(true);
     expect(v[0].detail).toMatch(/emit ✓ \(ITEM_CREATED\)/);
+  });
+
+  // V-1 Path C: persist→emit→listen→fetch cascade may settle AFTER the
+  // modal-trait step's snapshot is captured. The step frame's own
+  // entityChanges then shows nothing; the cascading fetch's data
+  // reduces into the Browse trait one frame later. Cascade-aware Axis 2
+  // forward-scans subsequent frames (bounded by MAX_CASCADE_LOOKAHEAD
+  // and stopping at the next CRUD step / reconcile) for the matching
+  // EntityChange. The DOM count delta is then read off the same settled
+  // frame so all three axes line up.
+  it('crud-create cascade-aware: passes when entityChange + DOM land 2 frames later', () => {
+    const baselinePrev = buildFrame({
+      index: 0,
+      cause: {
+        traitName: 'X',
+        from: 'init',
+        event: 'INIT',
+        to: 'browsing',
+        guardCase: null,
+        triggerKind: 'auto-init',
+        isRepositioning: false,
+      },
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+      domEntityName: 'ListItem',
+    });
+    const crudCreateCause = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'ITEM_CREATED',
+      expectedRowContent: { name: 'New row' },
+    });
+    // Step frame: no entity change yet (persist in flight); emit lands
+    // on cascading persistor transition though.
+    const stepFrame = buildFrame({
+      index: 1,
+      cause: crudCreateCause,
+      entityChanges: [],
+      domCount: 0,
+      emitted: ['ListItemEditSaved'],
+      snapshot: snapshotWithCascadingPersistor(['ITEM_CREATED']),
+    });
+    // Intermediate frame: cascade still in flight.
+    const intermediate = buildFrame({
+      index: 2,
+      cause: {
+        traitName: 'ListItemBrowse',
+        from: 'browsing',
+        event: 'INIT',
+        to: 'loading',
+        guardCase: null,
+        triggerKind: 'bus',
+        isRepositioning: false,
+      },
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+      domEntityName: 'ListItem',
+    });
+    // Settled frame: cascading fetch landed, entityChange shows added row.
+    const settled = buildFrame({
+      index: 3,
+      cause: {
+        traitName: 'ListItemBrowse',
+        from: 'loading',
+        event: 'ListItemLoaded',
+        to: 'browsing',
+        guardCase: null,
+        triggerKind: 'bus',
+        isRepositioning: false,
+      },
+      entityChanges: [createChange('ListItem', [{ id: 'new-1', name: 'New row' }])],
+      domCount: 1,
+      emitted: [],
+      domEntityName: 'ListItem',
+    });
+    const v = assertCrudFlow([baselinePrev, stepFrame, intermediate, settled]);
+    expect(v).toHaveLength(1);
+    expect(v[0].passed).toBe(true);
+    expect(v[0].detail).toMatch(/emit ✓ \(ITEM_CREATED\)/);
+    expect(v[0].detail).toMatch(/diff ✓/);
+    expect(v[0].detail).toMatch(/dom ✓.*0→1/);
+    expect(v[0].evidence?.frameIndices).toEqual([0, 1, 3]);
+  });
+
+  it('crud-edit cascade-aware: credits a row change settling 1 frame later', () => {
+    const editCause = crudCause({
+      testKind: 'crud-edit',
+      event: 'EDIT',
+      entityName: 'ListItem',
+      delta: 0,
+      expectedSuccessEvent: 'ITEM_UPDATED',
+      expectedRowChangedFields: ['name'],
+    });
+    const baselinePrev = buildFrame({
+      index: 0,
+      cause: { ...editCause, testKind: undefined } as unknown as FrameCause,
+      entityChanges: [],
+      domCount: 1,
+      emitted: [],
+    });
+    const stepFrame = buildFrame({
+      index: 1,
+      cause: editCause,
+      // No change visible immediately; emit lives on the cascading persistor.
+      entityChanges: [],
+      domCount: 1,
+      emitted: ['ListItemEditSaved'],
+      snapshot: snapshotWithCascadingPersistor(['ITEM_UPDATED']),
+    });
+    const settled = buildFrame({
+      index: 2,
+      cause: {
+        traitName: 'ListItemBrowse',
+        from: 'loading',
+        event: 'ListItemLoaded',
+        to: 'browsing',
+        guardCase: null,
+        triggerKind: 'bus',
+        isRepositioning: false,
+      },
+      entityChanges: [updateChange(
+        'ListItem',
+        { id: '1', name: 'Old' },
+        { id: '1', name: 'New' },
+        ['name'],
+      )],
+      domCount: 1,
+      emitted: [],
+      domEntityName: 'ListItem',
+    });
+    const v = assertCrudFlow([baselinePrev, stepFrame, settled]);
+    expect(v).toHaveLength(1);
+    expect(v[0].passed).toBe(true);
+    expect(v[0].detail).toMatch(/diff ✓.*fields=name/);
+  });
+
+  it('crud-delete cascade-aware: credits a row removal settling later', () => {
+    const deleteCause = crudCause({
+      testKind: 'crud-delete',
+      event: 'DELETE',
+      entityName: 'ListItem',
+      delta: -1,
+      expectedSuccessEvent: 'ITEM_DELETED',
+      targetRowId: '1',
+    });
+    const baselinePrev = buildFrame({
+      index: 0,
+      cause: { ...deleteCause, testKind: undefined } as unknown as FrameCause,
+      entityChanges: [],
+      domCount: 1,
+      emitted: [],
+    });
+    const stepFrame = buildFrame({
+      index: 1,
+      cause: deleteCause,
+      entityChanges: [],
+      domCount: 1,
+      emitted: [],
+      snapshot: snapshotWithCascadingPersistor(['ITEM_DELETED']),
+    });
+    const settled = buildFrame({
+      index: 2,
+      cause: {
+        traitName: 'ListItemBrowse',
+        from: 'loading',
+        event: 'ListItemLoaded',
+        to: 'browsing',
+        guardCase: null,
+        triggerKind: 'bus',
+        isRepositioning: false,
+      },
+      entityChanges: [deleteChange('ListItem', [{ id: '1', name: 'X' }])],
+      domCount: 0,
+      emitted: [],
+      domEntityName: 'ListItem',
+    });
+    const v = assertCrudFlow([baselinePrev, stepFrame, settled]);
+    expect(v[0].passed).toBe(true);
+    expect(v[0].detail).toMatch(/diff ✓/);
+    expect(v[0].detail).toMatch(/dom ✓.*1→0/);
+  });
+
+  it('cascade-aware scan stops at the next CRUD step boundary (no over-credit)', () => {
+    const createA = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE_A',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'A_CREATED',
+    });
+    const createB = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE_B',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'B_CREATED',
+    });
+    const baseline = buildFrame({
+      index: 0,
+      cause: { ...createA, testKind: undefined } as unknown as FrameCause,
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+    });
+    // Step A: emit lands on cascade but no entity change in this frame.
+    const stepA = buildFrame({
+      index: 1,
+      cause: createA,
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+      snapshot: snapshotWithCascadingPersistor(['A_CREATED']),
+    });
+    // Step B starts before A's cascade settles. The scan must stop at B
+    // — its entityChange belongs to step B, not step A.
+    const stepB = buildFrame({
+      index: 2,
+      cause: createB,
+      entityChanges: [createChange('ListItem', [{ id: 'b-1' }])],
+      domCount: 1,
+      emitted: ['B_CREATED'],
+      snapshot: snapshotWithCascadingPersistor(['B_CREATED']),
+    });
+    const v = assertCrudFlow([baseline, stepA, stepB]);
+    expect(v).toHaveLength(2);
+    // Step A's diff axis must fail — its cascade never settled before
+    // the boundary of step B.
+    expect(v[0].passed).toBe(false);
+    expect(v[0].detail).toMatch(/CREATE_A.*diff ✗/);
+    // Step B passes on its own (immediate-frame entityChange).
+    expect(v[1].passed).toBe(true);
+  });
+
+  it('cascade-aware scan stops at reconcile preamble (next-step boundary)', () => {
+    const createCause = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'ITEM_CREATED',
+    });
+    const baseline = buildFrame({
+      index: 0,
+      cause: { ...createCause, testKind: undefined } as unknown as FrameCause,
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+    });
+    const stepFrame = buildFrame({
+      index: 1,
+      cause: createCause,
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+      snapshot: snapshotWithCascadingPersistor(['ITEM_CREATED']),
+    });
+    // Reconcile preamble for the next step — kernel reset before
+    // walking to next-step.from. The entityChange here belongs to the
+    // RESET, not to the cascade, and must NOT be credited.
+    const reconcile = buildFrame({
+      index: 2,
+      cause: {
+        traitName: 'X',
+        from: 'init',
+        event: 'RESET',
+        to: 'init',
+        guardCase: null,
+        triggerKind: 'reconcile',
+        isRepositioning: true,
+      },
+      entityChanges: [createChange('ListItem', [{ id: 'seeded-1' }])],
+      domCount: 1,
+      emitted: [],
+    });
+    const v = assertCrudFlow([baseline, stepFrame, reconcile]);
+    expect(v[0].passed).toBe(false);
+    expect(v[0].detail).toMatch(/diff ✗/);
+  });
+
+  it('cascade-aware scan respects MAX_CASCADE_LOOKAHEAD (no infinite forward search)', () => {
+    const createCause = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'ITEM_CREATED',
+    });
+    const baseline = buildFrame({
+      index: 0,
+      cause: { ...createCause, testKind: undefined } as unknown as FrameCause,
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+    });
+    const step = buildFrame({
+      index: 1,
+      cause: createCause,
+      entityChanges: [],
+      domCount: 0,
+      emitted: ['ITEM_CREATED'],
+    });
+    // 5 follow-up frames all with no entityChange — past the window.
+    // Then one with the entityChange — should NOT be credited.
+    const farFrames: Frame[] = [];
+    for (let k = 0; k < 5; k++) {
+      farFrames.push(buildFrame({
+        index: 2 + k,
+        cause: {
+          traitName: 'X',
+          from: 's',
+          event: 'TICK',
+          to: 's',
+          guardCase: null,
+          triggerKind: 'bus',
+          isRepositioning: false,
+        },
+        entityChanges: [],
+        domCount: 0,
+        emitted: [],
+      }));
+    }
+    const beyondWindow = buildFrame({
+      index: 7,
+      cause: {
+        traitName: 'X',
+        from: 's',
+        event: 'TICK',
+        to: 's',
+        guardCase: null,
+        triggerKind: 'bus',
+        isRepositioning: false,
+      },
+      entityChanges: [createChange('ListItem', [{ id: 'late-1' }])],
+      domCount: 1,
+      emitted: [],
+    });
+    const v = assertCrudFlow([baseline, step, ...farFrames, beyondWindow]);
+    expect(v[0].passed).toBe(false);
+    expect(v[0].detail).toMatch(/diff ✗/);
   });
 
   it('fails when expectedSuccessEvent is missing on the cause (planner bug)', () => {

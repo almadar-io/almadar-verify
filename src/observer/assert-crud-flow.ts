@@ -35,8 +35,23 @@
  */
 
 import type { EntityRow, FieldValue } from '@almadar/core';
-import type { Frame } from '../frame/types.js';
+import type { Frame, EntityChange } from '../frame/types.js';
 import type { Verdict } from './types.js';
+
+/**
+ * Bound on the forward-scan window used to credit cascade landings.
+ * persist→emit→listen→fetch sometimes settles AFTER the modal-trait
+ * step's snapshot is captured, so Axis 2 (entity diff) and Axis 3 (DOM
+ * count) can show no change on the step's own frame but DO show it 1-3
+ * frames later when the cascading fetch's data has reduced into the
+ * Browse trait. We cap the scan at MAX_CASCADE_LOOKAHEAD frames AND
+ * stop at the next CRUD step or reconcile preamble — those boundaries
+ * mark a new logical step, so anything past them belongs to a different
+ * verdict.
+ */
+const MAX_CASCADE_LOOKAHEAD = 4;
+
+type CrudTestKind = 'crud-create' | 'crud-edit' | 'crud-delete';
 
 export function assertCrudFlow(frames: ReadonlyArray<Frame>): Verdict[] {
   const verdicts: Verdict[] = [];
@@ -64,7 +79,6 @@ export function assertCrudFlow(frames: ReadonlyArray<Frame>): Verdict[] {
     }
 
     const entityName = expected.entityName;
-    const change = frame.entityChanges.find((c) => c.entityName === entityName);
 
     // Axis 1 — emit event landed on server cascade. The CRUD-step frame's
     // own `serverResponse` is the modal trait's response (e.g. ListItemEdit
@@ -82,17 +96,29 @@ export function assertCrudFlow(frames: ReadonlyArray<Frame>): Verdict[] {
     const emitOk = emittedOnServer.includes(successEvent);
 
     // Axis 2 — entity diff matches the expected per-kind shape +
-    //          row content.
-    const diffResult = checkEntityDiff(testKind, frame, change, expected.delta);
+    //          row content. Cascade-aware: when the immediate frame's
+    //          entityChange is absent or doesn't match the per-kind
+    //          shape, scan a bounded window of subsequent frames for
+    //          the cascade landing. The persist's success emit (Axis 1)
+    //          fires on a cascading transition whose follow-up fetch
+    //          may settle 1-3 frames later; without forward-scanning,
+    //          a healthy CRUD round-trip reads as `diff ✗`.
+    const cascade = findCrudCascadeLanding(frames, i, entityName, testKind, expected.delta);
+    const settledFrame = cascade?.frame ?? frame;
+    const settledChange = cascade?.change
+      ?? frame.entityChanges.find((c) => c.entityName === entityName);
+    const diffResult = checkEntityDiff(testKind, frame, settledChange, expected.delta);
 
-    // Axis 3 — DOM list count delta matches expected.
+    // Axis 3 — DOM list count delta matches expected. Baseline is the
+    // frame immediately before the CRUD step (the user's pre-action
+    // view); the "after" reading comes from the same cascade-aware
+    // settled frame Axis 2 used, so all three axes line up on the same
+    // observed moment.
     const prevFrame = i > 0 ? frames[i - 1] : null;
-    const domResult = checkDomListDelta(prevFrame, frame, entityName, expected.delta);
+    const domResult = checkDomListDelta(prevFrame, settledFrame, entityName, expected.delta);
 
     const allOk = emitOk && diffResult.ok && domResult.ok;
-    const evidenceIndices = prevFrame !== null
-      ? [prevFrame.index, frame.index]
-      : [frame.index];
+    const evidenceIndices = buildEvidenceIndices(prevFrame, frame, settledFrame);
 
     if (allOk) {
       verdicts.push({
@@ -134,6 +160,11 @@ interface AxisResult {
   detail: string;
 }
 
+interface CascadeLanding {
+  frame: Frame;
+  change: EntityChange;
+}
+
 /**
  * Scan `frame.runtimeSnapshot.transitions` for a `serverResponse.emittedEvents`
  * that includes `successEvent`. Returns the matching response's
@@ -156,8 +187,88 @@ function findServerEmitInSnapshot(
   return null;
 }
 
+/**
+ * Search frames `[startIndex, startIndex+MAX_CASCADE_LOOKAHEAD]` for the
+ * first frame whose `entityChanges` carries an `EntityChange` for
+ * `entityName` whose shape matches the expected CRUD outcome. The
+ * persist's success emit (Axis 1) cascades through Browse.listens → INIT →
+ * fetch → re-render; the fetch can settle 1-3 frames after the modal
+ * step's snapshot, so the per-kind diff may only appear on a later
+ * frame. Returning the first matching frame lets Axis 2 + Axis 3
+ * pick the same observation point and credit a healthy round-trip.
+ *
+ * Stops at the next CRUD step or the next `reconcile` preamble — those
+ * boundaries mark a new logical step, so anything past them belongs to a
+ * different verdict and would over-credit if scanned. Returns `null`
+ * when no settled landing exists in the window, leaving the caller to
+ * fall back to the immediate frame's (likely empty) entityChanges and
+ * emit the existing `no entityChange recorded` failure.
+ */
+function findCrudCascadeLanding(
+  frames: ReadonlyArray<Frame>,
+  startIndex: number,
+  entityName: string,
+  testKind: CrudTestKind,
+  expectedDelta: number,
+): CascadeLanding | null {
+  const limit = Math.min(frames.length, startIndex + MAX_CASCADE_LOOKAHEAD + 1);
+  for (let j = startIndex; j < limit; j++) {
+    const candidate = frames[j];
+    if (j > startIndex) {
+      const candTestKind = candidate.cause.testKind;
+      if (
+        candTestKind === 'crud-create' ||
+        candTestKind === 'crud-edit' ||
+        candTestKind === 'crud-delete'
+      ) {
+        break;
+      }
+      if (candidate.cause.triggerKind === 'reconcile') {
+        break;
+      }
+    }
+    const change = candidate.entityChanges.find((c) => c.entityName === entityName);
+    if (change === undefined) continue;
+    if (matchesCrudShape(testKind, change, expectedDelta)) {
+      return { frame: candidate, change };
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether `change` is the cascade-settled shape `testKind` expects. Used
+ * by the forward-scan to decide which frame to credit; mirrors the
+ * top-of-each-branch shape gate in `checkEntityDiff` so the two stay
+ * consistent (content-mismatch verdicts still flow through
+ * `checkEntityDiff` once the shape is locked).
+ */
+function matchesCrudShape(
+  testKind: CrudTestKind,
+  change: EntityChange,
+  expectedDelta: number,
+): boolean {
+  if (testKind === 'crud-create') return change.added.length === 1;
+  if (testKind === 'crud-edit') return change.changed.length === 1;
+  if (change.removed.length !== 1) return false;
+  return change.added.length - change.removed.length === expectedDelta;
+}
+
+/** Per-verdict evidence indices. Includes the baseline, the step's own frame, and (when distinct) the cascade-settled frame. */
+function buildEvidenceIndices(
+  prevFrame: Frame | null,
+  stepFrame: Frame,
+  settledFrame: Frame,
+): number[] {
+  const out: number[] = [];
+  if (prevFrame !== null) out.push(prevFrame.index);
+  out.push(stepFrame.index);
+  if (settledFrame.index !== stepFrame.index) out.push(settledFrame.index);
+  return out;
+}
+
 function checkEntityDiff(
-  testKind: 'crud-create' | 'crud-edit' | 'crud-delete',
+  testKind: CrudTestKind,
   frame: Frame,
   change: Frame['entityChanges'][number] | undefined,
   expectedDelta: number,
