@@ -226,4 +226,72 @@ describe('planUserCrudFlow', () => {
       expect(step.coverageKey).toMatch(/\[crud-(create|edit|delete)\]$/);
     }
   });
+
+  // V-5: when the source trait reaches its open state via a cross-trait
+  // listen-fanout (e.g. Delete.idle -DELETE-> confirming fired by
+  // Browse rebroadcasting REQUEST_DELETE), the DOM affordance is the
+  // upstream button (`action-REQUEST_DELETE`), not `action-<openEvent>`.
+  // The planner must set `openAffordanceEvent` so the driver targets
+  // the right button while the coverage key keeps the receiver event.
+  it('crud-delete: when source trait has inbound listener {event ≠ triggers}, openAffordanceEvent overrides', () => {
+    const withInboundListen: OrbitalSchema = {
+      ...stdListShape,
+      orbitals: [
+        {
+          ...stdListShape.orbitals[0],
+          traits: (stdListShape.orbitals[0].traits ?? []).map((t) => {
+            if (typeof t === 'string' || !('name' in t) || t.name !== 'ListItemDelete') return t;
+            return {
+              ...t,
+              listens: [
+                { event: 'REQUEST_DELETE', triggers: 'DELETE', source: { kind: 'trait', trait: 'ListItemBrowse' } },
+              ],
+            };
+          }),
+        },
+      ],
+    };
+    const steps = planUserCrudFlow(withInboundListen);
+    const del = steps.find((s) => s.testKind === 'crud-delete');
+    expect(del).toBeDefined();
+    // step.event stays as the receiver's transition event for coverage labelling.
+    expect(del?.event).toBe('DELETE');
+    expect(del?.coverageKey).toBe('ListItemDelete:idle+DELETE->confirming[crud-delete]');
+    // openAffordanceEvent is the upstream button event the driver clicks.
+    expect(del?.openAffordanceEvent).toBe('REQUEST_DELETE');
+  });
+
+  it('crud-delete: no openAffordanceEvent override when source trait has no inbound listener', () => {
+    // The baseline fixture has no Delete.listens — affordance stays
+    // implicit (driver uses step.event).
+    const steps = planUserCrudFlow(stdListShape);
+    const del = steps.find((s) => s.testKind === 'crud-delete');
+    expect(del?.openAffordanceEvent).toBeUndefined();
+  });
+
+  it('crud-create: openAffordanceEvent is omitted when listener.event === listener.triggers', () => {
+    // For std-list Create, even if Create had a Browse.CREATE→CREATE
+    // listener, the names match — no override needed.
+    const withMatchingListen: OrbitalSchema = {
+      ...stdListShape,
+      orbitals: [
+        {
+          ...stdListShape.orbitals[0],
+          traits: (stdListShape.orbitals[0].traits ?? []).map((t) => {
+            if (typeof t === 'string' || !('name' in t) || t.name !== 'ListItemCreate') return t;
+            return {
+              ...t,
+              listens: [
+                { event: 'CREATE', triggers: 'CREATE', source: { kind: 'trait', trait: 'ListItemBrowse' } },
+              ],
+            };
+          }),
+        },
+      ],
+    };
+    const steps = planUserCrudFlow(withMatchingListen);
+    const create = steps.find((s) => s.testKind === 'crud-create');
+    expect(create?.event).toBe('CREATE');
+    expect(create?.openAffordanceEvent).toBeUndefined();
+  });
 });

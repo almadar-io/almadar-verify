@@ -125,6 +125,22 @@ export interface ExtendedWalkStep extends WalkStep {
   submitEvent?: string;
 
   /**
+   * v4.0.4 (V-5 fix): the event name of the upstream DOM affordance
+   * that fires the cross-trait listen-fanout opening this step's
+   * modal/confirmation. Set by `planUserCrudFlow` when the source trait
+   * reaches its open state via a `listens` entry — e.g. Delete's
+   * `idle -DELETE-> confirming` is fired by Browse rebroadcasting
+   * `REQUEST_DELETE` (Browse.data-grid itemAction → Delete.listens →
+   * Delete.DELETE). The data-grid renders `action-REQUEST_DELETE`,
+   * NOT `action-DELETE`; the driver targets
+   * `[data-testid="action-<openAffordanceEvent>"]` to click the
+   * upstream button. When undefined, the driver falls back to
+   * `step.event` (the receiver's transition event) — correct for
+   * cases where listener.event === listener.triggers (e.g. CREATE).
+   */
+  openAffordanceEvent?: string;
+
+  /**
    * Steps to replay first to reach this step's `from` state. The
    * planner expands these inline so each becomes its own
    * `triggerKind: 'replay'` Frame in the kernel walk; consumers should

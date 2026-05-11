@@ -183,6 +183,29 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
   const openEvent = openTransition.event;
   const submitEvent = submitOrConfirmTransition.event;
 
+  // The DOM affordance that OPENS this modal/confirmation may live
+  // upstream when the source trait reaches its open state via a
+  // cross-trait listener. For example, std-broadcast-builder's
+  // BroadcastDraftDelete declares `listens: [{event: REQUEST_DELETE,
+  // triggers: DELETE, source: BroadcastDraftBrowse}]` — the user
+  // clicks `action-REQUEST_DELETE` (rendered by Browse's data-grid
+  // itemActions), Browse rebroadcasts on its scope, Delete's listener
+  // picks it up and dispatches its own DELETE transition.
+  //
+  // When openEvent (the receiver's transition event) matches a listener's
+  // `triggers`, the actual button label is the listener's `event`, not
+  // openEvent. Use it for the DOM selector via `openAffordanceEvent`;
+  // the coverage key keeps openEvent so the verdict still labels the
+  // transition being tested.
+  //
+  // For create/edit the listener.event often equals openEvent
+  // (e.g. Browse.CREATE → Create.CREATE), so the override is a no-op.
+  // For delete the upstream is conventionally `REQUEST_DELETE` ≠ `DELETE`.
+  const inboundListener = (sourceTrait.listens ?? []).find(
+    (l) => l.triggers === openEvent,
+  );
+  const openAffordanceEvent = inboundListener?.event ?? openEvent;
+
   // Synthesize the form payload for create/edit. Edit overwrites the
   // pre-filled row, so its content is distinct from create's.
   const payloadSchema = extractPayloadSchema(sourceTrait, listenEvent);
@@ -247,6 +270,14 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
     expectedRowDelta: { entityName, delta: deltaFor(kind) },
     expectedSuccessEvent: persist.successEvent,
   };
+
+  // Only set the affordance override when it actually differs — keeps
+  // step.event-only paths working unchanged for cases like
+  // Browse.CREATE → Create.CREATE where the listener.event matches the
+  // receiver's transition event.
+  if (openAffordanceEvent !== openEvent) {
+    step.openAffordanceEvent = openAffordanceEvent;
+  }
 
   if (kind === 'create' || kind === 'edit') {
     if (formData !== undefined) step.formData = formData;

@@ -73,7 +73,15 @@ export function createDefaultDomTrigger(
     // `data-row-id`. When `targetRowId` is undefined, fall back to the
     // first row's button (deterministic structural position, not a
     // heuristic).
-    const baseSelector = `[data-testid="action-${step.event}"]`;
+    //
+    // V-5 fix: when planUserCrudFlow detects that the source trait
+    // reaches its open state via a cross-trait listen-fanout (e.g.
+    // Delete.idle -DELETE-> confirming fired by Browse.REQUEST_DELETE),
+    // the actual DOM button is `action-<openAffordanceEvent>`, not
+    // `action-<step.event>`. The step.event remains the receiver's
+    // transition event for coverage labelling.
+    const affordanceEvent = step.openAffordanceEvent ?? step.event;
+    const baseSelector = `[data-testid="action-${affordanceEvent}"]`;
     const selector = (isCrudFlow && step.targetRowId !== undefined)
       ? `${baseSelector}[data-row-id="${step.targetRowId}"]`
       : (isCrudFlow && (step.testKind === 'crud-edit' || step.testKind === 'crud-delete'))
