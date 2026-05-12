@@ -169,7 +169,7 @@ export function createDefaultDomTrigger(
         });
         return { containerFound: true, fields, allPatterns: [], allInputs: [] };
       }, formContainerSelector);
-      domLog.debug('dom:fill:post-fill-state', {
+      domLog.debug('dom:fill:post-fill-state', () => ({
         step: step.coverageKey,
         testKind: step.testKind,
         expectedFormData: JSON.stringify(step.formData),
@@ -179,7 +179,7 @@ export function createDefaultDomTrigger(
           allPatterns: JSON.stringify(postFillDom.allPatterns),
           allInputs: JSON.stringify(postFillDom.allInputs),
         }),
-      });
+      }));
     }
 
     // Crud-flow steps: also click the submit/confirm affordance to
@@ -401,13 +401,13 @@ export function createDefaultDomTrigger(
             serverError: t.serverResponse?.error ?? null,
           }));
         }, { baselineTx: baseline.txCount, followUpEvent });
-        domLog.debug('dom:click:save-payload', {
+        domLog.debug('dom:click:save-payload', () => ({
           step: step.coverageKey,
           testKind: step.testKind,
           followUpEvent,
           postSubmitTransitionCount: postSubmitTransitions.length,
           postSubmitTransitions: JSON.stringify(postSubmitTransitions),
-        });
+        }));
       }
       return true;
     }

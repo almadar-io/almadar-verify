@@ -88,7 +88,7 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
       slot: 'lastEventDispatched',
       expected: frame.cause.event,
     });
-    probeLog.debug('binding:missing', {
+    probeLog.debug('binding:missing', () => ({
       frameIndex: frame.index,
       trait: frame.cause.traitName,
       event: frame.cause.event,
@@ -101,7 +101,7 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
       eventLogTypes: JSON.stringify(frame.eventLogDelta.added.map((e) => e.type)),
       lastEventInTrait: traitSnapshot.lastEventDispatched?.event ?? null,
       serverSuccess: frame.serverResponse?.success ?? null,
-    });
+    }));
   }
 
   // Every declared event must appear in the trait's events list (sanity
