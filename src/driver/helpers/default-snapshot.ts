@@ -30,7 +30,7 @@ import type { ConsoleCollector } from '../../browser/console.js';
 import { readVerificationSnapshot, readEventLog } from '../../runtime/state-bridge.js';
 import { takeScreenshot, safeFileName } from '../../browser/screenshot.js';
 import { PORTAL_SLOTS, type PortalSlot } from '../../browser/portal-slots.js';
-import { createLogger } from '../../logger.js';
+import { createLogger } from '@almadar/logger';
 import { join } from 'node:path';
 
 // Permanent observability for the verifier's snapshot capture moment.

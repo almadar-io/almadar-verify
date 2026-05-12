@@ -28,7 +28,7 @@
 import type { Page } from 'playwright';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import { fillFormFieldsFromMap } from '../../browser/interaction.js';
-import { createLogger } from '../../logger.js';
+import { createLogger } from '@almadar/logger';
 
 // Shared with the rest of the verify:dom namespace (interaction.ts,
 // default-snapshot.ts) so operators see the full DOM-side timeline

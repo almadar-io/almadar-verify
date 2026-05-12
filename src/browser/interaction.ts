@@ -16,7 +16,7 @@
 import type { Page } from 'playwright';
 import type { EventPayload, EventPayloadValue } from '@almadar/core';
 import { faker } from '@faker-js/faker';
-import { createLogger } from '../logger.js';
+import { createLogger } from '@almadar/logger';
 
 // Permanent observability for the DOM-side form-fill path. Surfaces
 // the modal/form-mount race that earlier surfaces couldn't tell apart:
