@@ -141,16 +141,27 @@ export async function takeScreenshot(
           }
           for (const child of Array.from(el.children)) walk(child);
         };
-        // Also let html/body grow with the unrolled content.
         const html = document.documentElement;
         const body = document.body;
-        snaps.push({ el: html, style: html.getAttribute('style') ?? '' });
-        snaps.push({ el: body, style: body.getAttribute('style') ?? '' });
-        html.style.height = 'auto';
-        html.style.overflow = 'visible';
-        body.style.height = 'auto';
-        body.style.minHeight = 'auto';
-        body.style.overflow = 'visible';
+        // Only flatten html/body when the page is locked to viewport height
+        // (e.g. `body { height: 100vh; overflow: hidden }`-style hosts where
+        // content lives in an inner scroller). For body-scroll hosts the
+        // document already extends past the viewport and Playwright's
+        // `fullPage: true` captures it natively — touching the inline styles
+        // is unnecessary and risks leaving the body in `min-height: auto`
+        // if anything in the walk/restore round-trip mis-fires, which
+        // breaks page scroll between walk steps in interactive runs.
+        const docScrolls = html.scrollHeight > html.clientHeight + 4
+          || body.scrollHeight > body.clientHeight + 4;
+        if (!docScrolls) {
+          snaps.push({ el: html, style: html.getAttribute('style') ?? '' });
+          snaps.push({ el: body, style: body.getAttribute('style') ?? '' });
+          html.style.height = 'auto';
+          html.style.overflow = 'visible';
+          body.style.height = 'auto';
+          body.style.minHeight = 'auto';
+          body.style.overflow = 'visible';
+        }
         walk(html);
       } catch {
         // Any unexpected failure — fall through; the restore phase reads
