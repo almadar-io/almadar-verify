@@ -112,51 +112,75 @@ export async function takeScreenshot(
     const restoreSnapshot = await page.evaluate(() => {
       type Snap = { el: Element; style: string };
       const snaps: Snap[] = [];
-      const walk = (el: Element): void => {
-        const cs = getComputedStyle(el);
-        const overflowsY =
-          cs.overflowY === 'auto' || cs.overflowY === 'scroll' ||
-          cs.overflow === 'auto' || cs.overflow === 'scroll';
-        const e = el as HTMLElement;
-        if (overflowsY && e.scrollHeight > e.clientHeight + 4 && e.clientHeight > 0) {
-          snaps.push({ el, style: e.getAttribute('style') ?? '' });
-          e.style.overflow = 'visible';
-          e.style.overflowY = 'visible';
-          e.style.height = 'auto';
-          e.style.maxHeight = 'none';
-        }
-        for (const child of Array.from(el.children)) walk(child);
-      };
-      // Also let html/body grow with the unrolled content.
-      const html = document.documentElement;
-      const body = document.body;
-      snaps.push({ el: html, style: html.getAttribute('style') ?? '' });
-      snaps.push({ el: body, style: body.getAttribute('style') ?? '' });
-      html.style.height = 'auto';
-      html.style.overflow = 'visible';
-      body.style.height = 'auto';
-      body.style.minHeight = 'auto';
-      body.style.overflow = 'visible';
-      walk(html);
-      // Stash on window for the restore round-trip (DOM nodes don't
-      // serialize across page.evaluate boundaries).
+      // Stash on window IMMEDIATELY so any partial mutation can still be
+      // unwound by the restore phase even if walk() throws halfway.
+      // Without this, an exception during the walk left body/html in their
+      // mutated state (height: auto, min-height: auto, overflow: visible),
+      // which blocks page scroll for the rest of the session because the
+      // restore phase's `.catch` would silently skip restoration entirely.
       (window as unknown as { __screenshotRestoreSnaps__: Snap[] }).__screenshotRestoreSnaps__ = snaps;
+      try {
+        const walk = (el: Element): void => {
+          try {
+            const cs = getComputedStyle(el);
+            const overflowsY =
+              cs.overflowY === 'auto' || cs.overflowY === 'scroll' ||
+              cs.overflow === 'auto' || cs.overflow === 'scroll';
+            const e = el as HTMLElement;
+            if (overflowsY && e.scrollHeight > e.clientHeight + 4 && e.clientHeight > 0) {
+              snaps.push({ el, style: e.getAttribute('style') ?? '' });
+              e.style.overflow = 'visible';
+              e.style.overflowY = 'visible';
+              e.style.height = 'auto';
+              e.style.maxHeight = 'none';
+            }
+          } catch {
+            // Elements like <svg>, foreign-object children, or shadow-DOM
+            // boundaries can throw on getComputedStyle / scrollHeight; skip
+            // them rather than abort the whole walk.
+          }
+          for (const child of Array.from(el.children)) walk(child);
+        };
+        // Also let html/body grow with the unrolled content.
+        const html = document.documentElement;
+        const body = document.body;
+        snaps.push({ el: html, style: html.getAttribute('style') ?? '' });
+        snaps.push({ el: body, style: body.getAttribute('style') ?? '' });
+        html.style.height = 'auto';
+        html.style.overflow = 'visible';
+        body.style.height = 'auto';
+        body.style.minHeight = 'auto';
+        body.style.overflow = 'visible';
+        walk(html);
+      } catch {
+        // Any unexpected failure — fall through; the restore phase reads
+        // whatever made it into `snaps` and reverts that subset.
+      }
       return snaps.length;
     }).catch(() => 0);
 
-    await page.screenshot({ path: outputPath, fullPage: true });
+    // Take the screenshot; failures here must NOT skip restoration, or
+    // body/html stay mutated and break interactive scroll in --annotate
+    // mode.
+    await page.screenshot({ path: outputPath, fullPage: true }).catch(() => undefined);
 
-    if (restoreSnapshot > 0) {
-      await page.evaluate(() => {
-        const snaps = (window as unknown as { __screenshotRestoreSnaps__?: Array<{ el: Element; style: string }> }).__screenshotRestoreSnaps__;
-        if (!snaps) return;
-        for (const { el, style } of snaps) {
+    // Always attempt restoration regardless of `restoreSnapshot` count.
+    // The mutation evaluate stashes `snaps` on window BEFORE mutating; if
+    // it threw mid-walk, partial mutations still need unwinding.
+    void restoreSnapshot;
+    await page.evaluate(() => {
+      const snaps = (window as unknown as { __screenshotRestoreSnaps__?: Array<{ el: Element; style: string }> }).__screenshotRestoreSnaps__;
+      if (!snaps) return;
+      for (const { el, style } of snaps) {
+        try {
           if (style) el.setAttribute('style', style);
           else el.removeAttribute('style');
+        } catch {
+          // Element may have been detached; skip.
         }
-        delete (window as unknown as { __screenshotRestoreSnaps__?: unknown }).__screenshotRestoreSnaps__;
-      }).catch(() => undefined);
-    }
+      }
+      delete (window as unknown as { __screenshotRestoreSnaps__?: unknown }).__screenshotRestoreSnaps__;
+    }).catch(() => undefined);
 
     return outputPath;
   } catch {
