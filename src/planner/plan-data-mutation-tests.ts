@@ -148,11 +148,21 @@ function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityField
       .filter((f): f is typeof f & { name: string } =>
         typeof f.name === 'string' && f.name.length > 0,
       )
-      .map((f) => ({
-        name: f.name,
-        type: f.type,
-        values: f.values !== undefined ? [...f.values] : undefined,
-      }));
+      .map((f) => {
+        // `values` lives on the EntityField discriminated union's Scalar
+        // (optional) and Enum (required) variants only. Relation and Array
+        // variants don't carry it. Narrow via the `type` discriminant so
+        // we read `f.values` only where the type system says it exists.
+        const values =
+          (f.type !== 'relation' && f.type !== 'array' && f.values !== undefined)
+            ? [...f.values]
+            : undefined;
+        return {
+          name: f.name,
+          type: f.type,
+          values,
+        };
+      });
   }
   return out;
 }
