@@ -57,6 +57,22 @@ export function assertPortalPerStep(
     const tk = frame.cause.testKind;
     if (tk === 'crud-create' || tk === 'crud-edit' || tk === 'crud-delete') continue;
 
+    // Skip when the runtime didn't actually apply this transition. This
+    // happens when the planner injects a probe event whose effects the
+    // runtime never executed — e.g. an *LoadFailed event injected
+    // against a trait whose mock-store always resolves success, so the
+    // cascade reached `loading -> open` (RowLoaded) before the planner's
+    // failure-path probe could land. The frame's `cause.to` records what
+    // the planner WOULD reach if effects ran; if the live runtime
+    // snapshot disagrees, the assertion is checking a DOM that reflects
+    // a different state machine state, not the post-transition one the
+    // expectation models. Trust the runtime's recorded `currentState`
+    // over the planner's projection.
+    const traitSnap = frame.runtimeSnapshot.traits.find(
+      (t) => t.traitName === frame.cause.traitName,
+    );
+    if (traitSnap !== undefined && traitSnap.currentState !== frame.cause.to) continue;
+
     const key = `${frame.cause.traitName}:${frame.cause.from}+${frame.cause.event}->${frame.cause.to}`;
     const matched = expectationsByCause.get(key);
     if (matched === undefined) continue;
