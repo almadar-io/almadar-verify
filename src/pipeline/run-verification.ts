@@ -244,17 +244,31 @@ export async function runVerification<Ctx extends DriverContext>(
   // declare `[lifecycle, instance, …]` in their .lolo source — they hook
   // into events and don't render UI, so the slot-mounted-empty signal is
   // expected, not a bug.
+  // The .lolo bracket `[lifecycle, instance, …]` lowers into THREE separate
+  // fields on the compiled trait: `category` (first slot — semantic class),
+  // `scope` (second slot — instance/collection), and `capabilities` (remaining
+  // slots). Side-effect-only atoms are signaled by `category: "lifecycle"`,
+  // NOT a "lifecycle" entry in capabilities (the lowerer doesn't put it there).
+  // Earlier check was looking at the wrong field; this is the corrected form.
   const noRenderTraits = new Set<string>();
   for (const orb of input.orbital.orbitals) {
     for (const traitRef of orb.traits ?? []) {
       // TraitRef = string | {ref, …} | Trait (inline). Only inline-trait
-      // form carries capabilities; the ref-object form points at an atom
-      // whose capabilities live in the embedded registry and are inlined
-      // by the resolver before this code runs.
+      // form carries category/capabilities; the ref-object form points at
+      // an atom whose metadata lives in the embedded registry and is
+      // inlined by the resolver before this code runs.
       if (typeof traitRef === 'string') continue;
-      const t = traitRef as { name?: string; capabilities?: string[] };
+      const t = traitRef as { name?: string; category?: string; capabilities?: string[] };
       if (!t.name) continue;
-      if (t.capabilities && t.capabilities.includes('lifecycle')) {
+      // Primary signal: trait category is "lifecycle" (audit-capture,
+      // cascade-on-delete, notify-on-event, reminder-scheduler, lifecycle,
+      // row-access-control, cross-reference). Defensive secondary: also
+      // treat a "lifecycle" entry in capabilities as the same signal, in
+      // case future lowering preserves the bracket in that field instead.
+      const isLifecycle =
+        t.category === 'lifecycle' ||
+        (t.capabilities ? t.capabilities.includes('lifecycle') : false);
+      if (isLifecycle) {
         noRenderTraits.add(t.name);
       }
     }
