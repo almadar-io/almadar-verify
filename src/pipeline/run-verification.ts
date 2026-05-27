@@ -236,7 +236,30 @@ export async function runVerification<Ctx extends DriverContext>(
   verdicts.refTrait = assertRefTraitInvariantOverFrames(frames);
 
   // End-of-walk portal blank-portal sweep (always).
-  verdicts.portal = assertPortalSlots(frames);
+  //
+  // Pass the set of "lifecycle"-capability traits so frames originating
+  // from side-effect-only atoms (std-audit-capture, std-cascade-on-delete,
+  // std-notify-on-event, std-lifecycle, std-reminder-scheduler,
+  // std-row-access-control, std-cross-reference) are skipped. Those atoms
+  // declare `[lifecycle, instance, …]` in their .lolo source — they hook
+  // into events and don't render UI, so the slot-mounted-empty signal is
+  // expected, not a bug.
+  const noRenderTraits = new Set<string>();
+  for (const orb of input.orbital.orbitals) {
+    for (const traitRef of orb.traits ?? []) {
+      // TraitRef = string | {ref, …} | Trait (inline). Only inline-trait
+      // form carries capabilities; the ref-object form points at an atom
+      // whose capabilities live in the embedded registry and are inlined
+      // by the resolver before this code runs.
+      if (typeof traitRef === 'string') continue;
+      const t = traitRef as { name?: string; capabilities?: string[] };
+      if (!t.name) continue;
+      if (t.capabilities && t.capabilities.includes('lifecycle')) {
+        noRenderTraits.add(t.name);
+      }
+    }
+  }
+  verdicts.portal = assertPortalSlots(frames, { noRenderTraits });
 
   // VG11a — binding probes (per-frame, always).
   const bindingVerdicts = frames.map((frame, i) =>
