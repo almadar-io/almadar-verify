@@ -17,7 +17,7 @@
  * @packageDocumentation
  */
 
-import { rmSync, mkdirSync } from 'node:fs';
+// node:fs is loaded dynamically below so browser bundles don't pull it in.
 import type { Frame } from '../frame/types.js';
 import { tick } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
@@ -54,7 +54,7 @@ const DEFAULT_MAX_FRAMES = 5_000;
 export async function runVerification<Ctx extends DriverContext>(
   input: RunVerificationInput<Ctx>,
 ): Promise<RunVerificationOutput> {
-  const log = input.options?.log ?? ((m: string) => process.stdout.write(m + '\n'));
+  const log = input.options?.log ?? ((m: string) => { console.log(m); });
   const maxWalkMs = input.options?.maxWalkMs ?? DEFAULT_MAX_WALK_MS;
   const maxFrames = input.options?.maxFrames ?? DEFAULT_MAX_FRAMES;
   const opts = input.options ?? {};
@@ -67,8 +67,9 @@ export async function runVerification<Ctx extends DriverContext>(
   // current state. Recreating the dir at the start gives every run a
   // clean slate. Skipped when outputDir is empty (test-fixture mode).
   const outputDir = input.ctx.outputDir;
-  if (outputDir !== undefined && outputDir !== '') {
+  if (outputDir !== undefined && outputDir !== '' && typeof process !== 'undefined' && process.versions?.node) {
     try {
+      const { rmSync, mkdirSync } = await import('node:fs');
       rmSync(outputDir, { recursive: true, force: true });
       mkdirSync(outputDir, { recursive: true });
     } catch { /* best-effort — keep going if FS errors */ }
