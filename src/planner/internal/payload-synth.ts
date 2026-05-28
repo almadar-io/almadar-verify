@@ -40,7 +40,6 @@ export function collectEntityFields(orbital: OrbitalSchema): Record<string, Enti
       .map((f) => ({
         name: f.name,
         type: f.type,
-        values: f.values !== undefined ? [...f.values] : undefined,
       }));
   }
   return out;
