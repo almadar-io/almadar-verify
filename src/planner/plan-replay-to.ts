@@ -14,14 +14,28 @@
  * @packageDocumentation
  */
 
-import type { EdgeWalkTransition } from '@almadar/core';
+import { buildGuardPayloads, type EdgeWalkTransition, type EventPayload } from '@almadar/core';
 import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PlanReplayInput } from './types.js';
 import { synthesizeSuccessPayload } from './internal/payload-synth.js';
 
+/**
+ * One hop in a replay path. Carries the originating `EdgeWalkTransition`
+ * so the step mapper can read its guard metadata — a hop reachable only
+ * through a guarded edge needs the guard's `pass` payload merged in, or
+ * the replay dispatch is rejected and the `from`-state precondition for
+ * the real step is never reached.
+ */
+interface ReplayHop {
+  from: string;
+  event: string;
+  to: string;
+  edge: EdgeWalkTransition;
+}
+
 interface QueueNode {
   state: string;
-  path: ReadonlyArray<{ from: string; event: string; to: string }>;
+  path: ReadonlyArray<ReplayHop>;
 }
 
 export function planReplayTo(
@@ -45,11 +59,19 @@ export function planReplayTo(
     // planner step ran. Synthesizing here keeps the replay walk-back
     // observable AND honest.
     const eventDecl = trait.events?.find((e) => e.key === step.event);
-    const payload = synthesizeSuccessPayload(
+    const synth = synthesizeSuccessPayload(
       eventDecl?.payloadSchema,
       trait.linkedEntity,
       entityFieldsByName,
     );
+    // A hop reachable only through a GUARDED edge needs the guard's
+    // `pass` payload merged in — else the replay dispatch is rejected
+    // and the trait never reaches `step.from`, leaving the real step's
+    // preamble unreachable. Mirrors core's `buildPayloadForEdge` guard
+    // branch (state-machine/edge-walk.ts) and the `planWalk` pass case.
+    const payload: EventPayload = step.edge.hasGuard && step.edge.guard !== undefined
+      ? { ...synth, ...buildGuardPayloads(step.edge.guard).pass }
+      : synth;
     return {
       from: step.from,
       event: step.event,
@@ -73,7 +95,7 @@ function bfsShortestPath(
   transitions: ReadonlyArray<EdgeWalkTransition>,
   source: string,
   target: string,
-): ReadonlyArray<{ from: string; event: string; to: string }> | null {
+): ReadonlyArray<ReplayHop> | null {
   if (source === target) return [];
 
   // Build adjacency list from filtered transitions.
@@ -97,7 +119,7 @@ function bfsShortestPath(
     const edges = adjacency.get(state) ?? [];
     for (const edge of edges) {
       if (visited.has(edge.to)) continue;
-      const newPath = [...path, { from: state, event: edge.event, to: edge.to }];
+      const newPath = [...path, { from: state, event: edge.event, to: edge.to, edge }];
       if (edge.to === target) return newPath;
       visited.add(edge.to);
       queue.push({ state: edge.to, path: newPath });

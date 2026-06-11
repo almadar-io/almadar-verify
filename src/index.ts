@@ -118,18 +118,6 @@ export {
   type EntityBindingScan,
 } from './schema/effect-scanner.js';
 
-// Schema walker — event classification + bindings + mutating effects
-// (feeds VG2 / VG3 / VG4 / VG11a / VG11c gates). `BindingRoot` is
-// re-exported from @almadar/core.
-export {
-  SchemaWalker,
-  type BindingRoot,
-  type EventClassification,
-  type SchemaBinding,
-  type MutatingEffectKind,
-  type MutatingEffect,
-} from './schema/walker.js';
-
 // Pure data exports from browser/portal-slots.ts. The Page-bound
 // `probePortalSlots*` functions are internal to the kernel's
 // `assertPortalPerStep` observer; consumers don't call them directly.
@@ -249,6 +237,7 @@ export type {
 export { coverage } from './observer/coverage.js';
 export { assertMutation } from './observer/assert-mutation.js';
 export { assertCascade } from './observer/assert-cascade.js';
+export { assertGuardParity } from './observer/assert-guard-parity.js';
 export { assertPortalSlots } from './observer/assert-portal.js';
 export { probeBindings as probeBindingsFromFrame } from './observer/probe-bindings.js';
 export { assertRefTraitInvariantOverFrames } from './observer/assert-ref-trait-invariant.js';
@@ -259,6 +248,7 @@ export { assertCrudFlow } from './observer/assert-crud-flow.js';
 export { assertPortalPerStep } from './observer/assert-portal-per-step.js';
 export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
+export { verdictToChecks, type VerdictCheck } from './observer/verdict-checks.js';
 
 // Driver — the I/O boundary. `Driver<Ctx>` is generic over context;
 // impls live under `driver/impls/<transport>.ts` and are the only files

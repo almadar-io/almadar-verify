@@ -21,12 +21,18 @@ export interface ReportInput {
   frames: ReadonlyArray<Frame>;
   plan: ReadonlyArray<ExtendedWalkStep>;
   verdicts: ReportShape['verdicts'];
+  /**
+   * Total transitions across the orbital's inline-trait state machines —
+   * the schema-level coverage denominator. Forwarded to `coverage()`.
+   * Default 0 (caller didn't supply the schema count).
+   */
+  schemaTransitions?: number;
 }
 
 export function report(input: ReportInput): ReportShape {
   const { itemName, frames, plan, verdicts } = input;
 
-  const cov = coverage(frames, plan);
+  const cov = coverage(frames, plan, input.schemaTransitions ?? 0);
 
   const errors: string[] = [];
   const warnings: string[] = [];

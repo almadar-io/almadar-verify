@@ -24,6 +24,7 @@ import type { DriverContext } from '../driver/types.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { collectEntityFields } from '../planner/internal/payload-synth.js';
+import { eachInlineTrait } from '../planner/internal/orbital-walk.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
@@ -32,6 +33,7 @@ import { planUserCrudFlow } from '../planner/plan-user-crud-flow.js';
 import { planReplayTo } from '../planner/plan-replay-to.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import { assertCascade } from '../observer/assert-cascade.js';
+import { assertGuardParity } from '../observer/assert-guard-parity.js';
 import { assertMutation } from '../observer/assert-mutation.js';
 import { assertPortalSlots } from '../observer/assert-portal.js';
 import { assertRefTraitInvariantOverFrames } from '../observer/assert-ref-trait-invariant.js';
@@ -58,6 +60,7 @@ export async function runVerification<Ctx extends DriverContext>(
   const maxWalkMs = input.options?.maxWalkMs ?? DEFAULT_MAX_WALK_MS;
   const maxFrames = input.options?.maxFrames ?? DEFAULT_MAX_FRAMES;
   const opts = input.options ?? {};
+  const allowStateless = opts.allowStateless === true;
 
   // ── Wipe the per-behavior output dir before starting ──────────────
   // Stale frames + transition logs + reports from a previous run
@@ -134,6 +137,10 @@ export async function runVerification<Ctx extends DriverContext>(
   // ── Walk every trait through the same tick loop ───────────────────
   const frames: Frame[] = [];
   const wholePlan: ExtendedWalkStep[] = [];
+  // REPLAY-NONDET-DISPATCH: hops whose reconcile frame landed somewhere
+  // other than the replay plan projected (a guarded edge branched).
+  const replayDivergences: string[] = [];
+  const replayDivergeFrames: number[] = [];
 
   for (const trait of traits) {
     const ctx = { ...input.ctx, trait } as Ctx;
@@ -199,15 +206,32 @@ export async function runVerification<Ctx extends DriverContext>(
               triggerKind: 'reconcile',
               coverageKey: `${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[reconcile]`,
             };
-            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait);
+            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait, allowStateless);
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
             prev = reconcileFrame;
+
+            // REPLAY-NONDET-DISPATCH: the preamble BFS assumes one target
+            // per (from, event), but a guarded transition branches. If the
+            // runtime took the other branch, the rest of the preamble is
+            // built on a stale precondition — abort it and record the
+            // divergent hop so it can't silently corrupt the real step.
+            if (
+              reconcileFrame.stateAfter !== null &&
+              reconcileFrame.stateAfter !== reconcileStep.to
+            ) {
+              replayDivergences.push(
+                `${trait.traitName}: reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`,
+              );
+              replayDivergeFrames.push(reconcileFrame.index);
+              log(`  [${stepIdx + 1}/${plan.length}] replay diverged at ${reconcileStep.event}: expected ${reconcileStep.to}, got ${reconcileFrame.stateAfter} — aborting preamble`);
+              break;
+            }
           }
         }
       }
 
-      const frame: Frame = await tick(input.driver, ctx, prev, step, orbitalsByTrait);
+      const frame: Frame = await tick(input.driver, ctx, prev, step, orbitalsByTrait, allowStateless);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';
       log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
@@ -235,6 +259,18 @@ export async function runVerification<Ctx extends DriverContext>(
 
   // VG6 — ref-trait invariant (always runs).
   verdicts.refTrait = assertRefTraitInvariantOverFrames(frames);
+
+  // GUARD-LAMBDA-DROP — in-run guard prediction vs runtime accept parity.
+  verdicts.guardParity = assertGuardParity(frames);
+
+  // REPLAY-NONDET-DISPATCH — only surfaced when a reconcile hop diverged.
+  if (replayDivergences.length > 0) {
+    verdicts.replayDiverged = {
+      passed: false,
+      detail: `replay-diverged: ${replayDivergences.length} hop(s) branched off the replay plan — ${replayDivergences.join('; ')}`,
+      evidence: { frameIndices: replayDivergeFrames },
+    };
+  }
 
   // End-of-walk portal blank-portal sweep (always).
   //
@@ -274,7 +310,7 @@ export async function runVerification<Ctx extends DriverContext>(
       }
     }
   }
-  verdicts.portal = assertPortalSlots(frames, { noRenderTraits });
+  verdicts.portalSweep = assertPortalSlots(frames, { noRenderTraits });
 
   // VG11a — binding probes (per-frame, always).
   const bindingVerdicts = frames.map((frame, i) =>
@@ -338,7 +374,7 @@ export async function runVerification<Ctx extends DriverContext>(
     if (portalExpectations.length > 0) {
       const v = assertPortalPerStep(frames, portalExpectations);
       if (v.length > 0) {
-        verdicts.portal = combineVerdicts(v, 'portal');
+        verdicts.portalPerStep = combineVerdicts(v, 'portal');
       }
     }
   }
@@ -349,11 +385,20 @@ export async function runVerification<Ctx extends DriverContext>(
   // Both already covered above. (Future: add `derivedCascadeRules`
   // here for finer-grained cascade verification.)
 
+  // Schema-level coverage denominator: every transition declared across
+  // the orbital's inline-trait state machines. Independent of what the
+  // planner chose to walk — lets consumers catch under-covering plans.
+  let schemaTransitions = 0;
+  for (const { trait } of eachInlineTrait(input.orbital)) {
+    schemaTransitions += trait.stateMachine?.transitions.length ?? 0;
+  }
+
   return report({
     itemName: input.itemName,
     frames,
     plan: wholePlan,
     verdicts,
+    schemaTransitions,
   });
 }
 

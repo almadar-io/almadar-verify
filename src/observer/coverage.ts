@@ -35,6 +35,7 @@ const TRIGGER_KINDS: ReadonlyArray<TriggerKind> = ['bus', 'dom', 'auto-init', 'r
 export function coverage(
   frames: ReadonlyArray<Frame>,
   plan: ReadonlyArray<ExtendedWalkStep>,
+  schemaTransitions = 0,
 ): CoverageMetric {
   // Denominator: every key the plan declared.
   const planKeys = new Set<string>();
@@ -114,6 +115,7 @@ export function coverage(
     totalItems,
     coveredItems,
     ratio,
+    schemaTransitions,
     uncovered,
     perTrait,
     perTriggerKind,

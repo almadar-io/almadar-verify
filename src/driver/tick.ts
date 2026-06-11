@@ -34,6 +34,7 @@ export async function tick<Ctx extends DriverContext>(
   prev: Frame | null,
   step: ExtendedWalkStep,
   orbitalsByTrait?: ReadonlyMap<string, string>,
+  allowStateless?: boolean,
 ): Promise<Frame> {
   const index = prev === null ? 0 : prev.index + 1;
   const timestamp = Date.now();
@@ -95,12 +96,21 @@ export async function tick<Ctx extends DriverContext>(
   const entitiesBefore = entitiesFromPrev(prev, step.traitName);
 
   let serverResponse = null;
+  // `dispatchSent` tracks whether the driver actually dispatched the
+  // event. The DOM-trigger path that finds an affordance and clicks it
+  // counts as sent; otherwise it falls through to `sendEvent` and we
+  // capture `send.sent`. A `false` here means the kernel failed to
+  // deliver the event at all — the frame must fail closed.
+  let dispatchSent: boolean;
 
   if (step.triggerKind === 'dom') {
     const triggered = await driver.triggerDOM(ctx, step);
-    if (!triggered) {
+    if (triggered) {
+      dispatchSent = true;
+    } else {
       const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload), traitScope);
       serverResponse = send.serverResponse;
+      dispatchSent = send.sent;
     }
   } else {
     // 'bus' | 'replay' | 'reconcile' — all dispatch via the bus.
@@ -109,15 +119,18 @@ export async function tick<Ctx extends DriverContext>(
     // semantically identical to `replay` for dispatch purposes.
     const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload), traitScope);
     serverResponse = send.serverResponse;
+    dispatchSent = send.sent;
   }
 
   await driver.settle(ctx);
   const stateAfter = await driver.getState(ctx, step.traitName);
   const snap = await driver.snapshot(ctx, step);
 
-  const accepted = decideAccepted(step, stateBefore, stateAfter);
+  const errors = collectDispatchErrors(step, stateAfter, dispatchSent, allowStateless === true);
+  const accepted = errors.length === 0 && decideAccepted(step, stateBefore, stateAfter);
 
   return makeWalkFrame({
+    ...(errors.length > 0 && { errors }),
     index,
     timestamp,
     cause,
@@ -175,8 +188,37 @@ function entitiesFromPrev(
 }
 
 /**
+ * Collect fail-closed dispatch errors for a frame. The kernel must NOT
+ * silently credit a step the driver couldn't deliver, nor a stateless
+ * dispatch (`getState` returned `null`) unless the caller opted in via
+ * `allowStateless` (drivers with no state reader). Returns one error
+ * string per failure; an empty array means the dispatch was clean.
+ */
+function collectDispatchErrors(
+  step: ExtendedWalkStep,
+  stateAfter: string | null,
+  dispatchSent: boolean,
+  allowStateless: boolean,
+): string[] {
+  const errors: string[] = [];
+  if (!dispatchSent) {
+    errors.push(
+      `dispatch failed: driver did not deliver event '${step.event}' to trait '${step.traitName}'`,
+    );
+  }
+  if (stateAfter === null && !allowStateless) {
+    errors.push(
+      `stateless dispatch: getState returned null after event '${step.event}' on trait '${step.traitName}' (pass allowStateless to credit drivers with no state reader)`,
+    );
+  }
+  return errors;
+}
+
+/**
  * Decide whether the runtime accepted the transition. Mirrors the
- * legacy engine's logic.
+ * legacy engine's logic. Fail-closed: a `null` `stateAfter` is no longer
+ * optimistically credited here — that path is gated by `allowStateless`
+ * in `collectDispatchErrors`, which already short-circuits acceptance.
  */
 function decideAccepted(
   step: ExtendedWalkStep,
@@ -187,8 +229,9 @@ function decideAccepted(
     // Guard-fail: state should NOT change.
     return stateAfter === step.from || stateAfter === stateBefore;
   }
-  // Normal or guard-pass: state should reach step.to. `null` from
-  // `getState` means the runtime didn't expose a state reader; we
-  // optimistically credit acceptance in that case.
+  // Normal or guard-pass: state should reach step.to. A `null`
+  // `stateAfter` only reaches here when `allowStateless` was set (else
+  // `collectDispatchErrors` already forced `accepted = false`), so we
+  // credit it as the caller-opted stateless-driver case.
   return stateAfter === step.to || stateAfter === null;
 }
