@@ -119,7 +119,7 @@ describe('tick', () => {
     // `loading` auto-advances to `browsing` (the planner supplied acceptStates
     // = the transient closure). The fake lands the trait in `loading` (no
     // auto-fetch), which is also in the closure → accepted.
-    runtime.dispatch(trait.traitName, 'BrowseItemLoaded'); // loading → browsing
+    runtime.dispatch(trait.traitName, 'BrowseItemLoaded', {}); // loading → browsing
     const refresh: ExtendedWalkStep = {
       ...step('browsing', 'INIT', 'loading'),
       acceptStates: ['loading', 'browsing', 'error'],
@@ -135,7 +135,7 @@ describe('tick', () => {
   it('rejects a state outside the transient closure', async () => {
     const { driver, runtime } = createFakeDriver([trait]);
     const ctx = { outputDir: '/tmp', trait, runtime };
-    runtime.dispatch(trait.traitName, 'BrowseItemLoaded'); // loading → browsing
+    runtime.dispatch(trait.traitName, 'BrowseItemLoaded', {}); // loading → browsing
     // browsing --INIT--> loading in the fake → loading, but acceptStates only
     // lists `error` (an unreachable settled state) → not in closure → rejected.
     const refresh: ExtendedWalkStep = {
