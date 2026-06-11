@@ -53,9 +53,7 @@ export { report as buildFrameReport } from './observer/report.js';
 export type { Frame, FrameCause, TriggerKind, TestKind, ConsoleDelta, EventLogDelta, EntityChange, EntityRowChange, DomSnapshot } from './frame/types.js';
 export { keyOf, diffConsole, diffEventLog, diffEntities, makeWalkFrame, makeInitFrame } from './frame/factory.js';
 
-// Pure schema walkers / catalog probes
-export { SchemaWalker } from './schema/walker.js';
-export type { BindingRoot, EventClassification, SchemaBinding, MutatingEffectKind, MutatingEffect } from './schema/walker.js';
+// Pure catalog probes
 export {
   collectCatalogBindings,
   pickBySegments,

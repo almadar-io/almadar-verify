@@ -188,6 +188,23 @@ export interface ReportShape {
      * transition nor cross-trait `listens` cascade).
      */
     clickNoListener?: Verdict;
+    /**
+     * REPLAY-NONDET-DISPATCH — fails when a hermetic-preamble reconcile
+     * hop lands in a different state than the replay plan projected. The
+     * preamble BFS assumes one target per `(from, event)`, but a guarded
+     * transition branches; if the runtime takes the other branch the
+     * remaining preamble is aborted and this verdict names the divergent
+     * hop, so the step's stale precondition can't silently corrupt later
+     * verdicts.
+     */
+    replayDiverged?: Verdict;
+    /**
+     * GUARD-LAMBDA-DROP — `assertGuardParity` divergence. Fails when a
+     * frame's planner-predicted `cause.guardCase` (`'pass'` / `'fail'`)
+     * disagrees with the runtime's actual `accepted` verdict, the
+     * fingerprint of a guard lambda dropped between planner and runtime.
+     */
+    guardParity?: Verdict;
   };
   /** Aggregate pass/fail/warning counts in core's canonical shape. */
   summary: VerificationSummary;
