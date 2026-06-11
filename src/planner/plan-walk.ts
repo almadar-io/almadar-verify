@@ -173,13 +173,26 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
     coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, guardCase, payloadCase),
     payloadCase,
   };
-  // When `to` auto-advances via effect-emitted events, the runtime settles
-  // past it before the kernel observes — credit any state in the closure.
-  // Only meaningful for the forward (success / guard-pass) variants; the
-  // guard-fail / malformed variants expect the state to HOLD.
+  // Acceptance closures (forward / guard-pass / success variants only; the
+  // guard-fail / malformed variants expect the state to HOLD).
   if (guardCase !== 'fail' && payloadCase !== 'malformed') {
-    const closure = transientClosure(transition.to, trait);
-    if (closure.length > 1) step.acceptStates = closure;
+    const emitted = trait.effectEmittedEvents;
+    if (emitted !== undefined && emitted.has(transition.event)) {
+      // The event is fired by an EFFECT's outcome (a fetch's
+      // success/failure callback), not by the user. The manual dispatch is a
+      // no-op nudge — the runtime is wherever the natural effect flow settled,
+      // which is somewhere in `from`'s transient closure. With mock data the
+      // success branch wins, so the failure target (e.g. `error`) is only
+      // reachable via failure injection; credit any natural settled state
+      // rather than hard-failing the undrivable branch.
+      const closure = transientClosure(transition.from, trait);
+      if (closure.length > 1) step.acceptStates = closure;
+    } else {
+      // When `to` auto-advances via effect-emitted events, the runtime settles
+      // past it before the kernel observes — credit any state in the closure.
+      const closure = transientClosure(transition.to, trait);
+      if (closure.length > 1) step.acceptStates = closure;
+    }
   }
   return step;
 }

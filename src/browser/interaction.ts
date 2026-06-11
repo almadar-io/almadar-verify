@@ -583,7 +583,23 @@ export async function fillFormFieldsFromMap(
     }
     try {
       if (tag === 'select') {
-        await field.selectOption(stringValue);
+        // The synthesized value may not be one of the `<select>`'s options:
+        // the form field is typed `string`, which loses the entity's enum
+        // values, so a status/category select gets a random faker string.
+        // Try the exact value, then fall back to the first real option — an
+        // empty REQUIRED select blocks the native form submit, so the submit
+        // event (e.g. SAVE) never fires and the create/edit silently no-ops.
+        try {
+          await field.selectOption(stringValue);
+        } catch {
+          const optionValues = await field
+            .locator('option')
+            .evaluateAll((opts) => opts
+              .map((o) => (o as HTMLOptionElement).value)
+              .filter((v) => v !== ''));
+          if (optionValues.length === 0) throw new Error('select has no selectable options');
+          await field.selectOption(optionValues[0]);
+        }
       } else {
         await field.fill(stringValue);
       }

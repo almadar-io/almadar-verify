@@ -53,6 +53,23 @@ const DEFAULT_TIMEOUT_MS = 2000;
 const DEFAULT_FORM_MOUNT_MS = 3000;
 const DEFAULT_FORM_SELECTOR = '[data-pattern="form-section"]';
 
+/**
+ * Build a selector matching an action button's `data-testid`. The compiled UI
+ * (`@almadar/ui` `Button` + `DataGrid` itemActions) stamps it as
+ * `action-<EventKey>`, where `EventKey` is the FULLY QUALIFIED bus key
+ * (`Orbital.Trait.EVENT`) the codegen renders. The planner knows only the bare
+ * transition event (`EVENT`), so match BOTH: the exact bare form, OR any
+ * qualified form ending in `.<EVENT>`. Without this the verifier never finds a
+ * qualified button and silently falls back to a bare bus dispatch — fine for
+ * payload-less events, but it drops the row id / form data that CRUD steps and
+ * cross-trait cascades require, so they fail server-side validation.
+ */
+function actionSelector(event: string, suffix = ''): string {
+  const exact = `[data-testid="action-${event}"]${suffix}`;
+  const qualified = `[data-testid^="action-"][data-testid$=".${event}"]${suffix}`;
+  return `${exact}, ${qualified}`;
+}
+
 export function createDefaultDomTrigger(
   options: DefaultDomTriggerOptions = {},
 ): (page: Page, step: ExtendedWalkStep) => Promise<boolean> {
@@ -81,12 +98,12 @@ export function createDefaultDomTrigger(
     // `action-<step.event>`. The step.event remains the receiver's
     // transition event for coverage labelling.
     const affordanceEvent = step.openAffordanceEvent ?? step.event;
-    const baseSelector = `[data-testid="action-${affordanceEvent}"]`;
-    const selector = (isCrudFlow && step.targetRowId !== undefined)
-      ? `${baseSelector}[data-row-id="${step.targetRowId}"]`
+    const rowSuffix = (isCrudFlow && step.targetRowId !== undefined)
+      ? `[data-row-id="${step.targetRowId}"]`
       : (isCrudFlow && (step.testKind === 'crud-edit' || step.testKind === 'crud-delete'))
-        ? `${baseSelector}[data-row-id]`
-        : baseSelector;
+        ? `[data-row-id]`
+        : '';
+    const selector = actionSelector(affordanceEvent, rowSuffix);
 
     const locator = page.locator(selector).first();
     let clicked = false;
@@ -244,7 +261,7 @@ export function createDefaultDomTrigger(
           expectedSuccessEvent: step.expectedSuccessEvent,
         });
 
-        const followUpLocator = page.locator(`[data-testid="action-${followUpEvent}"]`).first();
+        const followUpLocator = page.locator(actionSelector(followUpEvent)).first();
         let followUpClickResult: 'clicked' | 'not-visible' | 'errored' = 'not-visible';
         try {
           const visible = await followUpLocator.isVisible({ timeout: 500 });

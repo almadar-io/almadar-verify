@@ -157,13 +157,22 @@ describe('planWalk', () => {
       expect([...(refresh?.acceptStates ?? [])].sort()).toEqual(['browsing', 'error', 'loading']);
     });
 
-    it('leaves acceptStates undefined for a transition into a settled (non-transient) state', () => {
+    it('sets acceptStates to the from-closure for a step ON an effect-emitted event', () => {
       const steps = planWalk({ trait: asyncTrait, includeAutoInit: false });
-      // `to: browsing` leaves only via INIT (a user event, not effect-emitted),
-      // so its closure is just { browsing }.
+      // `BrowseItemLoaded` is fired by the fetch effect, not a user. The manual
+      // dispatch is a no-op nudge — the runtime is wherever the natural flow
+      // settled, anywhere in `from`'s closure (= { loading, browsing, error }).
       const load = steps.find((s) => s.event === 'BrowseItemLoaded' && s.to === 'browsing' && s.payloadCase === 'success');
       expect(load).toBeDefined();
-      expect(load?.acceptStates).toBeUndefined();
+      expect([...(load?.acceptStates ?? [])].sort()).toEqual(['browsing', 'error', 'loading']);
+    });
+
+    it('excludes effect-emitted events from the replay graph (undrivable failure target)', async () => {
+      const { planReplayTo } = await import('../plan-replay-to.js');
+      // `error` is reachable only via `loading --BrowseItemLoadFailed--> error`,
+      // an effect-emitted (fetch-failure) hop that can't be driven → no path.
+      const replay = planReplayTo({ trait: asyncTrait, targetState: 'error' });
+      expect(replay).toEqual([]);
     });
 
     it('omits acceptStates entirely when the trait declares no effect-emitted events', () => {

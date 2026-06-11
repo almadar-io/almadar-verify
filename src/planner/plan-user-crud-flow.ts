@@ -246,7 +246,19 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
         ? flat
         : (raw as Record<string, FieldValue>);
       if (Object.keys(flat).length > 0) {
-        expectedRowContent = flat;
+        // Exclude enum/select fields from the content assertion. The rendered
+        // form field is typed `string`, so the synthesized value isn't one of
+        // the `<select>`'s options; the runtime fill falls back to the first
+        // option (so a REQUIRED select isn't left empty, which would block the
+        // submit). That fallback value won't equal the synthesized one — the
+        // row WAS created with valid data, just don't assert the enum field's
+        // specific value. Mirrors the crud-edit enum skip below.
+        const enumFieldNames = new Set(
+          entityFields.filter((f) => f.values !== undefined && f.values.length > 0).map((f) => f.name),
+        );
+        expectedRowContent = Object.fromEntries(
+          Object.entries(flat).filter(([k]) => !enumFieldNames.has(k)),
+        ) as Record<string, FieldValue>;
       }
     }
   }

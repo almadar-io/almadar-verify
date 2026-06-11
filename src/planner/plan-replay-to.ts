@@ -46,7 +46,18 @@ export function planReplayTo(
 
   if (targetState === trait.initialState) return [];
 
-  const path = bfsShortestPath(trait.transitions, trait.initialState, targetState);
+  // Exclude effect-emitted events from the replay graph: they are fired by an
+  // effect's outcome (a fetch's success/failure callback), not by a manual
+  // dispatch, so a reconcile hop on one can't be driven deterministically and
+  // diverges. A target reachable ONLY through such a hop (e.g. an `error`
+  // state behind a fetch-failure event) is treated as unreachable — the walk
+  // skips the diverging preamble rather than failing on an undrivable path.
+  const path = bfsShortestPath(
+    trait.transitions,
+    trait.initialState,
+    targetState,
+    trait.effectEmittedEvents,
+  );
   if (path === null) return [];
 
   return path.map((step) => {
@@ -95,6 +106,7 @@ function bfsShortestPath(
   transitions: ReadonlyArray<EdgeWalkTransition>,
   source: string,
   target: string,
+  excludeEvents?: ReadonlySet<string>,
 ): ReadonlyArray<ReplayHop> | null {
   if (source === target) return [];
 
@@ -103,6 +115,7 @@ function bfsShortestPath(
   for (const t of transitions) {
     if (t.from === '*') continue;
     if (t.event === 'INIT' && t.from === source) continue;
+    if (excludeEvents?.has(t.event) === true) continue;
     const list = adjacency.get(t.from);
     if (list === undefined) {
       adjacency.set(t.from, [t]);
