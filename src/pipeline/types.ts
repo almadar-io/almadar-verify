@@ -67,6 +67,14 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
     maxFrames?: number;
     /** Whether to capture screenshots (passed through to the Driver). Default: true. */
     screenshots?: boolean;
+    /**
+     * Credit a step even when `getState` returns `null` after settle
+     * (the driver exposes no state reader). Default falsey — the kernel
+     * fails closed and stamps a `stateless dispatch` error on any frame
+     * whose `stateAfter` is `null`. Only set this for drivers that
+     * genuinely cannot read state.
+     */
+    allowStateless?: boolean;
     /** Logger used for progress output. Default: `console.log`. */
     log?: (msg: string) => void;
     /**

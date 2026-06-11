@@ -24,6 +24,7 @@ import type { DriverContext } from '../driver/types.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { collectEntityFields } from '../planner/internal/payload-synth.js';
+import { eachInlineTrait } from '../planner/internal/orbital-walk.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
@@ -58,6 +59,7 @@ export async function runVerification<Ctx extends DriverContext>(
   const maxWalkMs = input.options?.maxWalkMs ?? DEFAULT_MAX_WALK_MS;
   const maxFrames = input.options?.maxFrames ?? DEFAULT_MAX_FRAMES;
   const opts = input.options ?? {};
+  const allowStateless = opts.allowStateless === true;
 
   // ── Wipe the per-behavior output dir before starting ──────────────
   // Stale frames + transition logs + reports from a previous run
@@ -199,7 +201,7 @@ export async function runVerification<Ctx extends DriverContext>(
               triggerKind: 'reconcile',
               coverageKey: `${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[reconcile]`,
             };
-            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait);
+            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait, allowStateless);
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
             prev = reconcileFrame;
@@ -207,7 +209,7 @@ export async function runVerification<Ctx extends DriverContext>(
         }
       }
 
-      const frame: Frame = await tick(input.driver, ctx, prev, step, orbitalsByTrait);
+      const frame: Frame = await tick(input.driver, ctx, prev, step, orbitalsByTrait, allowStateless);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';
       log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
@@ -274,7 +276,7 @@ export async function runVerification<Ctx extends DriverContext>(
       }
     }
   }
-  verdicts.portal = assertPortalSlots(frames, { noRenderTraits });
+  verdicts.portalSweep = assertPortalSlots(frames, { noRenderTraits });
 
   // VG11a — binding probes (per-frame, always).
   const bindingVerdicts = frames.map((frame, i) =>
@@ -338,7 +340,7 @@ export async function runVerification<Ctx extends DriverContext>(
     if (portalExpectations.length > 0) {
       const v = assertPortalPerStep(frames, portalExpectations);
       if (v.length > 0) {
-        verdicts.portal = combineVerdicts(v, 'portal');
+        verdicts.portalPerStep = combineVerdicts(v, 'portal');
       }
     }
   }
@@ -349,11 +351,20 @@ export async function runVerification<Ctx extends DriverContext>(
   // Both already covered above. (Future: add `derivedCascadeRules`
   // here for finer-grained cascade verification.)
 
+  // Schema-level coverage denominator: every transition declared across
+  // the orbital's inline-trait state machines. Independent of what the
+  // planner chose to walk — lets consumers catch under-covering plans.
+  let schemaTransitions = 0;
+  for (const { trait } of eachInlineTrait(input.orbital)) {
+    schemaTransitions += trait.stateMachine?.transitions.length ?? 0;
+  }
+
   return report({
     itemName: input.itemName,
     frames,
     plan: wholePlan,
     verdicts,
+    schemaTransitions,
   });
 }
 

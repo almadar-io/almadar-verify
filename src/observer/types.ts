@@ -38,6 +38,16 @@ export interface CoverageMetric {
   totalItems: number;
   coveredItems: number;
   ratio: number;
+  /**
+   * Total number of transitions declared across every inline trait's
+   * state machine in the orbital schema — the SCHEMA denominator,
+   * independent of what the planner chose to walk. Consumers gate on
+   * `coveredItems / schemaTransitions` to catch plans that under-cover
+   * the actual topology (a plan can be 100% of its own keys while
+   * exercising only a fraction of the schema's transitions). `0` when
+   * the caller didn't supply the schema count.
+   */
+  schemaTransitions: number;
   uncovered: ReadonlyArray<string>;
   perTrait: Record<string, {
     total: number;
@@ -142,9 +152,17 @@ export interface ReportShape {
   frames: ReadonlyArray<Frame>;
   coverage: CoverageMetric;
   verdicts: {
-    cascade?: Verdict;
-    mutation?: Verdict;
-    portal?: Verdict;
+    /**
+     * End-of-walk blank-portal sweep (`assertPortalSlots`): no slot is
+     * left mounted-but-empty after the walk. Kept distinct from
+     * `portalPerStep` so neither assignment clobbers the other.
+     */
+    portalSweep?: Verdict;
+    /**
+     * Per-transition portal expectations (`assertPortalPerStep`): each
+     * render-ui transition mounts its declared slot with content.
+     */
+    portalPerStep?: Verdict;
     binding?: Verdict;
     refTrait?: Verdict;
     /** VG3 — one verdict per click-path sample, combined. */

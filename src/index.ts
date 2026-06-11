@@ -259,6 +259,7 @@ export { assertCrudFlow } from './observer/assert-crud-flow.js';
 export { assertPortalPerStep } from './observer/assert-portal-per-step.js';
 export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
+export { verdictToChecks, type VerdictCheck } from './observer/verdict-checks.js';
 
 // Driver — the I/O boundary. `Driver<Ctx>` is generic over context;
 // impls live under `driver/impls/<transport>.ts` and are the only files
