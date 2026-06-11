@@ -38,10 +38,16 @@ export function assertGuardParity(frames: ReadonlyArray<Frame>): Verdict {
     if (predicted !== 'pass' && predicted !== 'fail') continue;
 
     checked += 1;
-    const expectedAccepted = predicted === 'pass';
-    if (frame.accepted !== expectedAccepted) {
+    // `decideAccepted` ALREADY folds the planner's `guardCase` in: a 'pass'
+    // frame is `accepted` iff it reached `to`; a 'fail' frame is `accepted`
+    // iff the state correctly HELD. So `accepted` is the parity signal — it
+    // means "the compiled guard behaved as the planner predicted." A guard
+    // that diverges (the GUARD-LAMBDA-DROP fingerprint) yields `accepted=false`
+    // for either guardCase. (The earlier `'fail' → accepted=false` form
+    // double-inverted: it false-positived on every correctly-rejected guard.)
+    if (!frame.accepted) {
       failures.push(
-        `frame ${frame.index}: ${frame.cause.traitName}.${frame.cause.event} predicted guard '${predicted}' (accepted=${expectedAccepted}), runtime accepted=${frame.accepted}`,
+        `frame ${frame.index}: ${frame.cause.traitName}.${frame.cause.event} guard '${predicted}' dispatch behaved unexpectedly (runtime did not match the predicted ${predicted})`,
       );
       indices.push(frame.index);
     }

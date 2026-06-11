@@ -56,9 +56,12 @@ function frame(index: number, c: FrameCause, accepted: boolean): Frame {
 
 describe('assertGuardParity', () => {
   it('passes when every guard prediction matches the runtime', () => {
+    // `accepted` already folds in the guardCase (decideAccepted): a 'pass'
+    // frame is accepted iff it reached `to`; a 'fail' frame is accepted iff the
+    // state correctly HELD. So a correctly-rejected guard-fail is accepted=true.
     const frames = [
       frame(0, cause('T', 'idle', 'OPEN', 'open', { guardCase: 'pass' }), true),
-      frame(1, cause('T', 'idle', 'OPEN', 'idle', { guardCase: 'fail' }), false),
+      frame(1, cause('T', 'idle', 'OPEN', 'idle', { guardCase: 'fail' }), true),
       // unguarded + auto-init + reposition frames are ignored.
       frame(2, cause('T', 'idle', 'TICK', 'idle', { guardCase: null }), false),
       frame(3, cause('T', 'idle', 'INIT', 'idle', { guardCase: 'pass', triggerKind: 'auto-init' }), false),
@@ -72,17 +75,19 @@ describe('assertGuardParity', () => {
   it('fails when a guardCase:pass frame was not accepted (GUARD-LAMBDA-DROP)', () => {
     const frames = [
       frame(0, cause('T', 'idle', 'OPEN', 'open', { guardCase: 'pass' }), false),
-      frame(1, cause('T', 'idle', 'OPEN', 'idle', { guardCase: 'fail' }), false),
+      frame(1, cause('T', 'idle', 'OPEN', 'idle', { guardCase: 'fail' }), true), // correct rejection
     ];
     const verdict = assertGuardParity(frames);
     expect(verdict.passed).toBe(false);
-    expect(verdict.detail).toContain('diverged');
+    expect(verdict.detail).toContain('behaved unexpectedly');
     expect(verdict.evidence?.frameIndices).toEqual([0]);
   });
 
-  it('fails when a guardCase:fail frame was accepted', () => {
+  it('fails when a guardCase:fail frame transitioned anyway (guard did not block)', () => {
+    // accepted=false on a 'fail' frame = the state moved when the guard should
+    // have held it → the compiled guard diverged.
     const frames = [
-      frame(0, cause('T', 'idle', 'OPEN', 'open', { guardCase: 'fail' }), true),
+      frame(0, cause('T', 'idle', 'OPEN', 'open', { guardCase: 'fail' }), false),
     ];
     const verdict = assertGuardParity(frames);
     expect(verdict.passed).toBe(false);

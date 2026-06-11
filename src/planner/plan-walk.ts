@@ -41,7 +41,7 @@
  * @packageDocumentation
  */
 
-import { buildGuardPayloads, type EventPayload } from '@almadar/core';
+import { buildGuardPayloads, constTruth, type EventPayload } from '@almadar/core';
 import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PayloadCase, PlanWalkInput } from './types.js';
 import {
@@ -79,7 +79,19 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
         ? buildGuardPayloads(transition.guard)
         : { pass: {}, fail: {} };
 
-      if (emitMalformed) {
+      // A post-inline constant-folded guard (e.g. `(or (= "create" "create")
+      // @payload.row)` for a create-mode modal) is always true / always false:
+      // it has no fail / no pass case. Emitting the impossible variant would
+      // dispatch a payload the runtime ignores and then flag a spurious
+      // guard-parity divergence. `constTruth` returns the constant value, or
+      // null when a binding remains (then both variants are real).
+      const constant = transition.guard !== undefined ? constTruth(transition.guard) : null;
+      const canFail = constant !== true;
+      const canPass = constant !== false;
+
+      // malformed expects the validator to reject; pointless when the guard
+      // always passes (the success path is the only meaningful one).
+      if (emitMalformed && canFail) {
         result.push(makeStep({
           trait,
           transition,
@@ -90,23 +102,27 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
         }));
       }
 
-      result.push(makeStep({
-        trait,
-        transition,
-        guardCase: 'pass',
-        payloadCase: 'success',
-        payload: { ...successPayload, ...guardPayloads.pass } as EventPayload,
-        entityFieldsByName,
-      }));
+      if (canPass) {
+        result.push(makeStep({
+          trait,
+          transition,
+          guardCase: 'pass',
+          payloadCase: 'success',
+          payload: { ...successPayload, ...guardPayloads.pass } as EventPayload,
+          entityFieldsByName,
+        }));
+      }
 
-      result.push(makeStep({
-        trait,
-        transition,
-        guardCase: 'fail',
-        payloadCase: 'guard-fail',
-        payload: { ...successPayload, ...guardPayloads.fail } as EventPayload,
-        entityFieldsByName,
-      }));
+      if (canFail) {
+        result.push(makeStep({
+          trait,
+          transition,
+          guardCase: 'fail',
+          payloadCase: 'guard-fail',
+          payload: { ...successPayload, ...guardPayloads.fail } as EventPayload,
+          entityFieldsByName,
+        }));
+      }
       continue;
     }
 
