@@ -161,7 +161,7 @@ interface MakeStepInput {
 
 function makeStep(input: MakeStepInput): ExtendedWalkStep {
   const { trait, transition, guardCase, payloadCase, payload } = input;
-  return {
+  const step: ExtendedWalkStep = {
     from: transition.from,
     event: transition.event,
     to: transition.to,
@@ -173,6 +173,48 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
     coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, guardCase, payloadCase),
     payloadCase,
   };
+  // When `to` auto-advances via effect-emitted events, the runtime settles
+  // past it before the kernel observes — credit any state in the closure.
+  // Only meaningful for the forward (success / guard-pass) variants; the
+  // guard-fail / malformed variants expect the state to HOLD.
+  if (guardCase !== 'fail' && payloadCase !== 'malformed') {
+    const closure = transientClosure(transition.to, trait);
+    if (closure.length > 1) step.acceptStates = closure;
+  }
+  return step;
+}
+
+/**
+ * Transient closure of `start`: the states reachable from it by following
+ * transitions whose event is *effect-emitted* (auto-fired by an effect's
+ * `emit`, not a user). A state with such an outgoing transition advances to
+ * its target the instant the effect resolves, so a transition INTO it can
+ * legitimately settle anywhere in the closure. Returns `[start]` when the
+ * trait declares no effect-emitted events (the common case).
+ */
+function transientClosure(start: string, trait: PlanWalkInput['trait']): string[] {
+  const emitted = trait.effectEmittedEvents;
+  if (emitted === undefined || emitted.size === 0) return [start];
+  const seen = new Set<string>([start]);
+  const queue = [start];
+  while (queue.length > 0) {
+    const state = queue.shift() as string;
+    for (const t of trait.transitions) {
+      if (!emitted.has(t.event)) continue;
+      if (!fromMatches(t.from, state)) continue;
+      if (!seen.has(t.to)) {
+        seen.add(t.to);
+        queue.push(t.to);
+      }
+    }
+  }
+  return [...seen];
+}
+
+function fromMatches(from: PlanWalkInput['trait']['transitions'][number]['from'], state: string): boolean {
+  if (from === '*') return true;
+  if (Array.isArray(from)) return from.includes(state);
+  return from === state;
 }
 
 /**

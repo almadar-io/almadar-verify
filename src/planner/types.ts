@@ -203,6 +203,17 @@ export interface ExtendedWalkStep extends WalkStep {
    * don't fan out into malformed/success/guard-fail variants.
    */
   payloadCase?: PayloadCase;
+
+  /**
+   * Settled states the runtime may legitimately land in after this step,
+   * beyond `to`. When `to` is a *transient* state — one whose entry effect
+   * synchronously emits an event that transitions out (e.g. `loading`'s
+   * `fetch` emits `CartItemLoaded` → `browsing`) — the runtime auto-advances
+   * past `to` before the kernel can observe it. `planWalk` sets this to the
+   * transient closure of `to` so `decideAccepted` credits any reachable
+   * settled state. Undefined → only `to` is accepted (the normal case).
+   */
+  acceptStates?: readonly string[];
 }
 
 /**

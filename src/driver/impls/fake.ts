@@ -51,9 +51,19 @@ export class FakeRuntime {
   private lastDispatched = new Map<string, { event: string; payload?: EventPayload; timestamp: number }>();
   /** Effect traces from the most recent transition. */
   private lastEffectResults: EffectTrace[] = [];
+  /** `traitName::event` pairs the API boundary rejects (validation fail):
+   *  dispatch records the event but does NOT advance and returns a
+   *  `success:false` serverResponse. Simulates the compiled server's
+   *  payload-validator rejecting a malformed payload. */
+  private rejected = new Set<string>();
 
   constructor(private traits: TraitWalkConfig[]) {
     this.reset();
+  }
+
+  /** Make `(traitName, event)` dispatches fail server-side validation. */
+  rejectEvent(traitName: string, event: string): void {
+    this.rejected.add(`${traitName}::${event}`);
   }
 
   reset(): void {
@@ -79,6 +89,25 @@ export class FakeRuntime {
     if (trait === undefined) return { to: null, serverResponse: null };
 
     const current = this.states.get(traitName) ?? trait.initialState;
+
+    if (this.rejected.has(`${traitName}::${event}`)) {
+      // API-boundary validation rejected the payload: record the attempt,
+      // do not advance, surface a `success:false` server trace.
+      this.eventLog.push({ type: event, payload, timestamp: Date.now() });
+      return {
+        to: null,
+        serverResponse: {
+          orbitalName: traitName,
+          success: false,
+          clientEffects: 0,
+          dataEntities: {},
+          emittedEvents: [],
+          error: `Payload validation failed for event '${event}'`,
+          timestamp: Date.now(),
+        },
+      };
+    }
+
     const transition = trait.transitions.find(
       (t) => t.from === current && t.event === event,
     );

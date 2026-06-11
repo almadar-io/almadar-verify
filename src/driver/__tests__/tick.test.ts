@@ -74,6 +74,79 @@ describe('tick', () => {
     expect(next.index).toBe(1);
   });
 
+  it('accepts a malformed-payloadCase step when the server rejects and state holds', async () => {
+    const { driver, runtime } = createFakeDriver([trait]);
+    const ctx = { outputDir: '/tmp', trait, runtime };
+    // The API-boundary validator rejects the empty payload, so the
+    // transition must NOT fire. The planner still tags `to` with the
+    // success target; acceptance must measure "state held + rejected",
+    // not "reached `to`".
+    runtime.rejectEvent(trait.traitName, 'BrowseItemLoaded');
+    const malformed: ExtendedWalkStep = {
+      ...step('loading', 'BrowseItemLoaded', 'browsing'),
+      payloadCase: 'malformed',
+    };
+
+    const frame = await tick(driver, ctx, null, malformed);
+
+    expect(frame.stateBefore).toBe('loading');
+    expect(frame.stateAfter).toBe('loading'); // held — validator rejected
+    expect(frame.serverResponse?.success).toBe(false);
+    expect(frame.accepted).toBe(true);
+  });
+
+  it('rejects a malformed-payloadCase step when the validator silently accepts bad input', async () => {
+    const { driver, runtime } = createFakeDriver([trait]);
+    const ctx = { outputDir: '/tmp', trait, runtime };
+    // No rejectEvent: the fake advances the state machine, simulating a
+    // server that accepted a malformed payload (a real validation gap).
+    // The malformed contract requires state to HOLD, so this must fail.
+    const malformed: ExtendedWalkStep = {
+      ...step('loading', 'BrowseItemLoaded', 'browsing'),
+      payloadCase: 'malformed',
+    };
+
+    const frame = await tick(driver, ctx, null, malformed);
+
+    expect(frame.stateAfter).toBe('browsing'); // advanced — bad input accepted
+    expect(frame.accepted).toBe(false);
+  });
+
+  it('accepts a settled state in the transient closure (acceptStates)', async () => {
+    const { driver, runtime } = createFakeDriver([trait]);
+    const ctx = { outputDir: '/tmp', trait, runtime };
+    // The trait is in `browsing`. `browsing --INIT--> loading` fires, but
+    // `loading` auto-advances to `browsing` (the planner supplied acceptStates
+    // = the transient closure). The fake lands the trait in `loading` (no
+    // auto-fetch), which is also in the closure → accepted.
+    runtime.dispatch(trait.traitName, 'BrowseItemLoaded'); // loading → browsing
+    const refresh: ExtendedWalkStep = {
+      ...step('browsing', 'INIT', 'loading'),
+      acceptStates: ['loading', 'browsing', 'error'],
+    };
+
+    const frame = await tick(driver, ctx, null, refresh);
+
+    expect(frame.stateBefore).toBe('browsing');
+    expect(frame.stateAfter).toBe('loading'); // in the closure
+    expect(frame.accepted).toBe(true);
+  });
+
+  it('rejects a state outside the transient closure', async () => {
+    const { driver, runtime } = createFakeDriver([trait]);
+    const ctx = { outputDir: '/tmp', trait, runtime };
+    runtime.dispatch(trait.traitName, 'BrowseItemLoaded'); // loading → browsing
+    // browsing --INIT--> loading in the fake → loading, but acceptStates only
+    // lists `error` (an unreachable settled state) → not in closure → rejected.
+    const refresh: ExtendedWalkStep = {
+      ...step('browsing', 'INIT', 'loading'),
+      acceptStates: ['error'],
+    };
+    const frame = await tick(driver, ctx, null, refresh);
+    expect(frame.stateAfter).toBe('loading');
+    expect(frame.accepted).toBe(false);
+  });
+
   it('fires triggerDOM for dom steps', async () => {
     const { driver, runtime } = createFakeDriver([trait]);
     const ctx = { outputDir: '/tmp', trait, runtime };

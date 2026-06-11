@@ -139,4 +139,36 @@ describe('planWalk', () => {
     expect(triggerKinds.has('auto-init')).toBe(true);
     expect(triggerKinds.has('bus')).toBe(true);
   });
+
+  describe('transient auto-advancing states (acceptStates)', () => {
+    // `loading`'s entry fetch emits BrowseItemLoaded (→ browsing) on success
+    // and BrowseItemLoadFailed (→ error) on failure: both effect-emitted, so
+    // `loading` auto-advances and a transition INTO it settles past it.
+    const asyncTrait: TraitWalkConfig = {
+      ...stdBrowseTrait,
+      effectEmittedEvents: new Set(['BrowseItemLoaded', 'BrowseItemLoadFailed']),
+    };
+
+    it('sets acceptStates to the transient closure for a transition into a transient state', () => {
+      const steps = planWalk({ trait: asyncTrait, includeAutoInit: false });
+      const refresh = steps.find((s) => s.from === 'browsing' && s.event === 'INIT' && s.to === 'loading');
+      expect(refresh).toBeDefined();
+      // closure(loading) = { loading, browsing, error }
+      expect([...(refresh?.acceptStates ?? [])].sort()).toEqual(['browsing', 'error', 'loading']);
+    });
+
+    it('leaves acceptStates undefined for a transition into a settled (non-transient) state', () => {
+      const steps = planWalk({ trait: asyncTrait, includeAutoInit: false });
+      // `to: browsing` leaves only via INIT (a user event, not effect-emitted),
+      // so its closure is just { browsing }.
+      const load = steps.find((s) => s.event === 'BrowseItemLoaded' && s.to === 'browsing' && s.payloadCase === 'success');
+      expect(load).toBeDefined();
+      expect(load?.acceptStates).toBeUndefined();
+    });
+
+    it('omits acceptStates entirely when the trait declares no effect-emitted events', () => {
+      const steps = planWalk({ trait: stdBrowseTrait, includeAutoInit: false });
+      expect(steps.every((s) => s.acceptStates === undefined)).toBe(true);
+    });
+  });
 });

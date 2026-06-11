@@ -40,6 +40,15 @@ export interface TraitWalkConfig {
    * orbital's entity field defs.
    */
   linkedEntity?: string;
+  /**
+   * Events fired by the trait's *effects* (an `emit: { success, failure }`
+   * options object on a `fetch`/`persist`/… effect), not by a user
+   * affordance. `planWalk` uses these to compute each transition's
+   * transient closure: a state whose entry effect emits one of these
+   * auto-advances to the emit target, so a transition INTO it can settle
+   * past it. Populated by `extractTraitWalkConfigs`.
+   */
+  effectEmittedEvents?: ReadonlySet<string>;
 }
 
 export type { WalkStep, EdgeWalkTransition };

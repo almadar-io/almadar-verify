@@ -11,6 +11,7 @@
 
 import type { OrbitalSchema } from '@almadar/core';
 import type { TraitWalkConfig } from '../engine/types.js';
+import { collectEffectEmittedEvents } from './internal/effect-emits.js';
 import {
   eachInlineTrait,
   findDefaultRoute,
@@ -35,6 +36,10 @@ export function extractTraitWalkConfigs(orbital: OrbitalSchema): TraitWalkConfig
     };
     if (trait.linkedEntity !== undefined) {
       config.linkedEntity = trait.linkedEntity;
+    }
+    const effectEmittedEvents = collectEffectEmittedEvents(trait.stateMachine.transitions);
+    if (effectEmittedEvents.size > 0) {
+      config.effectEmittedEvents = effectEmittedEvents;
     }
     const route = findRouteForTrait(orb, trait.name) ?? findDefaultRoute(orb);
     if (route !== null) {

@@ -22,7 +22,7 @@
  * @packageDocumentation
  */
 
-import type { EventPayload } from '@almadar/core';
+import type { EventPayload, ServerResponseTrace } from '@almadar/core';
 import { makeInitFrame, makeWalkFrame } from '../frame/factory.js';
 import type { Frame, FrameCause } from '../frame/types.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
@@ -126,8 +126,9 @@ export async function tick<Ctx extends DriverContext>(
   const stateAfter = await driver.getState(ctx, step.traitName);
   const snap = await driver.snapshot(ctx, step);
 
+  const effectiveServerResponse = serverResponse ?? snap.serverResponse;
   const errors = collectDispatchErrors(step, stateAfter, dispatchSent, allowStateless === true);
-  const accepted = errors.length === 0 && decideAccepted(step, stateBefore, stateAfter);
+  const accepted = errors.length === 0 && decideAccepted(step, stateBefore, stateAfter, effectiveServerResponse);
 
   return makeWalkFrame({
     ...(errors.length > 0 && { errors }),
@@ -224,14 +225,31 @@ function decideAccepted(
   step: ExtendedWalkStep,
   stateBefore: string | null,
   stateAfter: string | null,
+  serverResponse: ServerResponseTrace | null,
 ): boolean {
   if (step.guardCase === 'fail') {
     // Guard-fail: state should NOT change.
     return stateAfter === step.from || stateAfter === stateBefore;
   }
-  // Normal or guard-pass: state should reach step.to. A `null`
+  if (step.payloadCase === 'malformed') {
+    // Malformed: the API-boundary validator must REJECT the empty/bad
+    // payload, so the state machine must NOT advance to `step.to`. When
+    // the path is server-authoritative we also require the server to have
+    // actually rejected — a `success:true` that happened to leave state
+    // unchanged would mean the validator silently accepted bad input (a
+    // real gap), which must stay flagged. On the runtime/interpreter path
+    // there is no `serverResponse`; state-held alone is the contract.
+    const held = stateAfter === step.from || stateAfter === stateBefore;
+    const serverRejected = serverResponse === null || serverResponse.success === false;
+    return held && serverRejected;
+  }
+  // Normal or guard-pass: state should reach step.to — or any state in the
+  // transient closure when `to` auto-advances (planner-supplied acceptStates,
+  // e.g. `loading` settling at `browsing` after its fetch). A `null`
   // `stateAfter` only reaches here when `allowStateless` was set (else
-  // `collectDispatchErrors` already forced `accepted = false`), so we
-  // credit it as the caller-opted stateless-driver case.
-  return stateAfter === step.to || stateAfter === null;
+  // `collectDispatchErrors` already forced `accepted = false`), so we credit
+  // it as the caller-opted stateless-driver case.
+  if (stateAfter === null) return true;
+  const accepted = step.acceptStates ?? [step.to];
+  return accepted.includes(stateAfter);
 }
