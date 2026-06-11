@@ -62,18 +62,26 @@ export async function runVerification<Ctx extends DriverContext>(
   const opts = input.options ?? {};
   const allowStateless = opts.allowStateless === true;
 
-  // ── Wipe the per-behavior output dir before starting ──────────────
+  // ── Clear OUR artifacts from the output dir before starting ───────
   // Stale frames + transition logs + reports from a previous run
   // outlive the new run when the new run produces fewer artifacts
   // (e.g. fewer frames after a planner change), and they show up in
   // screenshot reviews as "ghost" results that don't reflect the
-  // current state. Recreating the dir at the start gives every run a
-  // clean slate. Skipped when outputDir is empty (test-fixture mode).
+  // current state. Skipped when outputDir is empty (test-fixture mode).
+  //
+  // NEVER `rm -rf` the directory itself: callers have passed shared
+  // dirs here (orbital-verify-unified passed the compiled-app scratch
+  // ROOT when screenshots were off), and a recursive wipe deleted the
+  // running app out from under its own dev server mid-walk. Only the
+  // entries THIS pipeline writes are ours to delete.
   const outputDir = input.ctx.outputDir;
   if (outputDir !== undefined && outputDir !== '' && typeof process !== 'undefined' && process.versions?.node) {
     try {
       const { rmSync, mkdirSync } = await import('node:fs');
-      rmSync(outputDir, { recursive: true, force: true });
+      const { join } = await import('node:path');
+      for (const artifact of ['frames', 'verify-report.json', 'transition-log.txt', 'transition-log.jsonl']) {
+        rmSync(join(outputDir, artifact), { recursive: true, force: true });
+      }
       mkdirSync(outputDir, { recursive: true });
     } catch { /* best-effort — keep going if FS errors */ }
   }
