@@ -21,6 +21,7 @@ import type {
   EventLogEntry,
   EventPayload,
   ServerResponseTrace,
+  TraitConfig,
   VerificationSnapshot,
 } from '@almadar/core';
 import type { ConsoleEntry } from '../util/types.js';
@@ -114,4 +115,12 @@ export interface Driver<Ctx extends DriverContext = DriverContext> {
 
   /** Per-trait setup (navigate to the trait's route, etc). Optional. */
   beforeTrait?(ctx: Ctx): Promise<void>;
+
+  /**
+   * Apply a trait `config` override and re-render the behavior, WITHOUT
+   * recompiling — used by the config sweep. On the playground this re-registers
+   * the active schema with the overrides and waits for the re-render. Optional:
+   * drivers that can't re-configure leave it undefined and the sweep is skipped.
+   */
+  applyConfig?(ctx: Ctx, traitName: string, config: TraitConfig): Promise<void>;
 }

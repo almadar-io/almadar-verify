@@ -12,6 +12,16 @@
 export type { RunVerificationInput, RunVerificationOutput } from './pipeline/types.js';
 export { runVerification } from './pipeline/index.js';
 
+// Config sweep (Storybook-style variants — vary trait config, snapshot each)
+export { runConfigSweep } from './pipeline/run-config-sweep.js';
+export type {
+  ConfigSweepInput,
+  ConfigSweepResult,
+  ConfigSweepVariant,
+} from './pipeline/run-config-sweep.js';
+export { enumerateConfigVariants } from './planner/enumerate-config-variants.js';
+export type { ConfigVariant } from './planner/enumerate-config-variants.js';
+
 // Driver contract (types + tick only — no Playwright impls)
 export type { Driver, DriverContext, SendResult, SnapshotResult } from './driver/types.js';
 export { tick } from './driver/tick.js';
