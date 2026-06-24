@@ -35,6 +35,22 @@ export interface AssertPortalOptions {
   noRenderTraits?: ReadonlySet<string>;
 }
 
+/**
+ * Structural LAYOUT chrome the shell (`UISlotRenderer`) always mounts as fixed
+ * regions — a sidebar column and fixed HUD bars — regardless of content. They are
+ * empty unless a behavior explicitly fills them, which never happens in
+ * single-behavior playground mode, so an empty one is NOT a blank-portal bug. Only
+ * the primary `main` content slot (and content/overlay slots a trait actually
+ * targets) are checked. (`modal`/`drawer`/`overlay`/`center`/`toast` lazy-mount
+ * their portal target only when filled, so they never appear empty here.)
+ */
+const OPTIONAL_LAYOUT_SLOTS: ReadonlySet<string> = new Set([
+  'sidebar',
+  'hud-top',
+  'hud-bottom',
+  'floating',
+]);
+
 export function assertPortalSlots(
   frames: ReadonlyArray<Frame>,
   options: AssertPortalOptions = {},
@@ -46,6 +62,7 @@ export function assertPortalSlots(
   for (const frame of frames) {
     if (noRender.has(frame.cause.traitName)) continue;
     for (const portal of frame.domSnapshot.portals) {
+      if (OPTIONAL_LAYOUT_SLOTS.has(portal.slot)) continue;
       if (portal.mounted && portal.childCount === 0) {
         offenders.push(`frame ${frame.index}: slot "${portal.slot}" mounted but empty`);
         indices.push(frame.index);
