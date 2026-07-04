@@ -1,6 +1,6 @@
 {
   "name": "@almadar-io/verify",
-  "version": "4.8.0",
+  "version": "4.9.0",
   "description": "Shared Playwright verification utilities for Almadar runtime and compiled projects",
   "type": "module",
   "main": "./dist/index.js",
@@ -49,7 +49,8 @@
     "playwright": "1.50.1",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "turbo": "^2.8.17"
   },
   "repository": {
     "type": "git",
@@ -62,5 +63,6 @@
     "playwright",
     "testing"
   ],
-  "homepage": "https://github.com/almadar-io/almadar-verify#readme"
+  "homepage": "https://github.com/almadar-io/almadar-verify#readme",
+  "packageManager": "pnpm@10.30.3"
 }
