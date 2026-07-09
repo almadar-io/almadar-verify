@@ -8,14 +8,14 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     },
     "./browser": {
+      "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js",
-      "require": "./dist/browser.js",
-      "types": "./dist/browser.d.ts"
+      "require": "./dist/browser.js"
     }
   },
   "files": [
@@ -35,7 +35,7 @@
   "dependencies": {
     "@almadar/core": "^10.26.0",
     "@almadar/logger": "^1.9.0",
-    "@faker-js/faker": "^9.9.0"
+    "@almadar/runtime": "^6.32.0"
   },
   "peerDependencies": {
     "playwright": ">=1.40.0"

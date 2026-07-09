@@ -5,7 +5,7 @@
  * - buildMinimalPayload(): construct test payloads from field names
  * - classifyTargetPattern(): determine pattern behavior from registry
  * - fillFormFields(): generic DOM scanning to fill form inputs
- * - generateFieldValue(): faker-based test value generation
+ * - generateFieldValue(): seeded test value generation
  * - clickSubmitAction(): find and click save/submit buttons
  * - clickCloseAction(): find and click close/cancel buttons
  * - countEntityRows(): count visible entity rows on page
@@ -15,7 +15,21 @@
 
 import type { Page } from 'playwright';
 import type { EventPayload, EventPayloadValue } from '@almadar/core';
-import { faker } from '@faker-js/faker';
+import {
+  seedRandom,
+  randomFloat,
+  randomEmail,
+  randomPassword,
+  randomPhone,
+  randomUrl,
+  randomRecentDate,
+  randomColor,
+  randomWords,
+  randomSentence,
+  randomBoolean,
+  randomUuid,
+  randomArrayElement,
+} from '@almadar/runtime/mockRandom';
 import { createLogger } from '@almadar/logger';
 
 // Permanent observability for the DOM-side form-fill path. Surfaces
@@ -77,36 +91,36 @@ export function classifyTargetPattern(
 
 // ── Faker-based Value Generation ────────────────────────────────────
 
-// Seed faker for deterministic test runs
-faker.seed(42);
+// Seed PRNG for deterministic test runs
+seedRandom(42);
 
 /**
  * Generate a realistic test value for a form field based on its HTML input
- * type and name/id attributes. Uses @faker-js/faker for realistic data.
+ * type and name/id attributes. Uses a seeded PRNG for realistic data.
  *
  * Returns a string (all HTML inputs accept string values).
  */
 export function generateFieldValue(inputType: string, _fieldName: string): string {
   switch (inputType) {
     case 'number':
-      return String(faker.number.float({ min: 1, max: 999, fractionDigits: 2 }));
+      return String(randomFloat({ min: 1, max: 999, fractionDigits: 2 }));
     case 'email':
-      return faker.internet.email();
+      return randomEmail();
     case 'password':
-      return faker.internet.password({ length: 12 });
+      return randomPassword(12);
     case 'tel':
-      return faker.phone.number();
+      return randomPhone();
     case 'url':
-      return faker.internet.url();
+      return randomUrl();
     case 'date':
-      return faker.date.recent().toISOString().split('T')[0];
+      return randomRecentDate().toISOString().split('T')[0]!;
     case 'datetime-local':
-      return faker.date.recent().toISOString().slice(0, 16);
+      return randomRecentDate().toISOString().slice(0, 16);
     case 'color':
-      return faker.color.rgb();
+      return randomColor();
     case 'text':
     default:
-      return faker.lorem.words(2);
+      return randomWords(2);
   }
 }
 
@@ -122,7 +136,7 @@ export interface EntityFieldDef {
 
 /**
  * Build a minimal test payload from declared field names and types.
- * Uses faker for realistic values, but prefers entity field `values` when available.
+ * Uses the seeded PRNG for realistic values, but prefers entity field `values` when available.
  *
  * @param fields - Payload field declarations from the event schema
  * @param entityFields - Optional entity field definitions (with `values` arrays) for meaningful data
@@ -177,7 +191,7 @@ export function buildMinimalPayload(
 
     // Agent-specific field generation
     if (name === 'content' || name === 'prompt') {
-      payload[name] = faker.lorem.sentence();
+      payload[name] = randomSentence();
       continue;
     }
     if (name === 'category' && !entityField) {
@@ -186,7 +200,7 @@ export function buildMinimalPayload(
       continue;
     }
     if (name === 'query') {
-      payload[name] = faker.lorem.words(3);
+      payload[name] = randomWords(3);
       continue;
     }
     if (name === 'toolName') {
@@ -216,7 +230,7 @@ export function buildMinimalPayload(
       const inner = arrayMatch[1] ?? '';
       // For a structured-entity array, build one mock row from the
       // entity field defs (same path used by `object`/`any` below).
-      // For a scalar array (`[string]`/`[number]`), produce 2-3 faker
+      // For a scalar array (`[string]`/`[number]`), produce 2-3 random
       // primitives so list patterns have visible rows.
       const isScalarInner =
         inner === 'string' || inner === 'number' || inner === 'integer' ||
@@ -224,9 +238,9 @@ export function buildMinimalPayload(
       if (isScalarInner) {
         const arr: EventPayloadValue[] = [];
         for (let i = 0; i < 3; i++) {
-          if (inner === 'string') arr.push(faker.lorem.words(2));
-          else if (inner === 'boolean') arr.push(faker.datatype.boolean());
-          else arr.push(faker.number.float({ min: 1, max: 999, fractionDigits: 2 }));
+          if (inner === 'string') arr.push(randomWords(2));
+          else if (inner === 'boolean') arr.push(randomBoolean());
+          else arr.push(randomFloat({ min: 1, max: 999, fractionDigits: 2 }));
         }
         payload[name] = arr;
       } else if (entityFields && entityFields.length > 0) {
@@ -240,29 +254,29 @@ export function buildMinimalPayload(
             case 'number':
             case 'integer':
             case 'float':
-              row[ef.name] = faker.number.float({ min: 1, max: 999, fractionDigits: 2 });
+              row[ef.name] = randomFloat({ min: 1, max: 999, fractionDigits: 2 });
               break;
             case 'boolean':
-              row[ef.name] = faker.datatype.boolean();
+              row[ef.name] = randomBoolean();
               break;
             case 'date':
-              row[ef.name] = faker.date.recent().toISOString();
+              row[ef.name] = randomRecentDate().toISOString();
               break;
             default:
-              row[ef.name] = faker.lorem.words(2);
+              row[ef.name] = randomWords(2);
               break;
           }
         }
         payload[name] = [row];
       } else {
-        payload[name] = [{ label: faker.lorem.words(2) }];
+        payload[name] = [{ label: randomWords(2) }];
       }
       continue;
     }
 
     switch (type) {
       case 'string':
-        // Explicit string-type fields produce a primitive faker word.
+        // Explicit string-type fields produce a primitive random word.
         // Without this branch, strings fell through to the default's
         // entity-row expansion below, which produced an object instead
         // of a string — fillFormFieldsFromMap then `skipped-no-string-form`
@@ -270,24 +284,24 @@ export function buildMinimalPayload(
         // Confirmed via `[almadar:verify:dom] dom:fill:field-result
         // { name: 'description', result: 'skipped-no-string-form' }` on
         // the std-list crud-create step before this branch existed.
-        payload[name] = faker.lorem.words(2);
+        payload[name] = randomWords(2);
         break;
       case 'number':
       case 'integer':
       case 'float':
-        payload[name] = faker.number.float({ min: 1, max: 999, fractionDigits: 2 });
+        payload[name] = randomFloat({ min: 1, max: 999, fractionDigits: 2 });
         break;
       case 'boolean':
-        payload[name] = faker.datatype.boolean();
+        payload[name] = randomBoolean();
         break;
       case 'date':
-        payload[name] = faker.date.recent().toISOString();
+        payload[name] = randomRecentDate().toISOString();
         break;
       case 'object':
       case 'any':
         // When an event declares `data: object!` (e.g. SAVE carries the
         // form's submitted row), the payload field IS the entity shape.
-        // Defaulting to a string here (via faker.lorem.words) persists
+        // Defaulting to a string here (via randomWords) persists
         // `data: "lorem ipsum"` — server stores it literally, DataGrid
         // tries to read row.name/row.description off a string and renders
         // a blank card. Build a real object from the entity field types
@@ -303,22 +317,22 @@ export function buildMinimalPayload(
               case 'number':
               case 'integer':
               case 'float':
-                obj[ef.name] = faker.number.float({ min: 1, max: 999, fractionDigits: 2 });
+                obj[ef.name] = randomFloat({ min: 1, max: 999, fractionDigits: 2 });
                 break;
               case 'boolean':
-                obj[ef.name] = faker.datatype.boolean();
+                obj[ef.name] = randomBoolean();
                 break;
               case 'date':
-                obj[ef.name] = faker.date.recent().toISOString();
+                obj[ef.name] = randomRecentDate().toISOString();
                 break;
               default:
-                obj[ef.name] = faker.lorem.words(2);
+                obj[ef.name] = randomWords(2);
                 break;
             }
           }
           payload[name] = obj;
         } else {
-          payload[name] = { label: faker.lorem.words(2) };
+          payload[name] = { label: randomWords(2) };
         }
         break;
       default:
@@ -334,7 +348,7 @@ export function buildMinimalPayload(
         // `payload.data = 'lorem ipsum'` (a string) and the persistor's
         // update branch silently no-op'd because `data.id` was undefined.
         if (entityFields && entityFields.length > 0) {
-          const row: EventPayload = { id: faker.string.uuid() };
+          const row: EventPayload = { id: randomUuid() };
           for (const ef of entityFields) {
             if (ef.values && ef.values.length > 0) {
               row[ef.name] = ef.values[0];
@@ -344,22 +358,22 @@ export function buildMinimalPayload(
               case 'number':
               case 'integer':
               case 'float':
-                row[ef.name] = faker.number.float({ min: 1, max: 999, fractionDigits: 2 });
+                row[ef.name] = randomFloat({ min: 1, max: 999, fractionDigits: 2 });
                 break;
               case 'boolean':
-                row[ef.name] = faker.datatype.boolean();
+                row[ef.name] = randomBoolean();
                 break;
               case 'date':
-                row[ef.name] = faker.date.recent().toISOString();
+                row[ef.name] = randomRecentDate().toISOString();
                 break;
               default:
-                row[ef.name] = faker.lorem.words(2);
+                row[ef.name] = randomWords(2);
                 break;
             }
           }
           payload[name] = row;
         } else {
-          payload[name] = faker.lorem.words(2);
+          payload[name] = randomWords(2);
         }
         break;
     }
@@ -449,7 +463,7 @@ export async function fillFormFieldsWithValues(
     try {
       const ta = textareas.nth(i);
       const nameAttr = await ta.getAttribute('name') ?? '';
-      const value = faker.lorem.sentence();
+      const value = randomSentence();
       await ta.fill(value);
       values[keyFor(nameAttr, `textarea-${i}`)] = value;
       count++;
@@ -503,7 +517,7 @@ import type { FieldValue } from '@almadar/core';
  * planner extension produces a step with `step.formData` set —
  * deterministic test inputs (e.g. an interaction test that wants to
  * SAVE a CartItem with name="Apple", description="red fruit") instead
- * of faker-generated noise.
+ * of PRNG-generated noise.
  *
  * Fields not present in `formData` are ignored. Fields in `formData`
  * with no matching input are silently skipped (the planner may know
@@ -585,7 +599,7 @@ export async function fillFormFieldsFromMap(
       if (tag === 'select') {
         // The synthesized value may not be one of the `<select>`'s options:
         // the form field is typed `string`, which loses the entity's enum
-        // values, so a status/category select gets a random faker string.
+        // values, so a status/category select gets a random string.
         // Try the exact value, then fall back to the first real option — an
         // empty REQUIRED select blocks the native form submit, so the submit
         // event (e.g. SAVE) never fires and the create/edit silently no-ops.
