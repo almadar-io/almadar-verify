@@ -17,21 +17,18 @@ overrides:
   '@types/three': 0.160.0
   '@almadar/std': ^16.103.2
   '@almadar/ui': ^5.93.0
-  '@almadar/core': ^10.24.0
+  '@almadar/core': ^10.25.0
 
 importers:
 
   .:
     dependencies:
       '@almadar/core':
-        specifier: ^10.24.0
+        specifier: ^10.25.0
         version: link:../almadar-core
       '@almadar/logger':
         specifier: '>=1.1.0'
         version: 1.4.0
-      '@almadar/patterns':
-        specifier: '>=2.18.2'
-        version: 2.63.0
       '@faker-js/faker':
         specifier: ^9.9.0
         version: 9.9.0

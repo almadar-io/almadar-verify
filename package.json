@@ -35,7 +35,6 @@
   "dependencies": {
     "@almadar/core": "^10.1.0",
     "@almadar/logger": ">=1.1.0",
-    "@almadar/patterns": ">=2.18.2",
     "@faker-js/faker": "^9.9.0"
   },
   "peerDependencies": {

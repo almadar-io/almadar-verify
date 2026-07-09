@@ -752,7 +752,7 @@ export function probeEntityRowContent(input: {
  * transition's render-ui binds an entity-array or `@payload.data` array
  * to one of these, the receiving DOM should grow at least one row.
  *
- * Source of truth lives in `@almadar/patterns`'s pattern category, but
+ * Source of truth lives in `@almadar/core/patterns`'s pattern category, but
  * carrying the small set here lets the probe stay self-contained — and
  * the registry never adds list-shaped patterns under any other category.
  */

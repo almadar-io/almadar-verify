@@ -46,7 +46,7 @@ export interface PatternClassification {
 }
 
 /**
- * Classify a pattern using the @almadar/patterns registry.
+ * Classify a pattern using the @almadar/core/patterns registry.
  * Checks project registry first, then core registry.
  */
 export function classifyTargetPattern(
