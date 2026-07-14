@@ -124,6 +124,19 @@ describe('validateIdIntegrity', () => {
     expect(idCodes(validateIdIntegrity(parse(v)))).toEqual(['ORB_ID_UNKNOWN_REF']);
   });
 
+  it('is silent on populated id refs when there is NO ledger (G-V4-1: factory orb, id layer inactive)', () => {
+    // Factory-instantiated orbitals carry baked id refs but no ledger. With no
+    // ledger the id layer is inactive (dual-carry: names authoritative), so a
+    // ref with no local arena entry must NOT fire ORB_ID_UNKNOWN_REF.
+    const v = clone(healthyJson());
+    const td = ((v.orbitals as Record<string, unknown>[])[0].traits as Record<string, unknown>[])[0];
+    td.linkedEntityId = 'ent_GHOST00000000000000000000';
+    delete v.ledger;
+    const result = validateIdIntegrity(parse(v));
+    expect(idCodes(result)).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
   it('fires ORB_ID_NAME_MISMATCH on dual-carry drift', () => {
     const v = clone(healthyJson());
     // id still resolves in the ledger (curName REFRESH), but the name drifts.

@@ -187,8 +187,14 @@ class Checker {
       });
     }
 
-    // Rule 1 — dangling edge.
-    if (!this.index.known(id)) {
+    // Rule 1 — dangling edge. Only enforceable when the id layer is ACTIVE
+    // (`schema.ledger` present). A ledger-less schema is name-authoritative
+    // (dual-carry): populated id refs are then non-authoritative sugar, and a
+    // reference to an inlined / cross-file node legitimately has no local arena
+    // entry — with no ledger there is no id space to resolve it against. (Factory
+    // orbitals carry baked id refs with no ledger; their names validate.)
+    // Post-flip every schema carries a ledger, so this rule re-activates.
+    if (this.index.ledger !== undefined && !this.index.known(id)) {
       this.errors.push({
         code: KNOWN_VALIDATION_ERROR_CODES.ORB_ID_UNKNOWN_REF,
         path,
