@@ -118,6 +118,10 @@ export {
   type EntityBindingScan,
 } from './schema/effect-scanner.js';
 
+// V4 dual-carry id-integrity mirror (`ORB_ID_*`) — the runtime-path twin of
+// the Rust `id_integrity.rs` validator.
+export { validateIdIntegrity } from './schema/id-integrity.js';
+
 // Pure data exports from browser/portal-slots.ts. The Page-bound
 // `probePortalSlots*` functions are internal to the kernel's
 // `assertPortalPerStep` observer; consumers don't call them directly.
