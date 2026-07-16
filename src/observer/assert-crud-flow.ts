@@ -51,9 +51,24 @@ import type { Verdict } from './types.js';
  */
 const MAX_CASCADE_LOOKAHEAD = 4;
 
+/**
+ * Storage tier the walk ran against. `'mock'` is the standalone
+ * playground's MockPersistenceAdapter: the persist handler acks the
+ * write but the next fetch regenerates a fresh collection of the same
+ * size (documented runtime tiering — see Almadar_Verification_Runtime.md
+ * §Tiering), so the entity-diff and DOM-delta axes can never observe the
+ * mutation. Under `'mock'` those axes demote to a note when axis 1 (the
+ * persist's success emit) proves the write path; the compiled path stays
+ * `'strict'`.
+ */
+export type CrudStorageTier = 'strict' | 'mock';
+
 type CrudTestKind = 'crud-create' | 'crud-edit' | 'crud-delete';
 
-export function assertCrudFlow(frames: ReadonlyArray<Frame>): Verdict[] {
+export function assertCrudFlow(
+  frames: ReadonlyArray<Frame>,
+  storageTier: CrudStorageTier = 'strict',
+): Verdict[] {
   const verdicts: Verdict[] = [];
 
   for (let i = 0; i < frames.length; i++) {
@@ -142,6 +157,18 @@ export function assertCrudFlow(frames: ReadonlyArray<Frame>): Verdict[] {
       ? `dom ✓ (${domResult.detail})`
       : `dom ✗ (${domResult.detail})`,
     );
+
+    if (storageTier === 'mock' && emitOk) {
+      // Mock storage regenerates each collection on the next fetch, so
+      // the materialization axes are unobservable by construction; the
+      // emit axis already proves the write path. Demote, don't fail.
+      verdicts.push({
+        passed: true,
+        detail: `${testKind}: ${entityName} ${frame.cause.event} — ${axes.join(', ')} — diff/dom demoted under mock storage tier`,
+        evidence: { frameIndices: evidenceIndices },
+      });
+      continue;
+    }
 
     verdicts.push({
       passed: false,

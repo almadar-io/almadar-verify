@@ -280,6 +280,49 @@ describe('assertCrudFlow', () => {
     expect(v[0].detail).toMatch(/dom ✗/);
   });
 
+  it('mock storage tier demotes diff/dom misses when the emit axis passes', () => {
+    const cause = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'ITEM_CREATED',
+    });
+    const f = buildFrame({
+      index: 0,
+      cause,
+      entityChanges: [], // mock regenerated the collection — no observable diff
+      domCount: 0,
+      emitted: ['ITEM_CREATED'],
+    });
+    const v = assertCrudFlow([f], 'mock');
+    expect(v).toHaveLength(1);
+    expect(v[0].passed).toBe(true);
+    expect(v[0].detail).toMatch(/demoted under mock storage tier/);
+    // strict tier (default) still fails the same frame
+    expect(assertCrudFlow([f])[0].passed).toBe(false);
+  });
+
+  it('mock storage tier still fails when the emit axis misses', () => {
+    const cause = crudCause({
+      testKind: 'crud-create',
+      event: 'CREATE',
+      entityName: 'ListItem',
+      delta: 1,
+      expectedSuccessEvent: 'ITEM_CREATED',
+    });
+    const f = buildFrame({
+      index: 0,
+      cause,
+      entityChanges: [],
+      domCount: 0,
+      emitted: [],
+    });
+    const v = assertCrudFlow([f], 'mock');
+    expect(v[0].passed).toBe(false);
+    expect(v[0].detail).toMatch(/emit ✗/);
+  });
+
   it('crud-edit passes when one row changed with matching fields + content', () => {
     const causeCreate = crudCause({
       testKind: 'crud-create',

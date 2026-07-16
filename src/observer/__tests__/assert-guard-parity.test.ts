@@ -31,7 +31,7 @@ const cause = (
   isRepositioning: opts.isRepositioning ?? false,
 });
 
-function frame(index: number, c: FrameCause, accepted: boolean): Frame {
+function frame(index: number, c: FrameCause, accepted: boolean, errors: string[] = []): Frame {
   return {
     index,
     timestamp: 1000 + index,
@@ -49,7 +49,7 @@ function frame(index: number, c: FrameCause, accepted: boolean): Frame {
     serverResponse: null,
     screenshotPath: null,
     accepted,
-    errors: [],
+    errors,
     warnings: [],
   };
 }
@@ -92,5 +92,23 @@ describe('assertGuardParity', () => {
     const verdict = assertGuardParity(frames);
     expect(verdict.passed).toBe(false);
     expect(verdict.evidence?.frameIndices).toEqual([0]);
+  });
+
+  it('skips frames rejected for dispatch health (stateless getState), not guard semantics', () => {
+    // A frame with dispatch errors is `accepted=false` regardless of what the
+    // guard did — parity must not read it as divergence. The std-task-manager
+    // full walk showed 18/18 "diverged" where every frame was actually
+    // stateless-dispatch-poisoned while the runtime transitioned correctly.
+    const frames = [
+      frame(0, cause('T', 'closed', 'CREATE', 'open', { guardCase: 'pass' }), false, [
+        "stateless dispatch: getState returned null after event 'CREATE' on trait 'T'",
+      ]),
+      // A clean diverged frame in the same run is still caught.
+      frame(1, cause('T', 'idle', 'OPEN', 'open', { guardCase: 'pass' }), false),
+    ];
+    const verdict = assertGuardParity(frames);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.detail).toContain('1/1 guard prediction(s) diverged');
+    expect(verdict.evidence?.frameIndices).toEqual([1]);
   });
 });

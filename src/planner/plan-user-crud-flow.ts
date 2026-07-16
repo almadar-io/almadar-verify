@@ -314,6 +314,19 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
   } else {
     // crud-delete — second click is the confirmation affordance.
     step.confirmEvent = submitEvent;
+    // The receiver's open event declares its payload (std-delete:
+    // `id` required + `row: <Entity>` whose guard is `"@payload.row"`).
+    // When the DOM has no delete affordance, the trigger dispatches the
+    // event itself and needs a real row to fill those fields — give it
+    // the schema-derived shape (entity-typed fields take the whole row,
+    // the rest take `row[name]`). Empty schema → trigger's `{id}` base.
+    const openSchema = extractPayloadSchema(sourceTrait, openEvent);
+    if (openSchema.length > 0) {
+      step.payloadRowShape = openSchema.map((f) => ({
+        name: f.name,
+        wholeRow: f.type === entityName,
+      }));
+    }
   }
 
   return step;

@@ -7,6 +7,14 @@
  * back to `sendEvent` automatically. Returns `true` after a successful
  * click; the kernel still settles + snapshots.
  *
+ * Exception — crud-delete with no delete button in the DOM: the
+ * receiver transition declares a payload its guard checks (std-delete:
+ * `id` + `row`, guard `"@payload.row"`), so the kernel's bare fallback
+ * (`payload: {}`) is guard-rejected and the confirm dialog never opens.
+ * The trigger dispatches the event itself with a real entity row filled
+ * per the planner's `payloadRowShape` (deterministic lowest id) and
+ * returns `true`, so the confirm click + cascade wait below still run.
+ *
  * One deterministic selector: `[data-testid="action-<EVENT>"]`. The
  * `@almadar/ui` `Button` atom stamps this attribute at source whenever
  * `action` is set, and `Form.tsx` does the same for Save / Cancel
@@ -28,6 +36,7 @@
 import type { Page } from 'playwright';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import { fillFormFieldsFromMap } from '../../browser/interaction.js';
+import { dispatchInBrowser } from './browser-send-event.js';
 import { createLogger } from '@almadar/logger';
 
 // Shared with the rest of the verify:dom namespace (interaction.ts,
@@ -72,14 +81,14 @@ function actionSelector(event: string, suffix = ''): string {
 
 export function createDefaultDomTrigger(
   options: DefaultDomTriggerOptions = {},
-): (page: Page, step: ExtendedWalkStep) => Promise<boolean> {
+): (page: Page, step: ExtendedWalkStep, traitScope?: string) => Promise<boolean> {
   const {
     clickTimeoutMs = DEFAULT_TIMEOUT_MS,
     formMountTimeoutMs = DEFAULT_FORM_MOUNT_MS,
     formContainerSelector = DEFAULT_FORM_SELECTOR,
   } = options;
 
-  return async function triggerDOM(page, step) {
+  return async function triggerDOM(page, step, traitScope?) {
     const isCrudFlow =
       step.testKind === 'crud-create' ||
       step.testKind === 'crud-edit' ||
@@ -125,6 +134,103 @@ export function createDefaultDomTrigger(
       clicked,
       ...(clickError !== undefined && { clickError }),
     });
+
+    // Row-scoped miss on crud-edit/delete: retry with the unscoped
+    // first-match selector. Row actions rendered by the generic pattern
+    // engine (e.g. std-board's per-card `action: OPEN_CARD` button)
+    // carry the action testid but no `data-row-id` — unlike DataGrid row
+    // actions, which stamp it. The button's actionPayload already binds
+    // the row, so the first-match click is deterministic and complete.
+    if (!clicked && rowSuffix !== '' && step.targetRowId === undefined) {
+      const fallbackSelector = actionSelector(affordanceEvent);
+      const fallback = page.locator(fallbackSelector).first();
+      try {
+        const fallbackVisible = await fallback.isVisible({ timeout: 250 });
+        if (fallbackVisible) {
+          await fallback.click({ timeout: clickTimeoutMs });
+          clicked = true;
+        }
+        domLog.debug('dom:fill:trigger-click-unscoped-fallback', {
+          step: step.coverageKey,
+          selector: fallbackSelector,
+          visibleProbe: fallbackVisible,
+          clicked,
+        });
+      } catch (err) {
+        domLog.debug('dom:fill:trigger-click-unscoped-fallback', {
+          step: step.coverageKey,
+          selector: fallbackSelector,
+          visibleProbe: false,
+          clicked: false,
+          clickError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (!clicked && step.testKind === 'crud-delete' && step.expectedRowDelta !== undefined) {
+      // No delete affordance in the DOM (e.g. std-board cards expose
+      // Open but not Delete). The receiver transition declares the
+      // event with a required payload — std-delete's guard is
+      // `"@payload.row"` — so a bare kernel fallback dispatch (`{}`)
+      // or an `{id}`-only one is guard-rejected and the confirm dialog
+      // never opens. Dispatch the event here with a real row read from
+      // the entity snapshot, filled per the planner's payloadRowShape
+      // (entity-typed fields take the whole row, the rest `row[name]`;
+      // no shape → `{id}`). The row pick is deterministic (lowest id,
+      // same "first row" contract as the unscoped first-match click).
+      const entityName = step.expectedRowDelta.entityName;
+      const row = await page.evaluate((name: string) => {
+        const w = window as unknown as {
+          __orbitalVerification?: {
+            getSnapshot?: () => {
+              traits?: ReadonlyArray<{
+                data?: Record<string, ReadonlyArray<{ id?: unknown }>>;
+              }>;
+            };
+          };
+        };
+        const snap = w.__orbitalVerification?.getSnapshot?.();
+        const rows: Array<{ id: string } & Record<string, unknown>> = [];
+        const seen = new Set<string>();
+        for (const trait of snap?.traits ?? []) {
+          for (const r of trait.data?.[name] ?? []) {
+            if (typeof r.id === 'string' && !seen.has(r.id)) {
+              seen.add(r.id);
+              rows.push(r as { id: string } & Record<string, unknown>);
+            }
+          }
+        }
+        rows.sort((a, b) => a.id.localeCompare(b.id));
+        return rows[0] ?? null;
+      }, entityName);
+      if (row !== null) {
+        const payload: Record<string, unknown> = {};
+        if (step.payloadRowShape !== undefined) {
+          for (const field of step.payloadRowShape) {
+            payload[field.name] = field.wholeRow ? row : row[field.name];
+          }
+        } else {
+          payload.id = row.id;
+        }
+        const delivered = await dispatchInBrowser(page, step.event, payload, traitScope);
+        domLog.debug('dom:delete:payload-dispatch', {
+          step: step.coverageKey,
+          entityName,
+          rowId: row.id,
+          payloadKeys: Object.keys(payload),
+          traitScope,
+          delivered,
+        });
+        clicked = delivered;
+      } else {
+        domLog.debug('dom:delete:payload-dispatch', {
+          step: step.coverageKey,
+          entityName,
+          delivered: false,
+          reason: 'no-rows',
+        });
+      }
+    }
 
     if (!clicked) return false;
 

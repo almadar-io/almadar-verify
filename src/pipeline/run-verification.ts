@@ -371,7 +371,7 @@ export async function runVerification<Ctx extends DriverContext>(
   }
 
   // v3.7.0 — CRUD-proof phase: emit + entity diff + DOM list update.
-  const crudVerdicts = assertCrudFlow(frames);
+  const crudVerdicts = assertCrudFlow(frames, opts.storageTier ?? 'strict');
   if (crudVerdicts.length > 0) {
     verdicts.crud = combineVerdicts(crudVerdicts, 'crud');
   }

@@ -203,6 +203,41 @@ describe('planUserCrudFlow', () => {
     expect(del?.formData).toBeUndefined();
     expect(del?.expectedSuccessEvent).toBe('ITEM_DELETED');
     expect(del?.expectedRowDelta).toEqual({ entityName: 'ListItem', delta: -1 });
+    // No payloadSchema on DELETE in this fixture → no row shape.
+    expect(del?.payloadRowShape).toBeUndefined();
+  });
+
+  it('crud-delete: payloadRowShape derives from the open event payloadSchema (entity-typed fields take the whole row)', () => {
+    // std-delete's real shape: DELETE declares `id` + `row: <Entity>`,
+    // guard `"@payload.row"`. The trigger needs the whole row for
+    // `row` and `row.id` for `id` when it self-dispatches.
+    const withDeleteSchema: OrbitalSchema = {
+      ...stdListShape,
+      orbitals: [
+        {
+          ...stdListShape.orbitals[0],
+          traits: (stdListShape.orbitals[0].traits ?? []).map((t) => {
+            if (typeof t === 'string' || !('name' in t) || t.name !== 'ListItemDelete') return t;
+            return {
+              ...t,
+              stateMachine: {
+                ...t.stateMachine!,
+                events: (t.stateMachine?.events ?? []).map((e) =>
+                  e.key === 'DELETE'
+                    ? { ...e, payloadSchema: [{ name: 'id', type: 'string', required: true }, { name: 'row', type: 'ListItem' }] }
+                    : e,
+                ),
+              },
+            };
+          }),
+        },
+      ],
+    };
+    const del = planUserCrudFlow(withDeleteSchema).find((s) => s.testKind === 'crud-delete');
+    expect(del?.payloadRowShape).toEqual([
+      { name: 'id', wholeRow: false },
+      { name: 'row', wholeRow: true },
+    ]);
   });
 
   it('produces no steps when the orbital has no persistor', () => {

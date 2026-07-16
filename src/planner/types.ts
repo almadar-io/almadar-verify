@@ -189,6 +189,19 @@ export interface ExtendedWalkStep extends WalkStep {
   targetRowId?: string;
 
   /**
+   * v3.7.1: for `crud-delete`, the shape the DOM trigger fills from a
+   * real entity row when no delete affordance exists and it must
+   * dispatch the event itself. Derived from the receiver event's
+   * `payloadSchema`: fields whose declared type is the persisted
+   * entity's name take the WHOLE row object (e.g. `row: Task` — the
+   * std-delete guard `"@payload.row"` requires it); every other field
+   * takes `row[<name>]` (so `id: string` gets `row.id`). Without this
+   * the trigger dispatched `{id}` and guards referencing the row
+   * silently held the transition.
+   */
+  payloadRowShape?: ReadonlyArray<{ name: string; wholeRow: boolean }>;
+
+  /**
    * v3.7.0: for `crud-delete`, the affordance event the driver clicks
    * AFTER the initial open click to actually fire the persist. This is
    * the confirmation modal's CONFIRM affordance (e.g. `CONFIRM_DELETE`).

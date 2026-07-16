@@ -15,7 +15,7 @@
  */
 
 import type { FieldValue, OrbitalSchema, Trait } from '@almadar/core';
-import { isEntityReference, isEntityCall } from '@almadar/core';
+import { isEntityReference, isEntityCall, constTruth } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
@@ -31,6 +31,11 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
 
     for (const transition of trait.stateMachine.transitions) {
       if (transition.event === 'INIT') continue;
+      // A guard the config resolution already collapsed to a constant
+      // `false` (e.g. an `enabled: false` call site substituted at
+      // inline time) can never fire at runtime — planning a mutation
+      // step for it guarantees a cascade=[] failure.
+      if (transition.guard !== undefined && constTruth(transition.guard) === false) continue;
       const persist = findPersistKind(transition.effects ?? []);
       if (persist === null) continue;
       // PersistEffect's shape is always `['persist', kind, entity, payload]`

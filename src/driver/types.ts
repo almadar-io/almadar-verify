@@ -95,10 +95,17 @@ export interface Driver<Ctx extends DriverContext = DriverContext> {
   getState(ctx: Ctx, traitName: string): Promise<string | null>;
 
   /**
-   * Trigger via DOM. Returns true iff an affordance was found and clicked.
+   * Trigger via DOM. Returns true iff the event was delivered (an
+   * affordance was found and clicked, or the impl dispatched a
+   * payload-correct bus event itself — e.g. crud-delete when no delete
+   * button exists but the receiver transition requires a row `id`).
    * Falls back to `sendEvent` at the kernel level when this returns false.
+   *
+   * `traitScope` is the same qualified `Orbital.Trait` scope the kernel
+   * passes to `sendEvent` — impls that self-dispatch need it to build
+   * the qualified bus key.
    */
-  triggerDOM(ctx: Ctx, step: ExtendedWalkStep): Promise<boolean>;
+  triggerDOM(ctx: Ctx, step: ExtendedWalkStep, traitScope?: string): Promise<boolean>;
 
   /**
    * Capture the runtime snapshot, DOM snapshot, console + event log

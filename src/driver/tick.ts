@@ -104,7 +104,7 @@ export async function tick<Ctx extends DriverContext>(
   let dispatchSent: boolean;
 
   if (step.triggerKind === 'dom') {
-    const triggered = await driver.triggerDOM(ctx, step);
+    const triggered = await driver.triggerDOM(ctx, step, traitScope);
     if (triggered) {
       dispatchSent = true;
     } else {

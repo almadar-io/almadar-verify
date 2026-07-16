@@ -33,6 +33,7 @@ export async function launchBrowser(
 
   const context = await browser.newContext({
     viewport: opts.viewport,
+    reducedMotion: 'reduce',
   });
 
   context.setDefaultTimeout(opts.timeout);

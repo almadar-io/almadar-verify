@@ -37,6 +37,16 @@ export function assertGuardParity(frames: ReadonlyArray<Frame>): Verdict {
     const predicted = frame.cause.guardCase;
     if (predicted !== 'pass' && predicted !== 'fail') continue;
 
+    // Frames rejected for dispatch health (e.g. `stateless dispatch:
+    // getState returned null` — the driver's state reader, not the
+    // guard) carry `accepted=false` regardless of guard semantics.
+    // Counting them here conflates two checks: dispatch health is
+    // asserted by the console/stateless check; parity only judges
+    // frames whose dispatch was clean. A real GUARD-LAMBDA-DROP has
+    // no dispatch errors — the event delivers fine, the guard just
+    // answers wrong — so skipping errored frames cannot mask it.
+    if (frame.errors.length > 0) continue;
+
     checked += 1;
     // `decideAccepted` ALREADY folds the planner's `guardCase` in: a 'pass'
     // frame is `accepted` iff it reached `to`; a 'fail' frame is `accepted`

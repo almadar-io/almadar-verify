@@ -75,6 +75,15 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
      * genuinely cannot read state.
      */
     allowStateless?: boolean;
+    /**
+     * Storage tier for the CRUD-proof phase (`assertCrudFlow`). Default
+     * `'strict'`. Set `'mock'` when the runtime under test is the
+     * standalone playground's MockPersistenceAdapter: its persist acks
+     * the write but the next fetch regenerates a fresh same-size
+     * collection, so entity-diff/DOM-delta failures with the emit axis
+     * passing demote to a note instead of failing the verdict.
+     */
+    storageTier?: 'strict' | 'mock';
     /** Logger used for progress output. Default: `console.log`. */
     log?: (msg: string) => void;
     /**

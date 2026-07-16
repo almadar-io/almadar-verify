@@ -25,6 +25,7 @@ import type { Driver, DriverContext, SendResult, SnapshotResult } from '../types
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import { createDefaultSnapshot } from '../helpers/default-snapshot.js';
 import { createDefaultDomTrigger } from '../helpers/default-dom-trigger.js';
+import { dispatchInBrowser } from '../helpers/browser-send-event.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
 
 /** What the Playwright Driver carries on its context. */
@@ -124,8 +125,8 @@ export function createPlaywrightDriver(
       );
     },
 
-    async triggerDOM(ctx, step: ExtendedWalkStep): Promise<boolean> {
-      return domTriggerImpl(ctx.page, step);
+    async triggerDOM(ctx, step: ExtendedWalkStep, traitScope?: string): Promise<boolean> {
+      return domTriggerImpl(ctx.page, step, traitScope);
     },
 
     async snapshot(ctx, step): Promise<SnapshotResult> {
@@ -160,47 +161,4 @@ export function createPlaywrightDriver(
       // No default — tool decides routing.
     },
   };
-}
-
-// ── internal: extracted to top-level so TS doesn't re-infer the
-// page.evaluate callback signature through Playwright's overload
-// chain on every call site (which trips the "excessively deep" check).
-
-async function dispatchInBrowser(
-  page: Page,
-  event: string,
-  payload: EventPayload,
-  traitScope?: string,
-): Promise<boolean> {
-  // page.evaluate's `arg` parameter wants a serializable type.
-  // EventPayload is recursively-typed (values can be EventPayload),
-  // which trips Playwright's overload inference into "excessively
-  // deep" depth-bounded recursion. We project the args into a plain
-  // record at the boundary to break the inference chain — the runtime
-  // payload IS still EventPayload-shaped, the cast is purely a TS
-  // erasure to avoid the overload explosion.
-  const args = {
-    ev: event,
-    pl: payload as unknown as Record<string, unknown>,
-    sc: traitScope,
-  };
-  const result = await page.evaluate(browserSendEvent, args);
-  return result === true;
-}
-
-function browserSendEvent(a: {
-  ev: string;
-  pl: Record<string, unknown>;
-  sc: string | undefined;
-}): boolean {
-  const api = (
-    window as unknown as {
-      __orbitalVerification?: {
-        sendEvent?: (e: string, p?: Record<string, unknown>, s?: string) => void;
-      };
-    }
-  ).__orbitalVerification;
-  if (api?.sendEvent === undefined) return false;
-  api.sendEvent(a.ev, a.pl, a.sc);
-  return true;
 }
