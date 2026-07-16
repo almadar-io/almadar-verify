@@ -295,3 +295,13 @@ export {
   type RunVerificationInput,
   type RunVerificationOutput,
 } from './pipeline/index.js';
+
+export {
+  scoreStructuralQuality,
+  gradeScreenshotQuality,
+  VisionQualityGradingError,
+  type StructuralQualityReport,
+  type OrbitalStructuralFacts,
+  type AggregateStructuralFacts,
+  type VisionQualityReport,
+} from './quality/index.js';

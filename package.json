@@ -34,8 +34,10 @@
   },
   "dependencies": {
     "@almadar/core": "^10.29.0",
+    "@almadar/llm": "^2.33.0",
     "@almadar/logger": "^1.9.0",
-    "@almadar/runtime": "^6.33.0"
+    "@almadar/runtime": "^6.33.0",
+    "zod": "^3.22.0"
   },
   "peerDependencies": {
     "playwright": ">=1.40.0"

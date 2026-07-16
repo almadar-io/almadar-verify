@@ -34,6 +34,7 @@
  */
 
 import type { Page } from 'playwright';
+import { isEventPayloadValue, type EventPayload } from '@almadar/core';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import { fillFormFieldsFromMap } from '../../browser/interaction.js';
 import { dispatchInBrowser } from './browser-send-event.js';
@@ -204,10 +205,11 @@ export function createDefaultDomTrigger(
         return rows[0] ?? null;
       }, entityName);
       if (row !== null) {
-        const payload: Record<string, unknown> = {};
+        const payload: EventPayload = {};
         if (step.payloadRowShape !== undefined) {
           for (const field of step.payloadRowShape) {
-            payload[field.name] = field.wholeRow ? row : row[field.name];
+            const value: unknown = field.wholeRow ? row : row[field.name];
+            if (isEventPayloadValue(value)) payload[field.name] = value;
           }
         } else {
           payload.id = row.id;

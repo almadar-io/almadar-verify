@@ -217,7 +217,7 @@ describe('planUserCrudFlow', () => {
         {
           ...stdListShape.orbitals[0],
           traits: (stdListShape.orbitals[0].traits ?? []).map((t) => {
-            if (typeof t === 'string' || !('name' in t) || t.name !== 'ListItemDelete') return t;
+            if (typeof t === 'string' || 'ref' in t || t.name !== 'ListItemDelete') return t;
             return {
               ...t,
               stateMachine: {
@@ -275,7 +275,7 @@ describe('planUserCrudFlow', () => {
         {
           ...stdListShape.orbitals[0],
           traits: (stdListShape.orbitals[0].traits ?? []).map((t) => {
-            if (typeof t === 'string' || !('name' in t) || t.name !== 'ListItemDelete') return t;
+            if (typeof t === 'string' || 'ref' in t || t.name !== 'ListItemDelete') return t;
             return {
               ...t,
               listens: [
