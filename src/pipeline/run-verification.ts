@@ -149,9 +149,22 @@ export async function runVerification<Ctx extends DriverContext>(
     }
   }
   if (opts.enableEmitSweep !== false) {
+    // An emit nothing transitions on is a broadcast contract (GAME_END,
+    // canvas tile/hover events with no handler): driving it through the
+    // bus is a no-op by design, and the binding probe then flags the
+    // frame as an undelivered dispatch. Sweep only events at least one
+    // bound trait actually accepts with a transition.
+    const acceptedEvents = new Set<string>();
+    for (const t of traits) {
+      for (const transition of t.transitions) acceptedEvents.add(transition.event);
+    }
     for (const trait of traits) {
       const emits = emitSweepDeclarations(trait);
-      if (emits.length > 0) collectExtension(planEmitSweep({ trait, emits }));
+      if (emits.length > 0) {
+        collectExtension(
+          planEmitSweep({ trait, emits }).filter((step) => acceptedEvents.has(step.event)),
+        );
+      }
     }
   }
 

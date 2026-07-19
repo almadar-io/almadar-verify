@@ -40,12 +40,16 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   // are useful — if either has the cause event, the dispatch landed.
   // The runtime's event log uses prefixed entry types
   // (`UI:EVENT`, `<Trait>:DISPATCH`, `<Trait>:EVENT:SUCCESS`,
-  // `<Trait>:EVENT:ERROR`) alongside raw event names. A cause event
-  // of `INIT` is therefore confirmed if any colon-delimited segment
-  // of the entry type is exactly the cause event.
+  // `<Trait>:EVENT:ERROR`) alongside raw event names and qualified bus
+  // keys (`UI:Orbital.Trait.EVENT` — the Gap #13 canonical form, where
+  // the event is the last DOT-delimited segment). A cause event is
+  // therefore confirmed if any colon-delimited segment of the entry type
+  // is exactly the cause event, or the qualified key's trailing segment
+  // is.
   const causeInEventLog = frame.eventLogDelta.added.some((entry) =>
     entry.type === frame.cause.event ||
-    entry.type.split(':').includes(frame.cause.event),
+    entry.type.split(':').includes(frame.cause.event) ||
+    entry.type.split('.').pop() === frame.cause.event,
   );
   const causeInLastDispatched = traitSnapshot.lastEventDispatched?.event === frame.cause.event;
   // The frame's serverResponse landing with success:true is independent
