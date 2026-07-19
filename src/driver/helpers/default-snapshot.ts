@@ -27,7 +27,7 @@ import type { ConsoleEntry } from '../../util/types.js';
 import type { DomSnapshot } from '../../frame/types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import type { ConsoleCollector } from '../../browser/console.js';
-import { readVerificationSnapshot, readEventLog } from '../../runtime/state-bridge.js';
+import { readVerificationSnapshot, readEventLogState } from '../../runtime/state-bridge.js';
 import { takeScreenshot, safeFileName } from '../../browser/screenshot.js';
 import { PORTAL_SLOTS, type PortalSlot } from '../../browser/portal-slots.js';
 import { createLogger } from '@almadar/logger';
@@ -68,7 +68,14 @@ export function createDefaultSnapshot(
 }> {
   const { console: consoleCollector, screenshots = true } = options;
   let consoleSeen = 0;
-  let eventLogSeen = 0;
+  // Absolute-index cursor into the runtime's event log + the epoch it
+  // belongs to. Keyed on the epoch (a per-page-load nonce) rather than
+  // the array length: a hermetic reload can refill the log to the SAME
+  // length as the prior step's seen-count, which the old `length <
+  // eventLogSeen` sentinel misread as "no reset" and silently dropped the
+  // post-reload delta (the equal-length false-missing).
+  let eventLogSeenAbs = 0;
+  let eventLogEpoch = '';
 
   return async function snapshot(page, outputDir, traitName, step) {
     // Read the runtime snapshot.
@@ -80,16 +87,19 @@ export function createDefaultSnapshot(
     consoleSeen = allConsole.length;
 
     // Hermetic mode reloads the page between non-auto-init steps, which
-    // resets the in-page event log. The closure's `eventLogSeen` counter
-    // would then exceed `allEventLog.length` and `slice` returns empty
-    // for every frame's delta. Detect the reset (length shrank) and
-    // re-anchor at 0 so post-reload events get captured.
-    const allEventLog = (await readEventLog(page)) ?? [];
-    if (allEventLog.length < eventLogSeen) {
-      eventLogSeen = 0;
+    // resets the in-page event log (a fresh array + a new epoch nonce).
+    // Detect the reset by the epoch changing — NOT by the length, which a
+    // reload can refill to the exact prior seen-count (the equal-length
+    // false-missing). `dropped` is the absolute index of `entries[0]`, so
+    // the cursor stays correct even if the ring buffer evicted old entries.
+    const { entries: allEventLog, epoch, dropped } = await readEventLogState(page);
+    if (epoch !== eventLogEpoch) {
+      eventLogSeenAbs = 0;
+      eventLogEpoch = epoch;
     }
-    const eventLogAdded = allEventLog.slice(eventLogSeen);
-    eventLogSeen = allEventLog.length;
+    const sliceFrom = Math.max(0, eventLogSeenAbs - dropped);
+    const eventLogAdded = allEventLog.slice(sliceFrom);
+    eventLogSeenAbs = dropped + allEventLog.length;
 
     // Derive EntityData + counts from the runtime snapshot's per-trait
     // `data` maps. Each TraitStateSnapshot.data is keyed by entity name.

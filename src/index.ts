@@ -41,6 +41,7 @@ export {
   readTraitStates,
   readTraitSnapshots,
   readEventLog,
+  readEventLogState,
   readRuntimeState,
   getTraitCurrentState,
   verifyTransitionAccepted,

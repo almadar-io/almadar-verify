@@ -151,6 +151,34 @@ export async function readEventLog(
 }
 
 /**
+ * Read the event log together with its reset epoch and eviction count.
+ * The epoch is a per-page-load nonce (see `OrbitalVerificationAPI`):
+ * across hermetic reloads the array length is not a reliable reset
+ * sentinel — a reload can refill to the same count — so a delta cursor
+ * must key on the epoch changing. `dropped` gives the absolute index of
+ * `entries[0]` (= dropped) so the cursor survives ring-buffer eviction.
+ */
+export async function readEventLogState(
+  page: Page,
+): Promise<{
+  entries: import('@almadar/core').EventLogEntry[];
+  epoch: string;
+  dropped: number;
+}> {
+  return page.evaluate(() => {
+    type Entry = import('@almadar/core').EventLogEntry;
+    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
+      | { eventLog?: Entry[]; eventLogEpoch?: string; eventLogDropped?: number }
+      | undefined;
+    return {
+      entries: api?.eventLog ?? [],
+      epoch: api?.eventLogEpoch ?? '',
+      dropped: api?.eventLogDropped ?? 0,
+    };
+  });
+}
+
+/**
  * Build a RuntimeState from the verification snapshot.
  * Combines trait states, entity data, events, and guard results.
  */
