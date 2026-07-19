@@ -1,13 +1,17 @@
 /**
  * `coverage` — the unified coverage observer.
  *
- * Numerator: deduped `frames.map(f => keyOf(f.cause))` intersected with
- * the plan's keys. Denominator: every coverage key in the plan.
+ * Headline mode (schema-reconciled, when `schemaTransitionKeys` is
+ * supplied — `runVerification` always does): numerator = schema
+ * transitions (+ planned tick steps) with at least one observed planned
+ * variant; denominator = schema transitions + planned tick steps. One
+ * honest number — the plan's malformed/success/guard-fail fan-out
+ * collapses onto the base transition, and `schemaTransitions` no longer
+ * sits alongside as a second, incomparable count.
  *
- * Same source for numerator and denominator (the `ExtendedWalkStep[]`
- * the planner produced and the kernel actually executed) eliminates
- * the orbital-vs-runtime discrepancy at its root: there is no place
- * for the two consumer tools to diverge.
+ * Legacy mode (no schema keys — hand-built callers): numerator = deduped
+ * `frames.map(f => keyOf(f.cause))` intersected with the plan's keys;
+ * denominator = every coverage key in the plan.
  *
  * Server-emit cascade credit: in addition to crediting keys via
  * `keyOf(frame.cause)` (transitions the walker explicitly dispatched),
@@ -30,12 +34,24 @@ import { keyOf } from '../frame/factory.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import type { CoverageMetric } from './types.js';
 
-const TRIGGER_KINDS: ReadonlyArray<TriggerKind> = ['bus', 'dom', 'auto-init', 'replay'];
+const TRIGGER_KINDS: ReadonlyArray<TriggerKind> = ['bus', 'dom', 'auto-init', 'replay', 'reconcile', 'tick'];
+
+/**
+ * Strip the `[variant]` suffix from a coverage key, yielding the
+ * schema-transition base `${trait}:${from}+${event}->${to}`. Keys with
+ * no suffix (auto-init, tick keys like `trait:tick(name)`) are their
+ * own base.
+ */
+function baseOf(key: string): string {
+  const idx = key.indexOf('[');
+  return idx === -1 ? key : key.slice(0, idx);
+}
 
 export function coverage(
   frames: ReadonlyArray<Frame>,
   plan: ReadonlyArray<ExtendedWalkStep>,
   schemaTransitions = 0,
+  schemaTransitionKeys?: ReadonlyArray<string>,
 ): CoverageMetric {
   // Denominator: every key the plan declared.
   const planKeys = new Set<string>();
@@ -72,6 +88,32 @@ export function coverage(
     if (planKeys.has(key)) covered.add(key);
   }
 
+  // Per-trigger-kind breakdown (execution view — counts every plan step,
+  // including extension planners' auxiliary steps).
+  const perTriggerKind = TRIGGER_KINDS.reduce(
+    (acc, kind) => ({ ...acc, [kind]: { total: 0, covered: 0 } }),
+    {} as Record<TriggerKind, { total: number; covered: number }>,
+  );
+  for (const step of plan) {
+    perTriggerKind[step.triggerKind].total += 1;
+    if (covered.has(step.coverageKey)) {
+      perTriggerKind[step.triggerKind].covered += 1;
+    }
+  }
+
+  // Schema-reconciled headline numbers: when the caller supplies the
+  // schema's transition keys, the denominator is the SCHEMA (declared
+  // transitions + planned tick steps), not the plan's variant fan-out
+  // (malformed/success/guard-fail steps collapse onto their base
+  // transition). A schema transition is covered when at least one of its
+  // planned variants was observed; a tick step is covered when its own
+  // key was observed. Extension steps (emit sweep, contract, crud, …)
+  // are auxiliary tests — excluded from the headline number, still
+  // visible in perTriggerKind.
+  if (schemaTransitionKeys !== undefined && schemaTransitionKeys.length > 0) {
+    return schemaReconciledCoverage(schemaTransitionKeys, plan, covered, perTriggerKind, schemaTransitions);
+  }
+
   const totalItems = planKeys.size;
   const coveredItems = covered.size;
   const ratio = totalItems === 0 ? 0 : coveredItems / totalItems;
@@ -93,22 +135,88 @@ export function coverage(
     perTrait[step.traitName] = bucket;
   }
 
-  // Per-trigger-kind breakdown.
-  const perTriggerKind = TRIGGER_KINDS.reduce(
-    (acc, kind) => ({ ...acc, [kind]: { total: 0, covered: 0 } }),
-    {} as Record<TriggerKind, { total: number; covered: number }>,
-  );
-  for (const step of plan) {
-    perTriggerKind[step.triggerKind].total += 1;
-    if (covered.has(step.coverageKey)) {
-      perTriggerKind[step.triggerKind].covered += 1;
-    }
-  }
-
   // Uncovered list.
   const uncovered: string[] = [];
   for (const key of planKeys) {
     if (!covered.has(key)) uncovered.push(key);
+  }
+
+  return {
+    totalItems,
+    coveredItems,
+    ratio,
+    schemaTransitions,
+    uncovered,
+    perTrait,
+    perTriggerKind,
+  };
+}
+
+/**
+ * Headline coverage against the schema denominator. See the call site in
+ * `coverage()` for the contract. `covered` is the plan-key intersection
+ * the main body already computed.
+ */
+function schemaReconciledCoverage(
+  schemaTransitionKeys: ReadonlyArray<string>,
+  plan: ReadonlyArray<ExtendedWalkStep>,
+  covered: ReadonlySet<string>,
+  perTriggerKind: Record<TriggerKind, { total: number; covered: number }>,
+  schemaTransitions: number,
+): CoverageMetric {
+  const schemaKeys = new Set(schemaTransitionKeys);
+  const tickKeys = new Set<string>();
+  for (const step of plan) {
+    if (step.triggerKind === 'tick') tickKeys.add(step.coverageKey);
+  }
+
+  const coveredBases = new Set<string>();
+  for (const key of covered) coveredBases.add(baseOf(key));
+
+  const coveredSchema = new Set<string>();
+  for (const key of schemaKeys) {
+    if (coveredBases.has(key)) coveredSchema.add(key);
+  }
+  const coveredTick = new Set<string>();
+  for (const key of tickKeys) {
+    if (covered.has(key)) coveredTick.add(key);
+  }
+
+  const totalItems = schemaKeys.size + tickKeys.size;
+  const coveredItems = coveredSchema.size + coveredTick.size;
+  const ratio = totalItems === 0 ? 0 : coveredItems / totalItems;
+
+  const uncovered: string[] = [];
+  const perTrait: Record<string, {
+    total: number;
+    covered: number;
+    uncoveredKeys: string[];
+  }> = {};
+  const bucketFor = (key: string): { total: number; covered: number; uncoveredKeys: string[] } => {
+    const traitName = key.slice(0, key.indexOf(':'));
+    const bucket = perTrait[traitName] ?? { total: 0, covered: 0, uncoveredKeys: [] };
+    perTrait[traitName] = bucket;
+    return bucket;
+  };
+  for (const key of schemaKeys) {
+    const bucket = bucketFor(key);
+    bucket.total += 1;
+    if (coveredSchema.has(key)) {
+      bucket.covered += 1;
+    } else {
+      bucket.uncoveredKeys.push(key);
+      uncovered.push(key);
+    }
+  }
+  for (const key of tickKeys) {
+    const bucket = bucketFor(key);
+    bucket.total += 1;
+    if (coveredTick.has(key)) {
+      bucket.covered += 1;
+    } else {
+      bucket.uncoveredKeys.push(key);
+      uncovered.push(key);
+    }
   }
 
   return {

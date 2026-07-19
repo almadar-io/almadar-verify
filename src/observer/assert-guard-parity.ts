@@ -37,6 +37,13 @@ export function assertGuardParity(frames: ReadonlyArray<Frame>): Verdict {
     const predicted = frame.cause.guardCase;
     if (predicted !== 'pass' && predicted !== 'fail') continue;
 
+    // Guards bound to `@entity.*` / `@config.*` can't be steered by the
+    // dispatch payload — the planner marked the variant
+    // `guardSteerable: false` because its pass/fail prediction is not
+    // authoritative. Skip instead of flagging a divergence the planner
+    // had no control over.
+    if (frame.cause.guardSteerable === false) continue;
+
     // Frames rejected for dispatch health (e.g. `stateless dispatch:
     // getState returned null` — the driver's state reader, not the
     // guard) carry `accepted=false` regardless of guard semantics.

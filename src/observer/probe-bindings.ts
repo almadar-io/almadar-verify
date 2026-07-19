@@ -59,6 +59,7 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   // the cause event is not the trait's most recent dispatch by snapshot
   // time — bus log + lastEventDispatched legitimately won't reflect it.
   // - auto-init: synthetic boot frame (no actual dispatch)
+  // - tick: wait-and-read step (no dispatch — the runtime's own clock drives it)
   // - guard-fail / malformed: rejection variants
   // - isRepositioning: reconcile preamble events
   // - serverResponse.success === false: server-side rejection
@@ -69,6 +70,7 @@ export function probeBindings(frame: Frame, _prev: Frame | null): BindingDelta {
   const isCrudFlow = tk === 'crud-create' || tk === 'crud-edit' || tk === 'crud-delete';
   const skipMissing =
     frame.cause.triggerKind === 'auto-init' ||
+    frame.cause.triggerKind === 'tick' ||
     frame.cause.guardCase === 'fail' ||
     frame.cause.payloadCase === 'malformed' ||
     frame.cause.isRepositioning ||

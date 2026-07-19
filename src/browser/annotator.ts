@@ -50,7 +50,7 @@ export interface AnnotationPromptOptions {
 
 // ── CSS ────────────────────────────────────────────────────────────────
 
-const OVERLAY_CSS = `
+export const OVERLAY_CSS = `
   #orbital-annotate-modal {
     position: fixed;
     top: 16px;

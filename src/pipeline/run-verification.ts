@@ -24,17 +24,19 @@ import type { DriverContext } from '../driver/types.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { collectEntityFields } from '../planner/internal/payload-synth.js';
-import { eachInlineTrait } from '../planner/internal/orbital-walk.js';
+import { eachInlineTrait, findInitialState } from '../planner/internal/orbital-walk.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
 import { planInteractionTests } from '../planner/plan-interaction-tests.js';
 import { planUserCrudFlow } from '../planner/plan-user-crud-flow.js';
 import { planReplayTo } from '../planner/plan-replay-to.js';
+import { planTickTests } from '../planner/plan-tick-tests.js';
+import { planEmitSweep } from '../planner/plan-emit-sweep.js';
+import type { EmitDeclaration } from '../browser/catalog-probes.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
-import { assertCascade } from '../observer/assert-cascade.js';
+import type { TraitWalkConfig } from '../engine/types.js';
 import { assertGuardParity } from '../observer/assert-guard-parity.js';
-import { assertMutation } from '../observer/assert-mutation.js';
 import { assertPortalSlots } from '../observer/assert-portal.js';
 import { assertRefTraitInvariantOverFrames } from '../observer/assert-ref-trait-invariant.js';
 import { probeBindings } from '../observer/probe-bindings.js';
@@ -140,6 +142,17 @@ export async function runVerification<Ctx extends DriverContext>(
   }
   if (opts.enableUserCrudFlow !== false) {
     collectExtension(planUserCrudFlow(input.orbital));
+  }
+  if (opts.enableTickTests !== false) {
+    for (const trait of traits) {
+      collectExtension(planTickTests({ trait }));
+    }
+  }
+  if (opts.enableEmitSweep !== false) {
+    for (const trait of traits) {
+      const emits = emitSweepDeclarations(trait);
+      if (emits.length > 0) collectExtension(planEmitSweep({ trait, emits }));
+    }
   }
 
   // ── Walk every trait through the same tick loop ───────────────────
@@ -387,18 +400,22 @@ export async function runVerification<Ctx extends DriverContext>(
     }
   }
 
-  // Cascade rules / mutation rules can be derived from transitions too,
-  // but the simplest v3.0.0 contract just runs assertCascade per
-  // declared `emit:` and assertMutation via planDataMutationTests.
-  // Both already covered above. (Future: add `derivedCascadeRules`
-  // here for finer-grained cascade verification.)
+  // Emit-sweep and data-mutation frames are planned above and asserted by
+  // assertContractEventFired / assertDataMutation. The legacy assertCascade /
+  // assertMutation observers stay exported (tested, published API) but are
+  // superseded here — removal is a next-major decision.
 
   // Schema-level coverage denominator: every transition declared across
-  // the orbital's inline-trait state machines. Independent of what the
-  // planner chose to walk — lets consumers catch under-covering plans.
+  // the orbital's inline-trait state machines. `schemaTransitionKeys`
+  // carries the same transitions as coverage bases so `coverage()` can
+  // reconcile the plan's variant fan-out into one honest number.
   let schemaTransitions = 0;
+  const schemaTransitionKeys: string[] = [];
   for (const { trait } of eachInlineTrait(input.orbital)) {
-    schemaTransitions += trait.stateMachine?.transitions.length ?? 0;
+    for (const t of trait.stateMachine?.transitions ?? []) {
+      schemaTransitions += 1;
+      schemaTransitionKeys.push(`${trait.name}:${t.from}+${t.event}->${t.to}`);
+    }
   }
 
   return report({
@@ -407,10 +424,31 @@ export async function runVerification<Ctx extends DriverContext>(
     plan: wholePlan,
     verdicts,
     schemaTransitions,
+    schemaTransitionKeys,
   });
 }
 
 // ── internal ─────────────────────────────────────────────────────────
+
+/**
+ * Build the emit-sweep declaration list for a trait: every event its
+ * effects emit (`emit: { success, failure }` options) plus every
+ * contract-declared event from `emits {}`, internal AND external scope.
+ * `@config.<knob>` event-name references can't be dispatched as literals
+ * — they resolve at inline/resolve time, so a surviving `@`-prefixed
+ * name here is undispatchable and skipped. `planEmitSweep` dedupes.
+ */
+function emitSweepDeclarations(trait: TraitWalkConfig): EmitDeclaration[] {
+  const out: EmitDeclaration[] = [];
+  for (const event of trait.effectEmittedEvents ?? []) {
+    out.push({ success: event });
+  }
+  for (const contract of trait.emitContracts ?? []) {
+    if (contract.event.startsWith('@')) continue;
+    out.push({ success: contract.event });
+  }
+  return out;
+}
 
 function combineVerdicts(verdicts: ReadonlyArray<Verdict>, label: string): Verdict {
   const failed = verdicts.filter((v) => !v.passed);
@@ -455,12 +493,19 @@ function bindingDeltaToVerdict(
 }
 
 /**
- * Walk the orbital's traits' transitions for `render-ui` effects and
- * derive `PortalExpectation[]` for `assertPortalPerStep`. Each
- * transition with a render-ui contributes one expectation: the slot
- * the effect targets and the top-level pattern name in the payload.
+ * Walk the orbital's traits for `render-ui` effects and derive
+ * `PortalExpectation[]` for `assertPortalPerStep`. Render sites scanned:
+ *   - `transitions[].effects` — one expectation per transition render-ui.
+ *   - `states[].onEntry` — one expectation per transition INTO the state
+ *     (the entry effect fires whenever the state is reached).
+ *   - trait-level `initialEffects` — keyed to the auto-init cause
+ *     `(initial, INIT, initial)`; they run at mount.
+ *
+ * A render-ui whose `type` is a reactive binding (not a literal string,
+ * e.g. `{ type: '@config.x' }`) is UNKNOWN: no expectation is emitted —
+ * never treated as "slot cleared".
  */
-function derivePortalExpectations(
+export function derivePortalExpectations(
   orbital: import('@almadar/core').OrbitalSchema,
 ): import('../observer/types.js').PortalExpectation[] {
   const result: import('../observer/types.js').PortalExpectation[] = [];
@@ -474,27 +519,83 @@ function derivePortalExpectations(
 
       for (const transition of trait.stateMachine.transitions) {
         for (const effect of transition.effects ?? []) {
-          if (!Array.isArray(effect)) continue;
-          if (effect[0] !== 'render-ui') continue;
-          const slot = typeof effect[1] === 'string' ? effect[1] : null;
-          if (slot === null) continue;
-          const payload = effect[2];
-          let pattern: string | null = null;
-          if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
-            const t = (payload as { type?: unknown }).type;
-            if (typeof t === 'string') pattern = t;
-          }
+          const render = scanRenderUiEffect(effect);
+          if (render === null) continue;
           result.push({
             traitName: trait.name,
             from: transition.from,
             event: transition.event,
             to: transition.to,
-            slot,
-            pattern,
+            slot: render.slot,
+            pattern: render.pattern,
+          });
+        }
+      }
+
+      // `State.onEntry` is typed `string[]` (effect names) in core, but
+      // compiled output may carry inline S-expr effects — scan array
+      // entries defensively; bare string names can't be resolved here.
+      for (const state of trait.stateMachine.states) {
+        for (const entry of state.onEntry ?? []) {
+          const render = scanRenderUiEffect(entry);
+          if (render === null) continue;
+          for (const transition of trait.stateMachine.transitions) {
+            if (transition.to !== state.name) continue;
+            result.push({
+              traitName: trait.name,
+              from: transition.from,
+              event: transition.event,
+              to: transition.to,
+              slot: render.slot,
+              pattern: render.pattern,
+            });
+          }
+        }
+      }
+
+      const initialState = findInitialState(trait.stateMachine);
+      if (initialState !== null) {
+        for (const effect of trait.initialEffects ?? []) {
+          const render = scanRenderUiEffect(effect);
+          if (render === null) continue;
+          result.push({
+            traitName: trait.name,
+            from: initialState,
+            event: 'INIT',
+            to: initialState,
+            slot: render.slot,
+            pattern: render.pattern,
           });
         }
       }
     }
   }
   return result;
+}
+
+/**
+ * Project one effect node into `{ slot, pattern }`, or `null` when the
+ * node is not a scannable render-ui effect. `pattern: null` means the
+ * transition explicitly clears the slot (no payload / no `type` key).
+ * A payload whose `type` is present but NOT a literal string is a
+ * reactive binding — the pattern is unknown, so the effect is skipped
+ * entirely rather than asserted as a cleared slot.
+ */
+function scanRenderUiEffect(effect: unknown): { slot: string; pattern: string | null } | null {
+  if (!Array.isArray(effect)) return null;
+  if (effect[0] !== 'render-ui') return null;
+  const slot = typeof effect[1] === 'string' ? effect[1] : null;
+  if (slot === null) return null;
+  const payload: unknown = effect[2];
+  if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
+    const t = (payload as { type?: unknown }).type;
+    // A reactive binding — string form (`'@config.x'`) or an S-expr —
+    // resolves at runtime; the pattern is UNKNOWN, so skip the effect
+    // rather than assert anything (pre-fix this fell through to
+    // `pattern: null`, which asserts the slot was CLEARED).
+    if (typeof t === 'string' && t.startsWith('@')) return null;
+    if (t !== undefined && typeof t !== 'string') return null;
+    if (typeof t === 'string') return { slot, pattern: t };
+  }
+  return { slot, pattern: null };
 }

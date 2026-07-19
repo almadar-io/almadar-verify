@@ -312,4 +312,95 @@ describe('coverage', () => {
     const c = coverage([f1, f2], plan);
     expect(c.coveredItems).toBe(2);
   });
+
+  describe('schema-reconciled denominator (schemaTransitionKeys supplied)', () => {
+    // The plan fans every transition out into variant steps (success /
+    // malformed / guard-fail); the headline number must collapse those
+    // onto the schema transition and add planned tick steps — one honest
+    // covered/total against the schema.
+    const schemaKeys = [
+      'Browse:loading+INIT->loading',
+      'Browse:loading+XLoaded->browsing',
+      'Browse:loading+XLoadFailed->error',
+    ];
+    const plan: ExtendedWalkStep[] = [
+      step('Browse', 'loading', 'INIT', 'loading', 'auto-init'),
+      {
+        ...step('Browse', 'loading', 'XLoaded', 'browsing', 'bus'),
+        coverageKey: 'Browse:loading+XLoaded->browsing[success]',
+        payloadCase: 'success',
+      },
+      {
+        ...step('Browse', 'loading', 'XLoaded', 'browsing', 'bus'),
+        coverageKey: 'Browse:loading+XLoaded->browsing[malformed]',
+        payloadCase: 'malformed',
+      },
+      {
+        ...step('Browse', 'loading', 'XLoadFailed', 'error', 'bus'),
+        coverageKey: 'Browse:loading+XLoadFailed->error[success]',
+        payloadCase: 'success',
+      },
+      {
+        ...step('Browse', 'playing', 'step', 'playing', 'tick'),
+        coverageKey: 'Browse:tick(step)',
+        waitMs: 150,
+      },
+    ];
+
+    it('counts schema transitions + tick steps as the total, not plan variant keys', () => {
+      const frames: Frame[] = [
+        frame({ traitName: 'Browse', from: 'loading', event: 'INIT', to: 'loading', guardCase: null, triggerKind: 'auto-init', isRepositioning: false, coverageKey: 'Browse:loading+INIT->loading' }, 0),
+        frame({ traitName: 'Browse', from: 'loading', event: 'XLoaded', to: 'browsing', guardCase: null, triggerKind: 'bus', isRepositioning: false, coverageKey: 'Browse:loading+XLoaded->browsing[success]', payloadCase: 'success' }, 1),
+        frame({ traitName: 'Browse', from: 'loading', event: 'XLoadFailed', to: 'error', guardCase: null, triggerKind: 'bus', isRepositioning: false, coverageKey: 'Browse:loading+XLoadFailed->error[success]', payloadCase: 'success' }, 2),
+        frame({ traitName: 'Browse', from: 'playing', event: 'step', to: 'playing', guardCase: null, triggerKind: 'tick', isRepositioning: false, coverageKey: 'Browse:tick(step)' }, 3),
+      ];
+      const c = coverage(frames, plan, 3, schemaKeys);
+      expect(c.totalItems).toBe(4); // 3 schema transitions + 1 tick step
+      expect(c.coveredItems).toBe(4);
+      expect(c.ratio).toBe(1);
+      expect(c.uncovered).toEqual([]);
+    });
+
+    it('a transition with ANY covered variant counts as covered', () => {
+      // Only the [success] variant of XLoaded ran — the [malformed] one
+      // didn't — but the schema transition is still covered.
+      const frames: Frame[] = [
+        frame({ traitName: 'Browse', from: 'loading', event: 'XLoaded', to: 'browsing', guardCase: null, triggerKind: 'bus', isRepositioning: false, coverageKey: 'Browse:loading+XLoaded->browsing[success]', payloadCase: 'success' }, 0),
+      ];
+      const c = coverage(frames, plan, 3, schemaKeys);
+      expect(c.totalItems).toBe(4);
+      expect(c.coveredItems).toBe(1);
+      expect([...c.uncovered].sort()).toEqual([
+        'Browse:loading+INIT->loading',
+        'Browse:loading+XLoadFailed->error',
+        'Browse:tick(step)',
+      ]);
+    });
+
+    it('reports schema transitions the plan never walked as uncovered', () => {
+      const frames: Frame[] = [
+        frame({ traitName: 'Browse', from: 'loading', event: 'INIT', to: 'loading', guardCase: null, triggerKind: 'auto-init', isRepositioning: false, coverageKey: 'Browse:loading+INIT->loading' }, 0),
+      ];
+      // Plan has no steps for XLoadFailed at all — under-covering plan.
+      const partialPlan = plan.filter((s) => !s.coverageKey.includes('XLoadFailed'));
+      const c = coverage(frames, partialPlan, 3, schemaKeys);
+      expect(c.coveredItems).toBe(1);
+      expect(c.uncovered).toContain('Browse:loading+XLoadFailed->error');
+      expect(c.ratio).toBeCloseTo(1 / 4);
+    });
+
+    it('per-trait breakdown follows the schema denominator', () => {
+      const c = coverage([], plan, 3, schemaKeys);
+      expect(c.perTrait.Browse.total).toBe(4);
+      expect(c.perTrait.Browse.covered).toBe(0);
+      expect(c.perTrait.Browse.uncoveredKeys).toHaveLength(4);
+    });
+
+    it('legacy plan-key accounting is preserved when no schema keys are supplied', () => {
+      const c = coverage([], plan, 3);
+      // 5 distinct plan keys (INIT base, 3 variants, 1 tick).
+      expect(c.totalItems).toBe(5);
+      expect(c.coveredItems).toBe(0);
+    });
+  });
 });

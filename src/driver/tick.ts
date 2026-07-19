@@ -10,6 +10,8 @@
  *        just settle and snapshot.
  *      - `dom`: try `triggerDOM`; on failure, fall back to `sendEvent`.
  *      - `bus` / `replay`: `sendEvent`.
+ *      - `tick`: no dispatch — wait `step.waitMs` so the runtime's tick
+ *        scheduler fires, then observe.
  *  3. Settle.
  *  4. Read state AFTER + snapshot.
  *  5. Determine `accepted` per the guard semantics.
@@ -67,6 +69,7 @@ export async function tick<Ctx extends DriverContext>(
     ...(step.targetRowId !== undefined && { targetRowId: step.targetRowId }),
     ...(step.confirmEvent !== undefined && { confirmEvent: step.confirmEvent }),
     ...(step.payloadCase !== undefined && { payloadCase: step.payloadCase }),
+    ...(step.guardSteerable !== undefined && { guardSteerable: step.guardSteerable }),
   };
 
   // Auto-init: the runtime already fired INIT on mount. Capture the
@@ -103,7 +106,16 @@ export async function tick<Ctx extends DriverContext>(
   // deliver the event at all — the frame must fail closed.
   let dispatchSent: boolean;
 
-  if (step.triggerKind === 'dom') {
+  if (step.triggerKind === 'tick') {
+    // Tick-wait step (planTickTests): nothing to dispatch. Wait out the
+    // declared interval so the runtime's own tick scheduler fires, then
+    // fall through to settle + snapshot. `dispatchSent` stays true —
+    // there is no delivery to fail closed on.
+    if (step.waitMs !== undefined && step.waitMs > 0) {
+      await new Promise((resolve) => { setTimeout(resolve, step.waitMs); });
+    }
+    dispatchSent = true;
+  } else if (step.triggerKind === 'dom') {
     const triggered = await driver.triggerDOM(ctx, step, traitScope);
     if (triggered) {
       dispatchSent = true;

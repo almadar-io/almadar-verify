@@ -27,12 +27,16 @@ import type { EntityFieldLike } from '../browser/catalog-probes.js';
 export type Observer<T> = (frames: ReadonlyArray<Frame>) => T;
 
 /**
- * Coverage metric — produced by `coverage(frames, plan)`.
+ * Coverage metric — produced by `coverage(frames, plan, …)`.
  *
- * Numerator: deduped `frames.map(f => keyOf(f.cause))` intersected with
- * the plan's coverage keys. Denominator: every coverage key in the
- * plan. Same source for both, so orbital-verify and runtime-verify can
- * never disagree on the ratio for the same trait + plan.
+ * When the caller supplies `schemaTransitionKeys`, the headline numbers
+ * are schema-reconciled: numerator = declared transitions (+ planned
+ * tick steps) observed at least once; denominator = declared transitions
+ * + planned tick steps. A transition counts covered when ANY of its
+ * planned variants (success/malformed/guard-fail) executed. Without
+ * schema keys (hand-built callers), falls back to the legacy plan-key
+ * accounting: numerator = deduped `frames.map(f => keyOf(f.cause))`
+ * intersected with the plan's keys; denominator = plan keys.
  */
 export interface CoverageMetric {
   totalItems: number;

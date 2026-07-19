@@ -27,12 +27,19 @@ export interface ReportInput {
    * Default 0 (caller didn't supply the schema count).
    */
   schemaTransitions?: number;
+  /**
+   * The schema's transition coverage bases (`${trait}:${from}+${event}->${to}`)
+   * — one per declared transition. When supplied, `coverage()` reports the
+   * headline covered/total against the SCHEMA denominator (transitions +
+   * planned tick steps) instead of the plan's variant fan-out.
+   */
+  schemaTransitionKeys?: ReadonlyArray<string>;
 }
 
 export function report(input: ReportInput): ReportShape {
   const { itemName, frames, plan, verdicts } = input;
 
-  const cov = coverage(frames, plan, input.schemaTransitions ?? 0);
+  const cov = coverage(frames, plan, input.schemaTransitions ?? 0, input.schemaTransitionKeys);
 
   const errors: string[] = [];
   const warnings: string[] = [];

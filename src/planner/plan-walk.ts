@@ -29,6 +29,11 @@
  *      validator sees every required field. Stamped `guardCase: 'pass'`
  *      when guarded; null otherwise.
  *
+ * Guarded variants whose guard binds `@entity.*` / `@config.*` (not
+ * `@payload.*`) are stamped `guardSteerable: false` — the payload can't
+ * steer the outcome, so `assertGuardParity` skips them instead of
+ * flagging divergences the planner can't control.
+ *
  * Pre-v3.14 the unguarded path emitted a single `{}` step (which
  * accidentally exercised the validator's reject branch but never the
  * success branch for events with required payload fields). The guarded
@@ -41,7 +46,7 @@
  * @packageDocumentation
  */
 
-import { buildGuardPayloads, constTruth, type EventPayload } from '@almadar/core';
+import { buildGuardPayloads, collectBindings, constTruth, type EventPayload, type SExpr } from '@almadar/core';
 import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PayloadCase, PlanWalkInput } from './types.js';
 import {
@@ -89,6 +94,13 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
       const canFail = constant !== true;
       const canPass = constant !== false;
 
+      // Guards bound to `@entity.*` / `@config.*` (not `@payload.*`)
+      // synthesize `{pass:{},fail:{}}` — the payload cannot steer the
+      // outcome, so `assertGuardParity` would flag divergences it has no
+      // control over. Mark the variants unsteerable so the observer
+      // skips them instead.
+      const steerable = transition.guard === undefined || guardIsPayloadSteerable(transition.guard);
+
       // malformed expects the validator to reject; pointless when the guard
       // always passes (the success path is the only meaningful one).
       if (emitMalformed && canFail) {
@@ -110,6 +122,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
           payloadCase: 'success',
           payload: { ...successPayload, ...guardPayloads.pass } as EventPayload,
           entityFieldsByName,
+          guardSteerable: steerable,
         }));
       }
 
@@ -121,6 +134,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
           payloadCase: 'guard-fail',
           payload: { ...successPayload, ...guardPayloads.fail } as EventPayload,
           entityFieldsByName,
+          guardSteerable: steerable,
         }));
       }
       continue;
@@ -157,6 +171,7 @@ interface MakeStepInput {
   payloadCase: PayloadCase;
   payload: EventPayload;
   entityFieldsByName: Record<string, EntityFieldDef[]>;
+  guardSteerable?: boolean;
 }
 
 function makeStep(input: MakeStepInput): ExtendedWalkStep {
@@ -172,6 +187,7 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
     triggerKind: 'bus',
     coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, guardCase, payloadCase),
     payloadCase,
+    ...(input.guardSteerable !== undefined && { guardSteerable: input.guardSteerable }),
   };
   // Acceptance closures (forward / guard-pass / success variants only; the
   // guard-fail / malformed variants expect the state to HOLD).
@@ -228,6 +244,18 @@ function fromMatches(from: PlanWalkInput['trait']['transitions'][number]['from']
   if (from === '*') return true;
   if (Array.isArray(from)) return from.includes(state);
   return from === state;
+}
+
+/**
+ * A guard is payload-steerable iff every binding it references is a
+ * `@payload.*` field — the only inputs `buildGuardPayloads` can control.
+ * A guard that also binds `@entity.*` / `@config.*` (snake's
+ * `(and (not @entity.over) (!= @entity.dir "down"))`) decides partly on
+ * runtime state the dispatch payload cannot reach, so the pass/fail
+ * prediction is not the planner's to make.
+ */
+function guardIsPayloadSteerable(guard: SExpr): boolean {
+  return collectBindings(guard).every((b) => b.startsWith('@payload'));
 }
 
 /**

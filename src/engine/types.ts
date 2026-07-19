@@ -16,7 +16,7 @@
  * @packageDocumentation
  */
 
-import type { EdgeWalkTransition, Event, WalkStep } from '@almadar/core';
+import type { EdgeWalkTransition, Event, TraitEventContract, TraitTick, WalkStep } from '@almadar/core';
 
 /** Configuration for a single trait's walk. */
 export interface TraitWalkConfig {
@@ -49,6 +49,20 @@ export interface TraitWalkConfig {
    * past it. Populated by `extractTraitWalkConfigs`.
    */
   effectEmittedEvents?: ReadonlySet<string>;
+  /**
+   * The trait's declared `ticks {}` rules. `planTickTests` turns each
+   * numeric-interval tick into a wait-and-observe walk step so
+   * tick-driven traits get real coverage. Populated by
+   * `extractTraitWalkConfigs`.
+   */
+  ticks?: ReadonlyArray<TraitTick>;
+  /**
+   * The trait's declared `emits {}` event contracts (internal AND
+   * external scope). The emit sweep fires each contract-declared event
+   * through the bus once so downstream listeners get covered. Populated
+   * by `extractTraitWalkConfigs`.
+   */
+  emitContracts?: ReadonlyArray<TraitEventContract>;
 }
 
 export type { WalkStep, EdgeWalkTransition };

@@ -41,6 +41,12 @@ export function extractTraitWalkConfigs(orbital: OrbitalSchema): TraitWalkConfig
     if (effectEmittedEvents.size > 0) {
       config.effectEmittedEvents = effectEmittedEvents;
     }
+    if (trait.ticks !== undefined && trait.ticks.length > 0) {
+      config.ticks = trait.ticks;
+    }
+    if (trait.emits !== undefined && trait.emits.length > 0) {
+      config.emitContracts = trait.emits;
+    }
     const route = findRouteForTrait(orb, trait.name) ?? findDefaultRoute(orb);
     if (route !== null) {
       (config as { route?: string }).route = route;

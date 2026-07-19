@@ -180,4 +180,87 @@ describe('planWalk', () => {
       expect(steps.every((s) => s.acceptStates === undefined)).toBe(true);
     });
   });
+
+  describe('guard steering honesty (guardSteerable)', () => {
+    it('marks @entity-bound guard variants as unsteerable', () => {
+      // Snake's steering guards bind @entity.* — the synthesized
+      // `{pass:{},fail:{}}` payloads can't steer them.
+      const entityGuarded: EdgeWalkTransition = {
+        from: 'playing',
+        event: 'UP',
+        to: 'playing',
+        hasGuard: true,
+        guard: ['and', ['not', '@entity.over'], ['!=', '@entity.dir', 'down']],
+      };
+      const trait: TraitWalkConfig = {
+        traitName: 'Snake',
+        initialState: 'playing',
+        transitions: [entityGuarded],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      expect(steps.length).toBeGreaterThan(0);
+      for (const step of steps) {
+        expect(step.guardSteerable).toBe(false);
+      }
+    });
+
+    it('marks @config-bound guard variants as unsteerable', () => {
+      const configGuarded: EdgeWalkTransition = {
+        from: 'a',
+        event: 'GO',
+        to: 'b',
+        hasGuard: true,
+        guard: ['=', '@config.mode', 'edit'],
+      };
+      const trait: TraitWalkConfig = {
+        traitName: 'Cfg',
+        initialState: 'a',
+        transitions: [configGuarded],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      expect(steps.every((s) => s.guardSteerable === false)).toBe(true);
+    });
+
+    it('leaves @payload-bound guard variants steerable', () => {
+      const payloadGuarded: EdgeWalkTransition = {
+        from: 'a',
+        event: 'TRY',
+        to: 'b',
+        hasGuard: true,
+        guard: ['gt', '@payload.qty', 0],
+      };
+      const trait: TraitWalkConfig = {
+        traitName: 'Guarded',
+        initialState: 'a',
+        transitions: [payloadGuarded],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      expect(steps.length).toBeGreaterThan(0);
+      for (const step of steps) {
+        expect(step.guardSteerable).toBe(true);
+      }
+    });
+
+    it('a guard mixing @payload and @entity is unsteerable (entity side unreachable)', () => {
+      const mixed: EdgeWalkTransition = {
+        from: 'a',
+        event: 'TRY',
+        to: 'b',
+        hasGuard: true,
+        guard: ['and', ['gt', '@payload.qty', 0], ['not', '@entity.over']],
+      };
+      const trait: TraitWalkConfig = {
+        traitName: 'Mixed',
+        initialState: 'a',
+        transitions: [mixed],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      expect(steps.every((s) => s.guardSteerable === false)).toBe(true);
+    });
+
+    it('unguarded steps carry no guardSteerable stamp', () => {
+      const steps = planWalk({ trait: stdBrowseTrait });
+      expect(steps.every((s) => s.guardSteerable === undefined)).toBe(true);
+    });
+  });
 });

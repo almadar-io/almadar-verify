@@ -10,12 +10,14 @@ export type {
   PlanWalkInput,
   PlanEmitInput,
   PlanReplayInput,
+  PlanTickInput,
 } from './types.js';
 
 export { planWalk } from './plan-walk.js';
 export { planInitCredit } from './plan-init-credit.js';
 export { planEmitSweep } from './plan-emit-sweep.js';
 export { planReplayTo } from './plan-replay-to.js';
+export { planTickTests } from './plan-tick-tests.js';
 export {
   decorateWithTriggerKind,
   type DecorateInput,

@@ -227,6 +227,22 @@ export interface ExtendedWalkStep extends WalkStep {
    * settled state. Undefined → only `to` is accepted (the normal case).
    */
   acceptStates?: readonly string[];
+
+  /**
+   * Tick-wait steps (`triggerKind: 'tick'`): wall-clock milliseconds the
+   * kernel waits before settling and snapshotting, sourced from the
+   * declared `TraitTick.interval`. Undefined on every other step kind.
+   */
+  waitMs?: number;
+
+  /**
+   * Guarded-variant steps only: `false` when the transition's guard
+   * binds `@entity.*` / `@config.*` (not `@payload.*`), so the planner's
+   * synthesized pass/fail payload cannot steer the outcome and
+   * `assertGuardParity` must skip the frame. Undefined / `true` means
+   * the guard is payload-steerable (the normal case).
+   */
+  guardSteerable?: boolean;
 }
 
 /**
@@ -261,4 +277,9 @@ export interface PlanEmitInput {
 export interface PlanReplayInput {
   trait: TraitWalkConfig;
   targetState: string;
+}
+
+/** Input to `planTickTests`. */
+export interface PlanTickInput {
+  trait: TraitWalkConfig;
 }

@@ -49,8 +49,11 @@ import type { PortalSlot } from '../browser/portal-slots.js';
  *   dispatched (no silent state munging). Same `sendEvent` dispatch
  *   semantics as `replay`; verdicts skip both because they carry
  *   `isRepositioning: true`.
+ * - `tick`: tick-wait step from `planTickTests`. No dispatch — the
+ *   kernel waits out the declared tick interval so the runtime's own
+ *   tick scheduler fires, then reads state/entity after.
  */
-export type TriggerKind = 'bus' | 'dom' | 'auto-init' | 'replay' | 'reconcile';
+export type TriggerKind = 'bus' | 'dom' | 'auto-init' | 'replay' | 'reconcile' | 'tick';
 
 /**
  * Tag that lets observers categorize the verdicts they emit. The base
@@ -160,6 +163,14 @@ export interface FrameCause {
    * `payload` shape.
    */
   payloadCase?: 'malformed' | 'success' | 'guard-fail';
+  /**
+   * Carried from `ExtendedWalkStep.guardSteerable`. `false` marks a
+   * guarded-variant frame whose guard binds `@entity.*` / `@config.*`
+   * (not `@payload.*`), so the planner could not steer the outcome via
+   * the dispatch payload. `assertGuardParity` skips these instead of
+   * flagging divergences it cannot control.
+   */
+  guardSteerable?: boolean;
 }
 
 /**

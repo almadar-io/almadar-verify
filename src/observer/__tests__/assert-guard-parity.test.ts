@@ -20,6 +20,7 @@ const cause = (
     guardCase?: 'pass' | 'fail' | null;
     triggerKind?: FrameCause['triggerKind'];
     isRepositioning?: boolean;
+    guardSteerable?: boolean;
   } = {},
 ): FrameCause => ({
   traitName: trait,
@@ -29,6 +30,7 @@ const cause = (
   guardCase: opts.guardCase ?? null,
   triggerKind: opts.triggerKind ?? 'bus',
   isRepositioning: opts.isRepositioning ?? false,
+  ...(opts.guardSteerable !== undefined && { guardSteerable: opts.guardSteerable }),
 });
 
 function frame(index: number, c: FrameCause, accepted: boolean, errors: string[] = []): Frame {
@@ -110,5 +112,30 @@ describe('assertGuardParity', () => {
     expect(verdict.passed).toBe(false);
     expect(verdict.detail).toContain('1/1 guard prediction(s) diverged');
     expect(verdict.evidence?.frameIndices).toEqual([1]);
+  });
+
+  it('skips unsteerable variants (@entity/@config-bound guards) instead of flagging them', () => {
+    // The planner could not steer these guards via the dispatch payload —
+    // it stamped guardSteerable:false on the step. A "divergence" here says
+    // nothing about a dropped guard lambda, so parity must not count them.
+    const frames = [
+      frame(0, cause('T', 'playing', 'UP', 'playing', { guardCase: 'pass', guardSteerable: false }), false),
+      frame(1, cause('T', 'playing', 'UP', 'playing', { guardCase: 'fail', guardSteerable: false }), false),
+      // A steerable divergence in the same run is still caught.
+      frame(2, cause('T', 'idle', 'OPEN', 'open', { guardCase: 'pass' }), false),
+    ];
+    const verdict = assertGuardParity(frames);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.detail).toContain('1/1 guard prediction(s) diverged');
+    expect(verdict.evidence?.frameIndices).toEqual([2]);
+  });
+
+  it('passes when only unsteerable variants "diverge"', () => {
+    const frames = [
+      frame(0, cause('T', 'playing', 'UP', 'playing', { guardCase: 'pass', guardSteerable: false }), false),
+    ];
+    const verdict = assertGuardParity(frames);
+    expect(verdict.passed).toBe(true);
+    expect(verdict.detail).toContain('0 guard prediction(s) matched');
   });
 });

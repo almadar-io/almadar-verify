@@ -57,6 +57,19 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
     /** Run VG1 portal-per-step (built from render-ui in transitions). Default: true. */
     enablePortalPerStep?: boolean;
     /**
+     * Plan tick-wait steps for each declared `ticks {}` rule with a
+     * numeric interval: the kernel waits out the interval so the
+     * runtime's tick scheduler fires, then reads state/entity after.
+     * Default: true.
+     */
+    enableTickTests?: boolean;
+    /**
+     * Run the emit sweep: fire every effect-emitted and contract-declared
+     * (`emits {}`, internal AND external scope) event through the bus once
+     * so downstream listeners get covered. Default: true.
+     */
+    enableEmitSweep?: boolean;
+    /**
      * Pattern → emit registry from `event-contracts.json` files.
      * Required when `enableContractEvents` is true.
      */

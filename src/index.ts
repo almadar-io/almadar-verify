@@ -30,6 +30,10 @@ export {
   type AnnotationCategory,
   type AnnotationPromptOptions,
 } from './browser/annotator.js';
+export {
+  runInteractiveSession,
+  type InteractiveSessionOptions,
+} from './browser/interactive-session.js';
 
 // Runtime state bridge
 export {
@@ -85,6 +89,9 @@ export { isNoiseError, isNoiseWarning } from './util/filter.js';
 
 // Retry utility
 export { retry } from './util/retry.js';
+
+// orbital binary resolution (PATH-independent)
+export { resolveOrbitalBin, resetOrbitalBinCache } from './util/orbital-bin.js';
 
 // Interaction utilities (Playwright-based form filling, button clicking, pattern classification)
 export {
@@ -209,11 +216,13 @@ export type {
   PlanWalkInput,
   PlanEmitInput,
   PlanReplayInput,
+  PlanTickInput,
 } from './planner/types.js';
 export { planWalk } from './planner/plan-walk.js';
 export { planInitCredit } from './planner/plan-init-credit.js';
 export { planEmitSweep } from './planner/plan-emit-sweep.js';
 export { planReplayTo } from './planner/plan-replay-to.js';
+export { planTickTests } from './planner/plan-tick-tests.js';
 export {
   decorateWithTriggerKind,
   type DecorateInput,
