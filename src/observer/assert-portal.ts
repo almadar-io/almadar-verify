@@ -18,6 +18,14 @@
  * was a false positive. The caller passes `noRenderTraits` so the
  * observer can skip frames originating from those traits.
  *
+ * Portal/modal/dynamic-slot-only traits (std-modal) opt `main`
+ * specifically out, derived from the schema rather than a name list:
+ * `mainExemptTraits` is every trait whose boot `(initialState, INIT)`
+ * transition authors no render-ui into `main` — the shell mounts `main`
+ * unconditionally regardless of content, so these traits never promise
+ * anything there and leaving it empty is expected, not a bug. A trait
+ * that DOES author a `main` render at boot stays fully checked.
+ *
  * Pure.
  *
  * @packageDocumentation
@@ -33,6 +41,13 @@ export interface AssertPortalOptions {
    * empty portals are expected, not bugs.
    */
   noRenderTraits?: ReadonlySet<string>;
+  /**
+   * Traits whose schema declares no boot render-ui into `main`
+   * (`internal/orbital-walk.ts`'s `traitBootRenderSlots`). Only the
+   * `main` slot is exempted for these traits — every other slot they
+   * mount empty still fails.
+   */
+  mainExemptTraits?: ReadonlySet<string>;
 }
 
 /**
@@ -58,11 +73,13 @@ export function assertPortalSlots(
   const offenders: string[] = [];
   const indices: number[] = [];
   const noRender = options.noRenderTraits ?? new Set<string>();
+  const mainExempt = options.mainExemptTraits ?? new Set<string>();
 
   for (const frame of frames) {
     if (noRender.has(frame.cause.traitName)) continue;
     for (const portal of frame.domSnapshot.portals) {
       if (OPTIONAL_LAYOUT_SLOTS.has(portal.slot)) continue;
+      if (portal.slot === 'main' && mainExempt.has(frame.cause.traitName)) continue;
       if (portal.mounted && portal.childCount === 0) {
         offenders.push(`frame ${frame.index}: slot "${portal.slot}" mounted but empty`);
         indices.push(frame.index);

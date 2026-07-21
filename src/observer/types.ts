@@ -209,6 +209,14 @@ export interface ReportShape {
      * fingerprint of a guard lambda dropped between planner and runtime.
      */
     guardParity?: Verdict;
+    /**
+     * PRECONDITION-UNREACHABLE — informational (`passed: true`). Names
+     * every step whose `from` precondition couldn't be established (no
+     * replay path found, or the replay diverged) and was skipped instead
+     * of firing from a stale state. The transition still shows up as
+     * uncovered in `coverage`; this records why.
+     */
+    preconditionSkipped?: Verdict;
   };
   /** Aggregate pass/fail/warning counts in core's canonical shape. */
   summary: VerificationSummary;

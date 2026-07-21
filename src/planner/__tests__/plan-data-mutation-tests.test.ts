@@ -105,4 +105,91 @@ describe('planDataMutationTests', () => {
     expect(planDataMutationTests(noPersist)).toEqual([]);
   });
 
+  it('GAP 3 — skips a persist-bearing transition whose triggering event is effect-emitted (std-data-erasure ExecScanLoaded shape)', () => {
+    // ExecScanLoaded is fired by a fetch's `emit.success`, not a user
+    // affordance. In production its `data` payload comes from a real
+    // fetch against the live store, so `@entity.id` extracted from it is
+    // a real row id; a directly-synthesized test payload can't correlate
+    // with the mock store's actual seeded rows, so the subsequent
+    // `persist` finding no matching row is a test-harness artifact, not
+    // a real bug — this transition must not be planned at all.
+    const erasureLike: OrbitalSchema = {
+      ...cart,
+      orbitals: [
+        {
+          ...cart.orbitals[0],
+          traits: [
+            {
+              name: 'ErasureWorkflow',
+              scope: 'collection',
+              linkedEntity: 'CartItem',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }, { name: 'execScanning' }],
+                events: [
+                  { key: 'INIT', name: 'Init' },
+                  { key: 'ExecScanLoaded', name: 'Scan loaded', payloadSchema: [{ name: 'data', type: 'array' }] },
+                ],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'execScanning',
+                    event: 'ExecScanLoaded',
+                    effects: [
+                      ['fetch', 'CartItem', { emit: { success: 'ExecScanLoaded', failure: 'ExecScanFailed' } }],
+                      ['persist', 'update', 'CartItem', { id: '@entity.id' }, { emit: { success: 'ExecStepped' } }],
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(planDataMutationTests(erasureLike)).toEqual([]);
+  });
+
+  it('still plans a persist-bearing transition triggered by a real user event, even when the trait ALSO effect-emits other events', () => {
+    const mixed: OrbitalSchema = {
+      ...cart,
+      orbitals: [
+        {
+          ...cart.orbitals[0],
+          traits: [
+            {
+              name: 'Mixed',
+              scope: 'collection',
+              linkedEntity: 'CartItem',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }, { name: 'browsing' }],
+                events: [
+                  { key: 'INIT', name: 'Init' },
+                  { key: 'FETCHED', name: 'Fetched' },
+                  { key: 'CANCEL', name: 'Cancel' },
+                ],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'browsing',
+                    event: 'FETCHED',
+                    effects: [['fetch', 'CartItem', { emit: { success: 'FETCHED' } }]],
+                  },
+                  {
+                    from: 'browsing',
+                    to: 'idle',
+                    event: 'CANCEL',
+                    effects: [['persist', 'update', 'CartItem', { id: '@payload.id' }, { emit: { success: 'CANCELLED' } }]],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const steps = planDataMutationTests(mixed);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].event).toBe('CANCEL');
+  });
+
 });

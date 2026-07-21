@@ -18,6 +18,7 @@ import type { FieldValue, OrbitalSchema, Trait } from '@almadar/core';
 import { isEntityReference, isEntityCall, constTruth } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
+import { collectEffectEmittedEvents } from './internal/effect-emits.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
 
 export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[] {
@@ -28,9 +29,21 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
     if (trait.stateMachine === undefined) continue;
     const initial = findInitialState(trait.stateMachine);
     if (initial === null) continue;
+    // Events an EFFECT fires (a fetch/persist `emit.success`/`emit.failure`
+    // callback), not a user affordance — e.g. std-data-erasure's tick-fired
+    // `ExecScanLoaded`. In production its entity-array payload comes from a
+    // REAL fetch against the live store, so `@entity.id` extracted from it
+    // resolves to a real row. A directly-synthesized test payload can't
+    // correlate with the mock store's actual seeded rows the same way, so
+    // dispatching it straight and expecting the subsequent `persist` to
+    // find a matching row is an artifact of the test harness, not a real
+    // product bug — the same "can't drive deterministically" reasoning
+    // `planReplayTo`'s BFS already applies when excluding these as hops.
+    const effectEmittedEvents = collectEffectEmittedEvents(trait.stateMachine.transitions);
 
     for (const transition of trait.stateMachine.transitions) {
       if (transition.event === 'INIT') continue;
+      if (effectEmittedEvents.has(transition.event)) continue;
       // A guard the config resolution already collapsed to a constant
       // `false` (e.g. an `enabled: false` call site substituted at
       // inline time) can never fire at runtime — planning a mutation

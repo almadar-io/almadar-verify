@@ -25,65 +25,10 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema, TraitEventListener } from '@almadar/core';
+import type { OrbitalSchema } from '@almadar/core';
 import type { Frame } from '../frame/types.js';
 import type { Verdict } from './types.js';
-
-/**
- * For each event, the set of emitter trait-names that some trait declares a
- * `listens` subscription for. `'*'` means the listener accepts the event from
- * any source. Used to credit a declared cross-trait subscriber even when the
- * runtime path doesn't surface `cascadeReceived`.
- */
-function buildDeclaredListeners(orbital: OrbitalSchema): Map<string, Set<string>> {
-  const map = new Map<string, Set<string>>();
-  for (const orb of orbital.orbitals) {
-    for (const traitRef of orb.traits) {
-      if (typeof traitRef !== 'object' || !('name' in traitRef)) continue;
-      const listens = (traitRef as { listens?: ReadonlyArray<TraitEventListener> }).listens ?? [];
-      for (const listener of listens) {
-        if (typeof listener.event !== 'string') continue;
-        const sources = map.get(listener.event) ?? new Set<string>();
-        const source = listener.source;
-        if (source !== undefined && 'kind' in source && source.kind === 'trait' && typeof source.trait === 'string') {
-          sources.add(source.trait);
-        } else {
-          sources.add('*');
-        }
-        map.set(listener.event, sources);
-      }
-    }
-  }
-  return map;
-}
-
-/**
- * Build a map of trait-name → Set<event> from the schema's state machines.
- */
-function buildTraitTransitions(orbital: OrbitalSchema): Map<string, Set<string>> {
-  const map = new Map<string, Set<string>>();
-  for (const orb of orbital.orbitals) {
-    for (const traitRef of orb.traits) {
-      if (typeof traitRef !== 'object' || !('name' in traitRef)) continue;
-      const traitName = traitRef.name as string;
-      const events = new Set<string>();
-      if (
-        'stateMachine' in traitRef &&
-        traitRef.stateMachine &&
-        'transitions' in traitRef.stateMachine &&
-        Array.isArray(traitRef.stateMachine.transitions)
-      ) {
-        for (const trans of traitRef.stateMachine.transitions) {
-          if (trans && typeof trans === 'object' && 'event' in trans) {
-            events.add((trans as { event: string }).event);
-          }
-        }
-      }
-      map.set(traitName, events);
-    }
-  }
-  return map;
-}
+import { buildDeclaredListeners, buildTraitTransitions } from './click-wiring-audit.js';
 
 export function assertClickNoListener(
   frames: ReadonlyArray<Frame>,

@@ -18,6 +18,7 @@ import { buildGuardPayloads, type EdgeWalkTransition, type EventPayload } from '
 import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PlanReplayInput } from './types.js';
 import { synthesizeSuccessPayload } from './internal/payload-synth.js';
+import { transientClosure } from './internal/transient-closure.js';
 
 /**
  * One hop in a replay path. Carries the originating `EdgeWalkTransition`
@@ -38,27 +39,42 @@ interface QueueNode {
   path: ReadonlyArray<ReplayHop>;
 }
 
+/**
+ * Returns:
+ *  - `[]` — precondition already satisfied with ZERO dispatches: either
+ *    `targetState` is the initial state itself, or it's already within
+ *    the initial state's own transient closure (std-data-erasure's
+ *    `execScanning`, reached from `idle` purely by a tick-fired
+ *    `ExecScanLoaded` — no manually-dispatchable edge sits between them
+ *    at all). The caller must treat this as "proceed", not "unreachable".
+ *  - `null` — genuinely unreachable: no dispatchable hop's closure ever
+ *    reaches `targetState`. The caller should skip the dependent step
+ *    rather than dispatch it from a stale state.
+ *  - non-empty array — the hop chain to dispatch.
+ */
 export function planReplayTo(
   input: PlanReplayInput,
   entityFieldsByName: Record<string, EntityFieldDef[]> = {},
-): ExtendedWalkStep[] {
+): ExtendedWalkStep[] | null {
   const { trait, targetState } = input;
 
   if (targetState === trait.initialState) return [];
 
-  // Exclude effect-emitted events from the replay graph: they are fired by an
-  // effect's outcome (a fetch's success/failure callback), not by a manual
-  // dispatch, so a reconcile hop on one can't be driven deterministically and
-  // diverges. A target reachable ONLY through such a hop (e.g. an `error`
-  // state behind a fetch-failure event) is treated as unreachable — the walk
-  // skips the diverging preamble rather than failing on an undrivable path.
-  const path = bfsShortestPath(
-    trait.transitions,
-    trait.initialState,
-    targetState,
-    trait.effectEmittedEvents,
-  );
-  if (path === null) return [];
+  // Exclude effect-emitted events from the replay graph as HOPS: they are
+  // fired by an effect's outcome (a fetch's success/failure callback), not
+  // by a manual dispatch, so a reconcile hop can't dispatch one
+  // deterministically. But a target reachable ONLY through such a
+  // transition (e.g. `loading --Loaded--> reviewing`, `APPROVE`'s
+  // precondition on std-approval-gate) isn't unreachable — the runtime
+  // fires it automatically once a dispatchable hop lands on its source
+  // state, the same transient-settle the direct-step / reconcile-hop
+  // `acceptStates` closure already tolerates. `bfsShortestPath` checks the
+  // landing state's closure against `targetState`, so a hop into `loading`
+  // satisfies a target of `reviewing` without needing to traverse the
+  // effect-emitted edge itself. It also checks the SOURCE's own closure
+  // before taking any hop at all (std-data-erasure's `execScanning`).
+  const path = bfsShortestPath(trait, trait.initialState, targetState);
+  if (path === null) return null;
 
   return path.map((step) => {
     // Look up the event's declared payloadSchema so the replay
@@ -83,6 +99,15 @@ export function planReplayTo(
     const payload: EventPayload = step.edge.hasGuard && step.edge.guard !== undefined
       ? { ...synth, ...buildGuardPayloads(step.edge.guard).pass }
       : synth;
+    // `step.to` may itself be transient (e.g. a fetch's `loading` landing
+    // state auto-advances to `cached`/`error` the instant the mocked
+    // effect resolves, often before the reconcile frame is read). The BFS
+    // above already excludes effect-emitted events as edges, so `step.event`
+    // is always a real (non-effect-emitted) dispatch — only the
+    // closure-of-`to` case (planWalk's non-effect-emitted branch) applies
+    // here. Mirrors planWalk's transition-into-a-transient-state handling
+    // exactly so a reconcile hop is tolerated the same way a direct step is.
+    const acceptStates = transientClosure(step.to, trait);
     return {
       from: step.from,
       event: step.event,
@@ -93,26 +118,39 @@ export function planReplayTo(
       traitName: trait.traitName,
       triggerKind: 'replay',
       coverageKey: `${trait.traitName}:${step.from}+${step.event}->${step.to}[replay]`,
+      ...(acceptStates.length > 1 && { acceptStates }),
     };
   });
 }
 
 /**
  * BFS shortest path from `source` to `target`. Skips INIT events from
- * the source (those are auto-fired by the runtime, not walk-fired) and
- * wildcard-source pseudostates. Returns null when target is unreachable.
+ * the source (those are auto-fired by the runtime, not walk-fired),
+ * wildcard-source pseudostates, and effect-emitted events as HOPS (a
+ * reconcile step can't dispatch one deterministically). A landing state
+ * satisfies `target` either literally or via its transient closure —
+ * `loading --Loaded--> reviewing` means a hop landing on `loading`
+ * reaches `reviewing` on its own once the mocked effect settles, so BFS
+ * stops there instead of treating `reviewing` as unreachable. The SOURCE
+ * itself is checked the same way before any hop is taken — a target
+ * already in the source's own closure (std-data-erasure's `idle
+ * --(tick)ExecScanLoaded--> execScanning`, no manually-dispatchable edge
+ * in between at all) needs zero dispatches, not "unreachable". Returns
+ * `[]` for that zero-hop case, `null` only when neither the target nor
+ * its precondition is reachable by any manually-dispatchable hop.
  */
 function bfsShortestPath(
-  transitions: ReadonlyArray<EdgeWalkTransition>,
+  trait: PlanReplayInput['trait'],
   source: string,
   target: string,
-  excludeEvents?: ReadonlySet<string>,
 ): ReadonlyArray<ReplayHop> | null {
   if (source === target) return [];
+  if (transientClosure(source, trait).includes(target)) return [];
+  const excludeEvents = trait.effectEmittedEvents;
 
   // Build adjacency list from filtered transitions.
   const adjacency = new Map<string, ReadonlyArray<EdgeWalkTransition>>();
-  for (const t of transitions) {
+  for (const t of trait.transitions) {
     if (t.from === '*') continue;
     if (t.event === 'INIT' && t.from === source) continue;
     if (excludeEvents?.has(t.event) === true) continue;
@@ -133,7 +171,7 @@ function bfsShortestPath(
     for (const edge of edges) {
       if (visited.has(edge.to)) continue;
       const newPath = [...path, { from: state, event: edge.event, to: edge.to, edge }];
-      if (edge.to === target) return newPath;
+      if (edge.to === target || transientClosure(edge.to, trait).includes(target)) return newPath;
       visited.add(edge.to);
       queue.push({ state: edge.to, path: newPath });
     }

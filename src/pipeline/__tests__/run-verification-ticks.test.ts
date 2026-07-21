@@ -54,6 +54,12 @@ const snake: OrbitalSchema = {
               { from: 'playing', to: 'playing', event: 'UP', guard: entityGuard('down') },
               { from: 'playing', to: 'playing', event: 'DOWN', guard: entityGuard('up') },
               { from: 'playing', to: 'playing', event: 'RESTART' },
+              // Self-received internal contract emit — a real snake.lolo-shaped
+              // atom listens for its own INTERNAL_PING; without a receiving
+              // transition the emit-sweep's `acceptedEvents` filter (no trait
+              // anywhere accepts it) correctly treats it as an orphaned
+              // broadcast (the GAME_END/no-handler case) and skips the sweep.
+              { from: 'playing', to: 'playing', event: 'INTERNAL_PING' },
             ],
           },
           ticks: [
@@ -108,7 +114,7 @@ describe('runVerification — tick-driven trait (snake-shaped)', () => {
   it('suppresses tick steps when enableTickTests is false', async () => {
     const result = await run({ enableTickTests: false });
     expect(result.frames.some((f) => f.cause.triggerKind === 'tick')).toBe(false);
-    expect(result.coverage.totalItems).toBe(4); // schema transitions only
+    expect(result.coverage.totalItems).toBe(5); // schema transitions only
   });
 
   it('fires contract-declared events through the emit sweep (internal AND external)', async () => {
@@ -128,11 +134,11 @@ describe('runVerification — tick-driven trait (snake-shaped)', () => {
     expect(result.verdicts.guardParity?.passed).toBe(true);
   });
 
-  it('reports one schema-honest coverage number: 4 transitions + 1 tick', async () => {
+  it('reports one schema-honest coverage number: 5 transitions + 1 tick', async () => {
     const result = await run();
-    expect(result.coverage.schemaTransitions).toBe(4);
-    expect(result.coverage.totalItems).toBe(5);
-    expect(result.coverage.coveredItems).toBe(5);
+    expect(result.coverage.schemaTransitions).toBe(5);
+    expect(result.coverage.totalItems).toBe(6);
+    expect(result.coverage.coveredItems).toBe(6);
     expect(result.coverage.ratio).toBe(1);
     expect(result.coverage.uncovered).toEqual([]);
     expect(result.coverage.perTriggerKind.tick).toEqual({ total: 1, covered: 1 });

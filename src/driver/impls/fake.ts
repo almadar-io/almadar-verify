@@ -131,6 +131,17 @@ export class FakeRuntime {
   }
 
   /**
+   * Test-only: force a trait's current state, bypassing transition
+   * validation. Used by fixtures simulating a runtime settle race — a
+   * mocked effect resolving (and auto-advancing the state machine)
+   * inside the driver's settle window, so the observed state differs
+   * from the transition table's naive `to`.
+   */
+  setState(traitName: string, state: string): void {
+    this.states.set(traitName, state);
+  }
+
+  /**
    * Seed an entity row directly. Useful for fixtures that need a
    * pre-populated store.
    */

@@ -50,6 +50,31 @@ export function* eachInlineTrait(orbital: OrbitalSchema): Generator<{ orb: Orbit
 }
 
 /**
+ * Slots a trait's boot transition renders into: the literal
+ * `(initialState, INIT)` transition's `render-ui` effects. Portal-only /
+ * dynamic-slot atoms (std-modal: fetches at INIT but only ever renders
+ * into `@config.detailSlot` from a later user-driven OPEN) declare no
+ * render-ui here — the empty set is the schema's own signal that this
+ * trait promises nothing at boot, for any slot. Callers use this to
+ * derive slot exemptions from the schema instead of a name/category list.
+ */
+export function traitBootRenderSlots(trait: Trait): Set<string> {
+  const slots = new Set<string>();
+  if (trait.stateMachine === undefined) return slots;
+  const initialState = findInitialState(trait.stateMachine);
+  if (initialState === null) return slots;
+  for (const transition of trait.stateMachine.transitions) {
+    if (transition.from !== initialState || transition.event !== 'INIT') continue;
+    for (const effect of transition.effects ?? []) {
+      if (Array.isArray(effect) && effect[0] === 'render-ui' && typeof effect[1] === 'string') {
+        slots.add(effect[1]);
+      }
+    }
+  }
+  return slots;
+}
+
+/**
  * Project a core `Transition` into the kernel walker's `EdgeWalkTransition`.
  */
 export function toEdgeWalkTransition(t: Transition): EdgeWalkTransition {

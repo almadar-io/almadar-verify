@@ -221,6 +221,56 @@ describe('planWalk', () => {
       expect(steps.every((s) => s.guardSteerable === false)).toBe(true);
     });
 
+    it('marks a bare-string-atom @config guard unsteerable (std-data-erasure/std-mod-queue OPEN shape)', () => {
+      // Real shape from the .orb registry: `OPEN -> loading when
+      // @config.enabled` lowers to the guard as a bare string atom, not
+      // an `["=", ...]` call — a distinct code path through
+      // collectBindings/walkSExpr from the array-guard test above.
+      const configGuarded: EdgeWalkTransition = {
+        from: 'idle',
+        event: 'OPEN',
+        to: 'loading',
+        hasGuard: true,
+        guard: '@config.enabled',
+      };
+      const trait: TraitWalkConfig = {
+        traitName: 'Erasure',
+        initialState: 'idle',
+        transitions: [configGuarded],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      expect(steps.length).toBeGreaterThan(0);
+      expect(steps.every((s) => s.guardSteerable === false)).toBe(true);
+    });
+
+    it('marks a fully const-folded literal guard (zero bindings) unsteerable, not vacuously steerable', () => {
+      // Real `orbital resolve` shape for a standalone-verified atom whose
+      // `@config.enabled` default (`false`) has no override in scope: the
+      // resolver const-folds the guard all the way down to the literal
+      // boolean `false` (std-mod-queue / std-data-erasure OPEN, verified
+      // directly). `collectBindings(false) === []`, and `[].every(...)`
+      // is vacuously `true` — the exact inversion this guards against.
+      const constFolded: EdgeWalkTransition = {
+        from: 'idle',
+        event: 'OPEN',
+        to: 'loading',
+        hasGuard: true,
+        guard: false,
+      };
+      const trait: TraitWalkConfig = {
+        traitName: 'ModQueueItemReview',
+        initialState: 'idle',
+        transitions: [constFolded],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      // constant `false` means canPass is false — only the guard-fail
+      // variant is emitted (matches the real frame evidence: one 'fail'
+      // frame, no counterpart 'pass' frame).
+      expect(steps.length).toBeGreaterThan(0);
+      expect(steps.every((s) => s.guardCase === 'fail')).toBe(true);
+      expect(steps.every((s) => s.guardSteerable === false)).toBe(true);
+    });
+
     it('leaves @payload-bound guard variants steerable', () => {
       const payloadGuarded: EdgeWalkTransition = {
         from: 'a',

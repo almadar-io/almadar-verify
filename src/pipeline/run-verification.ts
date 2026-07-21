@@ -18,13 +18,14 @@
  */
 
 // node:fs is loaded dynamically below so browser bundles don't pull it in.
+import { collectEmbeddedTraitReferrers } from '@almadar/core';
 import type { Frame } from '../frame/types.js';
 import { tick } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { collectEntityFields } from '../planner/internal/payload-synth.js';
-import { eachInlineTrait, findInitialState } from '../planner/internal/orbital-walk.js';
+import { eachInlineTrait, findInitialState, traitBootRenderSlots } from '../planner/internal/orbital-walk.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
@@ -52,7 +53,20 @@ import { report } from '../observer/report.js';
 import type { Verdict } from '../observer/types.js';
 import type { RunVerificationInput, RunVerificationOutput } from './types.js';
 
-const DEFAULT_MAX_WALK_MS = 60_000;
+// GAP 3 (coverage accounting): the closure-BFS reachability fix
+// (`planReplayTo`) makes MORE transitions legitimately attemptable —
+// e.g. std-data-erasure's `browsing`/`error`-state transitions, reachable
+// via a real reconcile hop through `OPEN` — but each newly-attempted
+// precondition costs a full hermetic reset (page reload) + reconcile
+// dispatch + settle on top of the real step's own reset/dispatch/settle.
+// A complex atom's per-trait walk can legitimately need several minutes
+// to exhaust its plan once every reachable transition is actually
+// attempted (verified: std-data-erasure needed >60s to clear its
+// `loading`-state steps alone before reaching `browsing`/`error`). The
+// old 60s ceiling silently truncated the walk mid-plan, which read as
+// "uncovered" rather than "ran out of time" — raising the ceiling lets
+// genuinely-reachable work finish instead of masking it as a skip.
+const DEFAULT_MAX_WALK_MS = 180_000;
 const DEFAULT_MAX_FRAMES = 5_000;
 
 export async function runVerification<Ctx extends DriverContext>(
@@ -175,6 +189,14 @@ export async function runVerification<Ctx extends DriverContext>(
   // other than the replay plan projected (a guarded edge branched).
   const replayDivergences: string[] = [];
   const replayDivergeFrames: number[] = [];
+  // PRECONDITION-UNREACHABLE: steps whose `from` precondition couldn't be
+  // established (no replay path found, or the replay diverged) — the step
+  // is skipped rather than dispatched from a stale state (e.g. APPROVE
+  // firing while the trait sat in `idle` because `reviewing` was never
+  // reached). Mirrors how the base walk already accepts it can't force an
+  // unsteerable guard outcome (`assertGuardParity`'s `guardSteerable`
+  // skip) instead of flagging a divergence the planner has no control over.
+  const preconditionSkips: string[] = [];
 
   for (const trait of traits) {
     const ctx = { ...input.ctx, trait } as Ctx;
@@ -225,15 +247,28 @@ export async function runVerification<Ctx extends DriverContext>(
 
       // Hermetic preamble (skips for auto-init, which IS the boot
       // moment and has no prior state to reset from).
+      let preconditionUnreachable = false;
+      let preconditionReason = '';
       if (step.triggerKind !== 'auto-init') {
         await input.driver.reset(ctx);
 
-        if (step.from !== trait.initialState) {
+        // `from: '*'` fires on ANY current state — it has no precondition
+        // to establish, so an empty replay path here is correct-by-design,
+        // not a reachability failure.
+        if (step.from !== trait.initialState && step.from !== '*') {
           const replayPath = planReplayTo(
             { trait, targetState: step.from },
             entityFieldsByName,
           );
-          for (const replayStep of replayPath) {
+          if (replayPath === null) {
+            // Genuinely unreachable — no dispatchable hop's closure ever
+            // lands on `step.from`. Distinct from `[]`, which means the
+            // precondition is already satisfied with zero dispatches
+            // (already-there, or within the initial state's own closure).
+            preconditionUnreachable = true;
+            preconditionReason = `precondition '${step.from}' unreachable from '${trait.initialState}' — no dispatchable replay path (or transient-closure landing) found`;
+          }
+          for (const replayStep of replayPath ?? []) {
             if (frames.length >= maxFrames) break;
             const reconcileStep: ExtendedWalkStep = {
               ...replayStep,
@@ -246,23 +281,59 @@ export async function runVerification<Ctx extends DriverContext>(
             prev = reconcileFrame;
 
             // REPLAY-NONDET-DISPATCH: the preamble BFS assumes one target
-            // per (from, event), but a guarded transition branches. If the
-            // runtime took the other branch, the rest of the preamble is
-            // built on a stale precondition — abort it and record the
-            // divergent hop so it can't silently corrupt the real step.
+            // per (from, event), but a guarded transition branches, or a
+            // mocked effect resolves inside the settle window and the
+            // trait auto-advances past `reconcileStep.to` before the frame
+            // is read (e.g. `empty --FETCH--> loading` settling at
+            // `cached`). The latter is the same legitimate race
+            // `planWalk`/`tick` already tolerate on direct steps via
+            // `acceptStates` (transient closure) — reconcile hops carry
+            // the identical closure (`planReplayTo`), so accept any state
+            // in it here too. Only a state OUTSIDE the closure is a real
+            // divergence.
+            const reconcileAccepted = reconcileStep.acceptStates ?? [reconcileStep.to];
             if (
               reconcileFrame.stateAfter !== null &&
-              reconcileFrame.stateAfter !== reconcileStep.to
+              !reconcileAccepted.includes(reconcileFrame.stateAfter)
             ) {
               replayDivergences.push(
                 `${trait.traitName}: reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`,
               );
               replayDivergeFrames.push(reconcileFrame.index);
               log(`  [${stepIdx + 1}/${plan.length}] replay diverged at ${reconcileStep.event}: expected ${reconcileStep.to}, got ${reconcileFrame.stateAfter} — aborting preamble`);
+              preconditionUnreachable = true;
+              preconditionReason = `precondition '${step.from}' unreachable — reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`;
+              break;
+            }
+            // Accepted but past the exact target: the runtime already
+            // settled beyond `reconcileStep.to` (transient overshoot), so
+            // any remaining hops in this replay path assumed a precondition
+            // that no longer holds. Stop replaying — same as tick.ts's
+            // direct-step path, which never asserts an exact intermediate
+            // state, only observes wherever the runtime actually is — and
+            // let the real step fire from wherever the trait settled.
+            if (
+              reconcileFrame.stateAfter !== null &&
+              reconcileFrame.stateAfter !== reconcileStep.to
+            ) {
+              log(`  [${stepIdx + 1}/${plan.length}] reconcile settled at ${reconcileFrame.stateAfter} (transient closure of ${reconcileStep.to}) — accepted, skipping remaining preamble hops`);
               break;
             }
           }
         }
+      }
+
+      // The precondition walk couldn't put the trait in `step.from` (no
+      // replay path, or the replay diverged) — dispatching now would fire
+      // from whatever stale state the reset left it in (e.g. APPROVE from
+      // `idle` instead of `reviewing`) and report a misleading pass/fail
+      // that says nothing about the transition itself. Skip it; the
+      // divergence (if any) is already recorded via `replayDivergences`.
+      if (preconditionUnreachable) {
+        log(`  [${stepIdx + 1}/${plan.length}] SKIP ${step.from} --${step.event}--> ${step.to} | ${preconditionReason}`);
+        preconditionSkips.push(`${trait.traitName}:${step.from}+${step.event}->${step.to} — ${preconditionReason}`);
+        stepIdx += 1;
+        continue;
       }
 
       const frame: Frame = await tick(input.driver, ctx, prev, step, orbitalsByTrait, allowStateless);
@@ -306,6 +377,19 @@ export async function runVerification<Ctx extends DriverContext>(
     };
   }
 
+  // PRECONDITION-UNREACHABLE — informational, not a failure: a step whose
+  // `from` state couldn't be established was skipped rather than fired
+  // from a stale state. The transition still surfaces as uncovered in the
+  // coverage report; this just names WHY, so the skip is traceable instead
+  // of a silent drop.
+  if (preconditionSkips.length > 0) {
+    verdicts.preconditionSkipped = {
+      passed: true,
+      detail: `precondition-unreachable: ${preconditionSkips.length} step(s) skipped — ${preconditionSkips.join('; ')}`,
+      evidence: { frameIndices: [] },
+    };
+  }
+
   // End-of-walk portal blank-portal sweep (always).
   //
   // Pass the set of "lifecycle"-capability traits so frames originating
@@ -344,7 +428,35 @@ export async function runVerification<Ctx extends DriverContext>(
       }
     }
   }
-  verdicts.portalSweep = assertPortalSlots(frames, { noRenderTraits });
+
+  // Embedded traits (`@trait.X` referenced from another trait's render-ui,
+  // e.g. std-mod-queue's `LoadingSpinner`): a DECLARED wrapper trait
+  // inherits a base ui atom's own `INIT -> (render-ui main ...)` topology,
+  // but that self-render is sidecar-redirected — only the HOST trait's
+  // render tree (wherever it places `@trait.LoadingSpinner`) actually
+  // consumes it. Walking the embedded trait on its own (the base walk
+  // treats every inline trait as independently walkable) auto-fires its
+  // INIT and asserts against the literal DOM slot it declares, which the
+  // embedded case never paints into — a false blank-portal/boot-expectation
+  // flag. `collectEmbeddedTraitReferrers` (canonical owner: @almadar/core,
+  // shared with @almadar/runtime's own config-forward resolution) is the
+  // single source of truth for "is this trait embedded" — reused here
+  // rather than re-walking `@trait.` references locally.
+  const embeddedTraits = new Set(collectEmbeddedTraitReferrers(input.orbital).keys());
+  for (const name of embeddedTraits) noRenderTraits.add(name);
+
+  // `main` blank-portal exemption: derived from the schema, not a name
+  // list. A trait whose boot `(initialState, INIT)` transition authors no
+  // render-ui into `main` (std-modal: fetches at INIT, only ever renders
+  // into its own detail/portal slot from a later OPEN) never promises
+  // content there — the shell mounts `main` unconditionally regardless,
+  // so an empty one is expected, not a bug. A trait that DOES author a
+  // `main` render at boot and paints nothing still fails.
+  const mainExemptTraits = new Set<string>();
+  for (const { trait } of eachInlineTrait(input.orbital)) {
+    if (!traitBootRenderSlots(trait).has('main')) mainExemptTraits.add(trait.name);
+  }
+  verdicts.portalSweep = assertPortalSlots(frames, { noRenderTraits, mainExemptTraits });
 
   // VG11a — binding probes (per-frame, always).
   const bindingVerdicts = frames.map((frame, i) =>
@@ -404,7 +516,11 @@ export async function runVerification<Ctx extends DriverContext>(
 
   // VG1 per-step — derived from each transition's render-ui declarations.
   if (opts.enablePortalPerStep !== false) {
-    const portalExpectations = derivePortalExpectations(input.orbital);
+    // Embedded traits' own render-ui declarations never land in the
+    // top-level DOM independently (see the portalSweep exemption above) —
+    // no per-step boot/transition expectation applies to them either.
+    const portalExpectations = derivePortalExpectations(input.orbital)
+      .filter((e) => !embeddedTraits.has(e.traitName));
     if (portalExpectations.length > 0) {
       const v = assertPortalPerStep(frames, portalExpectations);
       if (v.length > 0) {

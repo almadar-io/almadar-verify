@@ -53,6 +53,7 @@ import {
   hasRequiredPayloadFields,
   synthesizeSuccessPayload,
 } from './internal/payload-synth.js';
+import { transientClosure } from './internal/transient-closure.js';
 
 export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
   const { trait, includeAutoInit = true, entityFieldsByName = {} } = input;
@@ -214,48 +215,28 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
 }
 
 /**
- * Transient closure of `start`: the states reachable from it by following
- * transitions whose event is *effect-emitted* (auto-fired by an effect's
- * `emit`, not a user). A state with such an outgoing transition advances to
- * its target the instant the effect resolves, so a transition INTO it can
- * legitimately settle anywhere in the closure. Returns `[start]` when the
- * trait declares no effect-emitted events (the common case).
- */
-function transientClosure(start: string, trait: PlanWalkInput['trait']): string[] {
-  const emitted = trait.effectEmittedEvents;
-  if (emitted === undefined || emitted.size === 0) return [start];
-  const seen = new Set<string>([start]);
-  const queue = [start];
-  while (queue.length > 0) {
-    const state = queue.shift() as string;
-    for (const t of trait.transitions) {
-      if (!emitted.has(t.event)) continue;
-      if (!fromMatches(t.from, state)) continue;
-      if (!seen.has(t.to)) {
-        seen.add(t.to);
-        queue.push(t.to);
-      }
-    }
-  }
-  return [...seen];
-}
-
-function fromMatches(from: PlanWalkInput['trait']['transitions'][number]['from'], state: string): boolean {
-  if (from === '*') return true;
-  if (Array.isArray(from)) return from.includes(state);
-  return from === state;
-}
-
-/**
  * A guard is payload-steerable iff every binding it references is a
  * `@payload.*` field — the only inputs `buildGuardPayloads` can control.
  * A guard that also binds `@entity.*` / `@config.*` (snake's
  * `(and (not @entity.over) (!= @entity.dir "down"))`) decides partly on
  * runtime state the dispatch payload cannot reach, so the pass/fail
  * prediction is not the planner's to make.
+ *
+ * A guard with ZERO bindings is a fully const-folded literal — e.g. a
+ * standalone-verified `when @config.enabled` (default `false`, no
+ * override in scope) resolves at `orbital resolve` time to the literal
+ * `guard: false`, not a string/array `@config.*` reference. `.every()`
+ * on `collectBindings(guard) === []` is vacuously `true`, which read as
+ * "steerable" — exactly backwards: a constant has nothing left for the
+ * payload to move, so it's the least steerable case there is, not the
+ * most. Every lowered form of a config-only guard (bare-atom string,
+ * `["=", ...]` array, or fully-folded literal) must land here as
+ * unsteerable.
  */
 function guardIsPayloadSteerable(guard: SExpr): boolean {
-  return collectBindings(guard).every((b) => b.startsWith('@payload'));
+  const bindings = collectBindings(guard);
+  if (bindings.length === 0) return false;
+  return bindings.every((b) => b.startsWith('@payload'));
 }
 
 /**
