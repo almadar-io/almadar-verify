@@ -21,6 +21,7 @@ import type {
   EntityRow,
   EventLogEntry,
   EventPayload,
+  SExpr,
   ServerResponseTrace,
   TraitStateSnapshot,
   VerificationSnapshot,
@@ -33,6 +34,20 @@ import type { Driver, DriverContext, SendResult, SnapshotResult } from '../types
 /** What the FakeDriver carries on its context. */
 export interface FakeDriverContext extends DriverContext {
   runtime: FakeRuntime;
+}
+
+/** Options for {@link createFakeDriver}. */
+export interface FakeDriverOptions {
+  /**
+   * Guard evaluator hook. When a matched transition carries a guard
+   * (`hasGuard: true`), `FakeRuntime.dispatch` calls this with the
+   * transition's guard expression and the current dispatch's
+   * `{traitName, event, payload}` — a `false` result blocks the
+   * transition exactly like a real guard-fail (state holds, the event
+   * still lands in the log). Absent hook = unconditional dispatch (the
+   * pre-existing behavior every current caller relies on).
+   */
+  evaluateGuard?: (guard: SExpr, ctx: { traitName: string; event: string; payload: EventPayload }) => boolean;
 }
 
 /** In-process state machine + entity store + event log. */
@@ -57,7 +72,10 @@ export class FakeRuntime {
    *  payload-validator rejecting a malformed payload. */
   private rejected = new Set<string>();
 
-  constructor(private traits: TraitWalkConfig[]) {
+  constructor(
+    private traits: TraitWalkConfig[],
+    private options: FakeDriverOptions = {},
+  ) {
     this.reset();
   }
 
@@ -116,6 +134,16 @@ export class FakeRuntime {
       // cascade event but doesn't advance the state machine.
       this.eventLog.push({ type: event, payload, timestamp: Date.now() });
       return { to: null, serverResponse: null };
+    }
+
+    if (transition.hasGuard && transition.guard !== undefined && this.options.evaluateGuard) {
+      const guardPassed = this.options.evaluateGuard(transition.guard, { traitName, event, payload });
+      if (!guardPassed) {
+        // Guard-fail: record the dispatch attempt, do not advance — mirrors
+        // the "no matching transition" branch above (same observable shape).
+        this.eventLog.push({ type: event, payload, timestamp: Date.now() });
+        return { to: null, serverResponse: null };
+      }
     }
 
     this.states.set(traitName, transition.to);
@@ -214,11 +242,11 @@ export class FakeRuntime {
   }
 }
 
-export function createFakeDriver(traits: TraitWalkConfig[]): {
+export function createFakeDriver(traits: TraitWalkConfig[], options?: FakeDriverOptions): {
   driver: Driver<FakeDriverContext>;
   runtime: FakeRuntime;
 } {
-  const runtime = new FakeRuntime(traits);
+  const runtime = new FakeRuntime(traits, options);
 
   const driver: Driver<FakeDriverContext> = {
     async sendEvent(_ctx, event, payload): Promise<SendResult> {

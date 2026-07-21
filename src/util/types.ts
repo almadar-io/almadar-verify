@@ -37,6 +37,13 @@ export interface VerifyCheck {
   detail?: string;
 }
 
+/** Coverage gate numbers (unique covered transitions / declared total). */
+export interface ReportCoverage {
+  covered: number;
+  total: number;
+  ratio: number;
+}
+
 /** Full report of a verification run */
 export interface VerifyReport {
   timestamp: string;
@@ -49,4 +56,5 @@ export interface VerifyReport {
     warning: number;
   };
   results: VerifyResult[];
+  coverage?: ReportCoverage;
 }

@@ -83,6 +83,7 @@ export type {
   ConsoleEntry,
   VerifyReport,
   VerifyCheck,
+  ReportCoverage,
 } from './util/types.js';
 
 // Noise filters
@@ -290,6 +291,7 @@ export {
   createFakeDriver,
   FakeRuntime,
   type FakeDriverContext,
+  type FakeDriverOptions,
 } from './driver/impls/fake.js';
 export {
   createDefaultSnapshot,

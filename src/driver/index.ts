@@ -23,6 +23,7 @@ export {
   createFakeDriver,
   FakeRuntime,
   type FakeDriverContext,
+  type FakeDriverOptions,
 } from './impls/fake.js';
 export {
   createPlaywrightDriver,

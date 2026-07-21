@@ -6,7 +6,7 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { VerifyReport, VerifyResult } from '../util/types.js';
+import type { ReportCoverage, VerifyReport, VerifyResult } from '../util/types.js';
 
 /**
  * Build a JSON report from verification results.
@@ -14,7 +14,8 @@ import type { VerifyReport, VerifyResult } from '../util/types.js';
 export function buildJsonReport(
   url: string,
   mode: 'playground' | 'app',
-  results: VerifyResult[]
+  results: VerifyResult[],
+  coverage?: ReportCoverage
 ): VerifyReport {
   const pass = results.filter((r) => r.status === 'pass').length;
   const error = results.filter((r) => r.status === 'error').length;
@@ -26,6 +27,7 @@ export function buildJsonReport(
     mode,
     summary: { total: results.length, pass, error, warning },
     results,
+    ...(coverage ? { coverage } : {}),
   };
 }
 
