@@ -97,6 +97,52 @@ describe('assertClickNoListener', () => {
     expect(verdicts[0].detail).toContain('NOPE');
   });
 
+  it('credits embedded chrome whose embedding host handles the event (embed-chain delivery)', () => {
+    // CloseBtn is chrome embedded in View's render (`@trait.CloseBtn`); its
+    // CLOSE emit is delivered under View's scope by the runtime's embed
+    // routing — View's own transition is the wiring, no bus subscription on
+    // CloseBtn's key ever exists.
+    const embedOrbital = {
+      orbitals: [{
+        traits: [
+          {
+            name: 'View',
+            stateMachine: { transitions: [{ from: 'open', event: 'CLOSE', to: 'closed', effects: [['render-ui', 'main', { children: '@trait.CloseBtn' }]] }] },
+            listens: [],
+          },
+          { name: 'CloseBtn', stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle' }] }, listens: [] },
+        ],
+      }],
+    } as unknown as OrbitalSchema;
+    const frames: Frame[] = [
+      frame(0, domCause('View', 'INIT'), [{ name: 'View', state: 'open' }, { name: 'CloseBtn', state: 'idle' }]),
+      frame(1, domCause('CloseBtn', 'CLOSE'), [{ name: 'View', state: 'open' }, { name: 'CloseBtn', state: 'idle' }]),
+    ];
+    expect(assertClickNoListener(frames, embedOrbital)).toEqual([]);
+  });
+
+  it('still flags embedded chrome whose whole embed chain has no handler', () => {
+    const embedOrbital = {
+      orbitals: [{
+        traits: [
+          {
+            name: 'View',
+            stateMachine: { transitions: [{ from: 'open', event: 'INIT', to: 'open', effects: [['render-ui', 'main', { children: '@trait.DeadBtn' }]] }] },
+            listens: [],
+          },
+          { name: 'DeadBtn', stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle' }] }, listens: [] },
+        ],
+      }],
+    } as unknown as OrbitalSchema;
+    const frames: Frame[] = [
+      frame(0, domCause('View', 'INIT'), [{ name: 'View', state: 'open' }, { name: 'DeadBtn', state: 'idle' }]),
+      frame(1, domCause('DeadBtn', 'NOPE'), [{ name: 'View', state: 'open' }, { name: 'DeadBtn', state: 'idle' }]),
+    ];
+    const verdicts = assertClickNoListener(frames, embedOrbital);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].detail).toContain('embed-chain: no');
+  });
+
   it('credits self-targeting (the emitting trait handles the event itself)', () => {
     const selfOrbital = {
       orbitals: [{ traits: [{ name: 'Browse', stateMachine: { transitions: [{ from: 'browsing', event: 'GO', to: 'browsing' }] }, listens: [] }] }],

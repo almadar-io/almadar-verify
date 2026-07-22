@@ -5,6 +5,11 @@
  * When a verifier-originated DOM click fires, the button emits a bus event.
  * This observer checks that at least one trait subscribed to that event:
  *   - Self-targeting: the emitting trait has a transition on the event.
+ *   - Embed-chain: an embedding host (transitively, via the schema's embed
+ *     relationship) handles the event or is the source of a declared listens
+ *     route — embedded chrome emits under its embedder's scope, so the
+ *     runtime delivers to the host, never to a subscription on the child's
+ *     own bus key.
  *   - Declared cross-trait: some trait's `listens` block subscribes to the
  *     event from this emitter (the schema-level wiring contract).
  *   - Runtime cross-trait: some other trait's `cascadeReceived` grew with the
@@ -26,6 +31,7 @@
  */
 
 import type { OrbitalSchema } from '@almadar/core';
+import { collectEmbeddedTraitReferrers } from '@almadar/core';
 import type { Frame } from '../frame/types.js';
 import type { Verdict } from './types.js';
 import { buildDeclaredListeners, buildTraitTransitions } from './click-wiring-audit.js';
@@ -36,6 +42,13 @@ export function assertClickNoListener(
 ): Verdict[] {
   const traitTransitions = buildTraitTransitions(orbital);
   const declaredListeners = buildDeclaredListeners(orbital);
+  // Embedded chrome (named `<trait.X />` embeds and Inline*Render children)
+  // emits under its EMBEDDER's scope — the runtime's embed routing delivers
+  // the event to the embedding host, not via a bus subscription on the
+  // child's own key. Walk the embed chain upward and credit the click when
+  // any host handles or subscribes to the event; a chain with no handler
+  // anywhere is still a dead affordance.
+  const embedHosts = collectEmbeddedTraitReferrers(orbital);
   const verdicts: Verdict[] = [];
 
   for (let i = 1; i < frames.length; i++) {
@@ -51,6 +64,27 @@ export function assertClickNoListener(
     if (selfEvents?.has(event)) {
       continue;
     }
+
+    // Embed-chain delivery: does an embedding host (transitively) handle or
+    // subscribe to the event? Mirrors the runtime's embed routing.
+    let embedWired = false;
+    const seenHosts = new Set<string>([traitName]);
+    for (
+      let host = embedHosts.get(traitName);
+      host !== undefined && !seenHosts.has(host);
+      host = embedHosts.get(host)
+    ) {
+      seenHosts.add(host);
+      const hostSources = declaredListeners.get(event);
+      if (
+        traitTransitions.get(host)?.has(event) === true ||
+        (hostSources !== undefined && hostSources.has(host))
+      ) {
+        embedWired = true;
+        break;
+      }
+    }
+    if (embedWired) continue;
 
     // Declared cross-trait: does any trait subscribe to this event from this
     // emitter (or from any source)? The schema-level `listens` wiring is the
@@ -89,7 +123,7 @@ export function assertClickNoListener(
     if (!hasListener) {
       verdicts.push({
         passed: false,
-        detail: `bus:click-no-listener — ${traitName} DOM click emitted "${event}" but no trait subscribed (self-targeting: no, cross-trait cascade: no)`,
+        detail: `bus:click-no-listener — ${traitName} DOM click emitted "${event}" but no trait subscribed (self-targeting: no, embed-chain: no, cross-trait cascade: no)`,
         evidence: {
           frameIndices: [frame.index],
         },
