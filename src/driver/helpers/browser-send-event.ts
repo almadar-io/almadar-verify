@@ -33,8 +33,29 @@ export async function dispatchInBrowser(
     pl: payload as unknown as Record<string, unknown>,
     sc: traitScope,
   };
+  // Readiness gate: the hermetic reset navigates on `domcontentloaded`,
+  // which can land BEFORE the playground hydrates VerificationProvider
+  // and installs `__orbitalVerification`. Dispatching in that window
+  // silently no-ops ("driver did not deliver") and the whole walk
+  // diverges — a timing flake, not a real wiring failure. Wait for the
+  // bridge api itself (the exact precondition of the evaluate below);
+  // already-hydrated pages pass in ~1ms.
+  const ready = await page
+    .waitForFunction(browserBridgeReady, undefined, { timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!ready) return false;
   const result = await page.evaluate(browserSendEvent, args);
   return result === true;
+}
+
+function browserBridgeReady(): boolean {
+  const api = (
+    window as unknown as {
+      __orbitalVerification?: { sendEvent?: unknown };
+    }
+  ).__orbitalVerification;
+  return typeof api?.sendEvent === 'function';
 }
 
 function browserSendEvent(a: {
