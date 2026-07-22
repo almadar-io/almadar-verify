@@ -50,7 +50,7 @@ import { assertPortalPerStep } from '../observer/assert-portal-per-step.js';
 import { assertInteractionPattern } from '../observer/assert-interaction-pattern.js';
 import { assertClickNoListener } from '../observer/assert-click-no-listener.js';
 import { report } from '../observer/report.js';
-import type { Verdict } from '../observer/types.js';
+import type { ReportShape, Verdict } from '../observer/types.js';
 import type { RunVerificationInput, RunVerificationOutput } from './types.js';
 
 // GAP 3 (coverage accounting): the closure-BFS reachability fix
@@ -104,6 +104,24 @@ export async function runVerification<Ctx extends DriverContext>(
 
   // ── Derive everything from the parsed orbital ─────────────────────
   const traits = extractTraitWalkConfigs(input.orbital);
+
+  // Frontier scope: traits cloned from a `uses[]` import carry the
+  // resolve/inline phase's `sourceBehavior` stamp — their topology is
+  // fixed by the imported atom and verified in that atom's own package
+  // corpus, so the frontier walk skips their base topology and keeps
+  // only the call-site wiring tests (extension planners). The IR's own
+  // stamp is the sole discriminator; an unstamped trait is authored and
+  // always walked in full.
+  const frontier = opts.walkScope === 'frontier';
+  const importedTopology = new Map<string, string>();
+  if (frontier) {
+    for (const { trait } of eachInlineTrait(input.orbital)) {
+      if (trait.sourceBehavior !== undefined) {
+        importedTopology.set(trait.name, trait.sourceBehavior.behavior);
+      }
+    }
+  }
+  const frontierSkipped: Array<{ trait: string; source: string; transitions: number }> = [];
   // v3.14.0: orbital-wide entity field defs threaded into `planWalk`
   // for `success`-variant payload synthesis. Built once here so each
   // planWalk call doesn't re-walk the orbital.
@@ -199,6 +217,38 @@ export async function runVerification<Ctx extends DriverContext>(
   const preconditionSkips: string[] = [];
 
   for (const trait of traits) {
+    const importedSource = frontier ? importedTopology.get(trait.traitName) : undefined;
+    if (importedSource !== undefined) {
+      frontierSkipped.push({
+        trait: trait.traitName,
+        source: importedSource,
+        transitions: trait.transitions.length,
+      });
+    }
+    const extensionSteps = extensionStepsByTrait.get(trait.traitName) ?? [];
+    // Imported traits keep ONLY the dispatch-free auto-init step (and only
+    // when wiring steps follow): it settles the freshly-reset page and
+    // credits the boot mount before the first real dispatch. Without it
+    // the first extension step fires into a still-hydrating page and
+    // flakes with `frame 0: dispatch failed`.
+    const baseSteps = importedSource === undefined
+      ? planWalk({ trait, entityFieldsByName })
+      : extensionSteps.length > 0
+        ? planWalk({ trait, entityFieldsByName }).filter((s) => s.triggerKind === 'auto-init')
+        : [];
+    const plan = [...baseSteps, ...extensionSteps];
+
+    // An imported trait with no wiring steps has nothing to dispatch —
+    // skip it before any driver work (the per-trait reset is a full page
+    // reload; on organism-scale schemas these skips are the wall-clock
+    // win frontier mode exists for).
+    if (importedSource !== undefined && plan.length === 0) {
+      log(`[runVerification] ${trait.traitName}: frontier skip (topology from ${importedSource}, ${trait.transitions.length} transitions verified at source)`);
+      continue;
+    }
+
+    wholePlan.push(...plan);
+
     const ctx = { ...input.ctx, trait } as Ctx;
 
     if (input.driver.beforeTrait !== undefined) {
@@ -206,13 +256,8 @@ export async function runVerification<Ctx extends DriverContext>(
     }
     await input.driver.reset(ctx);
 
-    const baseSteps = planWalk({ trait, entityFieldsByName });
-    const extensionSteps = extensionStepsByTrait.get(trait.traitName) ?? [];
-    const plan = [...baseSteps, ...extensionSteps];
-    wholePlan.push(...plan);
-
     log(
-      `[runVerification] ${trait.traitName}: ${plan.length} steps (${baseSteps.length} base + ${extensionSteps.length} extension)`,
+      `[runVerification] ${trait.traitName}: ${plan.length} steps (${baseSteps.length} base + ${extensionSteps.length} extension)${importedSource !== undefined ? ` — frontier: topology from ${importedSource} skipped` : ''}`,
     );
 
     const traitStart = Date.now();
@@ -537,14 +582,32 @@ export async function runVerification<Ctx extends DriverContext>(
   // Schema-level coverage denominator: every transition declared across
   // the orbital's inline-trait state machines. `schemaTransitionKeys`
   // carries the same transitions as coverage bases so `coverage()` can
-  // reconcile the plan's variant fan-out into one honest number.
+  // reconcile the plan's variant fan-out into one honest number. Under
+  // frontier scope the denominator covers only walked (authored) traits;
+  // the skipped imported topology is accounted in `frontier` instead of
+  // silently deflating the ratio.
   let schemaTransitions = 0;
   const schemaTransitionKeys: string[] = [];
   for (const { trait } of eachInlineTrait(input.orbital)) {
+    if (frontier && importedTopology.has(trait.name)) continue;
     for (const t of trait.stateMachine?.transitions ?? []) {
       schemaTransitions += 1;
       schemaTransitionKeys.push(`${trait.name}:${t.from}+${t.event}->${t.to}`);
     }
+  }
+
+  let frontierSummary: ReportShape['frontier'];
+  if (frontier) {
+    const importedTransitionsSkipped = frontierSkipped.reduce((sum, s) => sum + s.transitions, 0);
+    frontierSummary = {
+      authoredTraits: traits.length - frontierSkipped.length,
+      importedTraits: frontierSkipped.length,
+      importedTransitionsSkipped,
+      skipped: frontierSkipped,
+    };
+    log(
+      `[runVerification] frontier: walked ${frontierSummary.authoredTraits} authored trait(s); skipped topology of ${frontierSummary.importedTraits} imported trait(s) (${importedTransitionsSkipped} transitions — verified at source)`,
+    );
   }
 
   return report({
@@ -554,6 +617,7 @@ export async function runVerification<Ctx extends DriverContext>(
     verdicts,
     schemaTransitions,
     schemaTransitionKeys,
+    ...(frontierSummary !== undefined && { frontier: frontierSummary }),
   });
 }
 

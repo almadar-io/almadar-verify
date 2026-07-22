@@ -253,6 +253,7 @@ export type {
   EntityRowContentVerdict,
   Verdict,
   ReportShape,
+  FrontierSummary,
 } from './observer/types.js';
 export { coverage } from './observer/coverage.js';
 export { assertMutation } from './observer/assert-mutation.js';

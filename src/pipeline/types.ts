@@ -89,6 +89,20 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
      */
     allowStateless?: boolean;
     /**
+     * Walk scope. `'full'` (default) walks every inline trait's complete
+     * topology. `'frontier'` walks the full topology ONLY for traits
+     * authored directly on the orbital; traits cloned from a `uses[]`
+     * import (stamped `sourceBehavior` by the resolve/inline phase) skip
+     * their base topology walk — their state machines are fixed by the
+     * imported atom and verified in that atom's own package corpus.
+     * Extension planners (interaction, click-path, CRUD flow, emit sweep,
+     * contract events) still target imported traits: they exercise the
+     * call-site wiring, which is the organism's own surface. Skipped
+     * topology is reported explicitly in `ReportShape.frontier` and the
+     * schema coverage denominator is scoped to the walked traits.
+     */
+    walkScope?: 'full' | 'frontier';
+    /**
      * Storage tier for the CRUD-proof phase (`assertCrudFlow`). Default
      * `'strict'`. Set `'mock'` when the runtime under test is the
      * standalone playground's MockPersistenceAdapter: its persist acks

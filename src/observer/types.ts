@@ -53,6 +53,15 @@ export interface CoverageMetric {
    */
   schemaTransitions: number;
   uncovered: ReadonlyArray<string>;
+  /**
+   * The covered coverage bases — the exact keys behind `coveredItems`
+   * (schema-reconciled bases + tick keys when schema keys were
+   * supplied; plan keys otherwise). Consumers aggregating coverage
+   * across items use THIS list, never a re-derivation from frames —
+   * frame-derived keys include extension steps outside the headline
+   * denominator and would inflate the numerator.
+   */
+  coveredKeys: ReadonlyArray<string>;
   perTrait: Record<string, {
     total: number;
     covered: number;
@@ -222,6 +231,34 @@ export interface ReportShape {
   summary: VerificationSummary;
   errors: ReadonlyArray<string>;
   warnings: ReadonlyArray<string>;
+  /**
+   * Present only when the run used `walkScope: 'frontier'`. Explicit
+   * accounting for the imported-trait topology the frontier scope did
+   * NOT walk — those state machines are fixed by their source atoms and
+   * verified in the atom's own package corpus; skipping them here is a
+   * scope decision, never silent truncation. `coverage` denominators are
+   * already scoped to the walked traits when this block is present.
+   */
+  frontier?: FrontierSummary;
+}
+
+/** Frontier-scope accounting attached to `ReportShape.frontier`. */
+export interface FrontierSummary {
+  /** Traits authored directly on the orbital — walked in full. */
+  authoredTraits: number;
+  /** Traits cloned from `uses[]` imports — base topology skipped. */
+  importedTraits: number;
+  /** Total transitions across the skipped imported topologies. */
+  importedTransitionsSkipped: number;
+  /** Per-trait record of what was skipped and where it IS verified. */
+  skipped: ReadonlyArray<{
+    /** Call-site trait name on the orbital. */
+    trait: string;
+    /** Source behavior (`sourceBehavior.behavior`) that owns the topology. */
+    source: string;
+    /** Number of transitions in the skipped topology. */
+    transitions: number;
+  }>;
 }
 
 /** Re-export `EntityRow` so observer files don't need to dance through frame/types. */

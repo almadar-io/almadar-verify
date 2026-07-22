@@ -147,6 +147,7 @@ export function coverage(
     ratio,
     schemaTransitions,
     uncovered,
+    coveredKeys: [...covered],
     perTrait,
     perTriggerKind,
   };
@@ -225,6 +226,7 @@ function schemaReconciledCoverage(
     ratio,
     schemaTransitions,
     uncovered,
+    coveredKeys: [...coveredSchema, ...coveredTick],
     perTrait,
     perTriggerKind,
   };

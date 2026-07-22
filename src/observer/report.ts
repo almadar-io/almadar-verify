@@ -34,6 +34,11 @@ export interface ReportInput {
    * planned tick steps) instead of the plan's variant fan-out.
    */
   schemaTransitionKeys?: ReadonlyArray<string>;
+  /**
+   * Frontier-scope accounting from a `walkScope: 'frontier'` run.
+   * Forwarded verbatim onto `ReportShape.frontier`.
+   */
+  frontier?: ReportShape['frontier'];
 }
 
 export function report(input: ReportInput): ReportShape {
@@ -59,6 +64,7 @@ export function report(input: ReportInput): ReportShape {
     summary,
     errors,
     warnings,
+    ...(input.frontier !== undefined && { frontier: input.frontier }),
   };
 }
 
