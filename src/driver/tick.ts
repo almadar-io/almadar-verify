@@ -99,6 +99,7 @@ export async function tick<Ctx extends DriverContext>(
   const entitiesBefore = entitiesFromPrev(prev, step.traitName);
 
   let serverResponse = null;
+  let domFellBackToBus = false;
   // `dispatchSent` tracks whether the driver actually dispatched the
   // event. The DOM-trigger path that finds an affordance and clicks it
   // counts as sent; otherwise it falls through to `sendEvent` and we
@@ -120,6 +121,11 @@ export async function tick<Ctx extends DriverContext>(
     if (triggered) {
       dispatchSent = true;
     } else {
+      // No affordance was visible/clickable in this context — the frame
+      // must record the EFFECTIVE trigger ('bus'), not the planned one:
+      // click observers (click-path, click-no-listener) judge DOM truth
+      // and a fallback dispatch is not a click.
+      domFellBackToBus = true;
       const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload), traitScope);
       serverResponse = send.serverResponse;
       dispatchSent = send.sent;
@@ -146,7 +152,7 @@ export async function tick<Ctx extends DriverContext>(
     ...(errors.length > 0 && { errors }),
     index,
     timestamp,
-    cause,
+    cause: domFellBackToBus ? { ...cause, triggerKind: 'bus' } : cause,
     stateBefore,
     stateAfter,
     payload: asEventPayload(step.payload),

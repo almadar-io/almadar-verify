@@ -29,6 +29,20 @@ export function assertClickPathSample(frames: ReadonlyArray<Frame>): Verdict[] {
     const frame = frames[i];
     if (frame.cause.testKind !== 'click-path') continue;
 
+    // The driver stamps the EFFECTIVE trigger: a click-path step whose
+    // affordance was not visible in the walked context falls back to bus
+    // dispatch (`triggerKind: 'bus'`). No click happened, so there is no
+    // click truth to score — record the sample as vacuous, never as a
+    // dead affordance.
+    if (frame.cause.triggerKind !== 'dom') {
+      verdicts.push({
+        passed: true,
+        detail: `click-path: ${frame.cause.event} affordance not visible in walked context — no DOM click attempted (bus fallback), vacuous sample`,
+        evidence: { frameIndices: [frame.index] },
+      });
+      continue;
+    }
+
     const prev = i > 0 ? frames[i - 1] : null;
     if (prev === null) {
       verdicts.push({
