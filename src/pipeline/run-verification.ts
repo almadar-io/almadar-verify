@@ -26,6 +26,7 @@ import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { collectEntityFields } from '../planner/internal/payload-synth.js';
 import { eachInlineTrait, findInitialState, traitBootRenderSlots } from '../planner/internal/orbital-walk.js';
+import { isUiFactoryBoard } from './ui-factory-board.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
 import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
@@ -564,8 +565,15 @@ export async function runVerification<Ctx extends DriverContext>(
     // Embedded traits' own render-ui declarations never land in the
     // top-level DOM independently (see the portalSweep exemption above) —
     // no per-step boot/transition expectation applies to them either.
+    // Factory boards (lolo-ui generator stamp): the boot INIT render is a
+    // content vessel fed entirely by call-site config — with all knobs at
+    // defaults it may legitimately collapse to nothing (e.g. simple-grid
+    // with no children returns null). Boot INIT expectations are therefore
+    // contractually soft there; non-INIT expectations stay strict.
+    const vesselBoard = isUiFactoryBoard(input.orbital);
     const portalExpectations = derivePortalExpectations(input.orbital)
-      .filter((e) => !embeddedTraits.has(e.traitName));
+      .filter((e) => !embeddedTraits.has(e.traitName))
+      .filter((e) => !(vesselBoard && e.event === 'INIT'));
     if (portalExpectations.length > 0) {
       const v = assertPortalPerStep(frames, portalExpectations);
       if (v.length > 0) {
@@ -652,9 +660,12 @@ function combineVerdicts(verdicts: ReadonlyArray<Verdict>, label: string): Verdi
       evidence: { frameIndices: collectFrameIndices(verdicts) },
     };
   }
+  // Every failing site, not just the first — an agent fixing dead buttons
+  // needs the complete (trait, event) list in the verdict itself
+  // (V-CLICK-NO-LISTENER-FIRST-SAMPLE-ONLY).
   return {
     passed: false,
-    detail: `${label}: ${failed.length}/${verdicts.length} failed — ${failed[0].detail}`,
+    detail: `${label}: ${failed.length}/${verdicts.length} failed — ${failed.map((f) => f.detail).join('; ')}`,
     evidence: { frameIndices: collectFrameIndices(verdicts) },
   };
 }

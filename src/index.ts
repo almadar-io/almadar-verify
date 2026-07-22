@@ -309,6 +309,7 @@ export {
   type RunVerificationInput,
   type RunVerificationOutput,
 } from './pipeline/index.js';
+export { isUiFactoryBoard } from './pipeline/ui-factory-board.js';
 
 export {
   scoreStructuralQuality,
