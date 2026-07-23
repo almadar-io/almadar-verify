@@ -181,23 +181,15 @@ export function createDefaultDomTrigger(
       // same "first row" contract as the unscoped first-match click).
       const entityName = step.expectedRowDelta.entityName;
       const row = await page.evaluate((name: string) => {
-        const w = window as unknown as {
-          __orbitalVerification?: {
-            getSnapshot?: () => {
-              traits?: ReadonlyArray<{
-                data?: Record<string, ReadonlyArray<{ id?: unknown }>>;
-              }>;
-            };
-          };
-        };
+        const w = window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI };
         const snap = w.__orbitalVerification?.getSnapshot?.();
-        const rows: Array<{ id: string } & Record<string, unknown>> = [];
+        const rows: Array<{ id: string } & import('@almadar/core').EntityRow> = [];
         const seen = new Set<string>();
         for (const trait of snap?.traits ?? []) {
           for (const r of trait.data?.[name] ?? []) {
             if (typeof r.id === 'string' && !seen.has(r.id)) {
               seen.add(r.id);
-              rows.push(r as { id: string } & Record<string, unknown>);
+              rows.push(r as { id: string } & import('@almadar/core').EntityRow);
             }
           }
         }
@@ -208,7 +200,7 @@ export function createDefaultDomTrigger(
         const payload: EventPayload = {};
         if (step.payloadRowShape !== undefined) {
           for (const field of step.payloadRowShape) {
-            const value: unknown = field.wholeRow ? row : row[field.name];
+            const value = field.wholeRow ? row : row[field.name];
             if (isEventPayloadValue(value)) payload[field.name] = value;
           }
         } else {
@@ -326,16 +318,7 @@ export function createDefaultDomTrigger(
         //      the data-update tail of the cascade).
         const targetEntityName = step.expectedRowDelta?.entityName ?? null;
         const baseline = await page.evaluate((entityName: string | null) => {
-          const w = window as unknown as {
-            __orbitalVerification?: {
-              getSnapshot?: () => {
-                transitions?: ReadonlyArray<unknown>;
-                traits?: ReadonlyArray<{
-                  data?: Record<string, ReadonlyArray<{ id?: string; updatedAt?: string }>>;
-                }>;
-              };
-            };
-          };
+          const w = window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI };
           const snap = w.__orbitalVerification?.getSnapshot?.();
           const txCount = snap?.transitions?.length ?? 0;
           if (entityName === null) {
@@ -413,19 +396,7 @@ export function createDefaultDomTrigger(
                 expectedEvent: string;
                 targetEntity: string | null;
               }) => {
-                const w = window as unknown as {
-                  __orbitalVerification?: {
-                    getSnapshot?: () => {
-                      transitions?: ReadonlyArray<{
-                        event?: string;
-                        serverResponse?: { emittedEvents?: ReadonlyArray<string> };
-                      }>;
-                      traits?: ReadonlyArray<{
-                        data?: Record<string, ReadonlyArray<{ id?: string; updatedAt?: string }>>;
-                      }>;
-                    };
-                  };
-                };
+                const w = window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI };
                 const snap = w.__orbitalVerification?.getSnapshot?.();
                 const txs = snap?.transitions ?? [];
                 const slice = txs.slice(args.baselineTx);
@@ -504,23 +475,14 @@ export function createDefaultDomTrigger(
         await page.waitForTimeout(250);
 
         const postSubmitTransitions = await page.evaluate((args: { baselineTx: number; followUpEvent: string }) => {
-          const w = window as unknown as {
-            __orbitalVerification?: {
-              getSnapshot?: () => {
-                transitions?: ReadonlyArray<{
-                  event?: string;
-                  traitName?: string;
-                  payload?: unknown;
-                  serverResponse?: { success?: boolean; emittedEvents?: ReadonlyArray<string>; error?: string };
-                }>;
-              };
-            };
-          };
+          const w = window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI };
           const txs = w.__orbitalVerification?.getSnapshot?.()?.transitions ?? [];
           return txs.slice(args.baselineTx).map((t) => ({
             event: t.event ?? '',
             traitName: t.traitName ?? '',
-            payload: t.payload ?? null,
+            // TransitionTrace carries no payload (recordTransition never
+            // stamps one) — the old untyped read here was always null.
+            payload: null,
             serverSuccess: t.serverResponse?.success ?? null,
             serverEmits: t.serverResponse?.emittedEvents ?? [],
             serverError: t.serverResponse?.error ?? null,

@@ -19,12 +19,13 @@
  * @packageDocumentation
  */
 
+import type { Effect, SExpr } from '@almadar/core';
+
 /** Collect every event name emitted via an `emit` options object across a
- *  trait's transition effects. Effects are walked as opaque nested values
- *  (`Transition.effects` is a `TypedEffect[]` tuple union; the runtime shape
- *  is the same array-of-arrays-with-trailing-options-object regardless). */
+ *  trait's transition effects (`Transition.effects` is the core `Effect`
+ *  tuple union; option objects nest as `SExpr` record atoms). */
 export function collectEffectEmittedEvents(
-  transitions: ReadonlyArray<{ effects?: readonly unknown[] }>,
+  transitions: ReadonlyArray<{ effects?: ReadonlyArray<Effect> }>,
 ): Set<string> {
   const out = new Set<string>();
   for (const t of transitions) {
@@ -33,15 +34,15 @@ export function collectEffectEmittedEvents(
   return out;
 }
 
-function collectFromNode(node: unknown, out: Set<string>): void {
+function collectFromNode(node: Effect | SExpr, out: Set<string>): void {
   if (Array.isArray(node)) {
     for (const child of node) collectFromNode(child, out);
     return;
   }
   if (node !== null && typeof node === 'object') {
-    const emit = (node as Record<string, unknown>).emit;
+    const emit = (node as Readonly<Record<string, SExpr>>)['emit'];
     if (emit !== null && typeof emit === 'object' && !Array.isArray(emit)) {
-      for (const v of Object.values(emit as Record<string, unknown>)) {
+      for (const v of Object.values(emit as Readonly<Record<string, SExpr>>)) {
         if (typeof v === 'string' && v !== '') out.add(v);
       }
     }

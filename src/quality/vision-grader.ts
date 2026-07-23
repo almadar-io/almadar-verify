@@ -37,7 +37,7 @@ export interface VisionQualityReport {
 export class VisionQualityGradingError extends Error {
   constructor(
     message: string,
-    public readonly cause: unknown,
+    public readonly cause: Error | string | null,
   ) {
     super(message);
     this.name = 'VisionQualityGradingError';
@@ -81,7 +81,7 @@ function loadImage(path: string): VisionImagePart {
   if (!mediaType) {
     throw new VisionQualityGradingError(
       `Unsupported screenshot format for "${path}" (expected .png/.jpg/.jpeg/.gif/.webp)`,
-      undefined,
+      null,
     );
   }
   return { base64: readFileSync(path).toString('base64'), mediaType };
@@ -141,13 +141,13 @@ async function gradeWithClient(
   model: string,
 ): Promise<VisionQualityReport> {
   if (input.screenshotPaths.length === 0) {
-    throw new VisionQualityGradingError('No screenshots supplied to grade', undefined);
+    throw new VisionQualityGradingError('No screenshots supplied to grade', null);
   }
 
   const images = input.screenshotPaths.map(loadImage);
   const prompt = buildGradingPrompt(input.userPrompt);
 
-  let lastError: unknown;
+  let lastError: Error | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await client.callWithVision({
@@ -159,13 +159,13 @@ async function gradeWithClient(
       });
       return { dimensions: response.data, model };
     } catch (error) {
-      lastError = error;
+      lastError = error instanceof Error ? error : new Error(String(error));
     }
   }
 
-  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  const detail = lastError?.message ?? 'no error captured';
   throw new VisionQualityGradingError(
     `Vision grader failed after one retry: ${detail}`,
-    lastError,
+    lastError ?? null,
   );
 }

@@ -122,7 +122,7 @@ export function createDefaultSnapshot(
       traitName,
       stepEvent: step?.event,
       stepTestKind: step?.testKind,
-      entityCounts: entityCountsForLog as unknown as import('@almadar/core').LogMeta,
+      entityCounts: entityCountsForLog,
       traitCount,
       transitionCount,
     });
@@ -327,7 +327,7 @@ async function probePortals(page: Page): Promise<ReadonlyArray<{ slot: PortalSlo
         if (el === null) return { slot: name, mounted: false, childCount: 0 };
         return { slot: name, mounted: true, childCount: el.children.length };
       });
-    }, slots as unknown as string[]);
+    }, [...slots]);
     return results as ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>;
   } catch {
     // Page may have navigated mid-snapshot; return empty so verdicts

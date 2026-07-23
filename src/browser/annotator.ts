@@ -222,7 +222,12 @@ export class Annotator {
 
         let selectedVerdict: string | null = null;
 
-        (window as unknown as Record<string, unknown>).__oaSelectVerdict = (verdict: string) => {
+        type AnnotatorWindow = Window & {
+          __oaSelectVerdict?: (verdict: string) => void;
+          __oaSubmit?: () => void;
+          __oaResult?: { verdict: string | null; categories: string[]; notes: string };
+        };
+        (window as AnnotatorWindow).__oaSelectVerdict = (verdict: string) => {
           selectedVerdict = verdict;
           document.querySelectorAll('.oa-verdict-btn').forEach((btn) => {
             (btn as HTMLElement).dataset.selected = String(
@@ -237,13 +242,13 @@ export class Annotator {
           if (submitBtn) submitBtn.disabled = false;
         };
 
-        (window as unknown as Record<string, unknown>).__oaSubmit = () => {
+        (window as AnnotatorWindow).__oaSubmit = () => {
           const categories: string[] = [];
           document.querySelectorAll('input[name="oa-cat"]:checked').forEach((cb) => {
             categories.push((cb as HTMLInputElement).value);
           });
           const notes = (document.getElementById('oa-notes') as HTMLTextAreaElement)?.value || '';
-          (window as unknown as Record<string, unknown>).__oaResult = {
+          (window as AnnotatorWindow).__oaResult = {
             verdict: selectedVerdict,
             categories,
             notes,
@@ -279,7 +284,7 @@ export class Annotator {
 
     // Wait forever for user to click Submit
     const result = await page.waitForFunction(
-      () => (window as unknown as Record<string, unknown>).__oaResult,
+      () => (window as Window & { __oaResult?: { verdict: string | null; categories: string[]; notes: string } }).__oaResult,
       null,
       { timeout: 0 },
     );
@@ -294,9 +299,14 @@ export class Annotator {
     await page.evaluate(() => {
       document.getElementById('orbital-annotate-container')?.remove();
       document.getElementById('orbital-annotate-style')?.remove();
-      delete (window as unknown as Record<string, unknown>).__oaSelectVerdict;
-      delete (window as unknown as Record<string, unknown>).__oaSubmit;
-      delete (window as unknown as Record<string, unknown>).__oaResult;
+      type AnnotatorWindow = Window & {
+        __oaSelectVerdict?: (verdict: string) => void;
+        __oaSubmit?: () => void;
+        __oaResult?: { verdict: string | null; categories: string[]; notes: string };
+      };
+      delete (window as AnnotatorWindow).__oaSelectVerdict;
+      delete (window as AnnotatorWindow).__oaSubmit;
+      delete (window as AnnotatorWindow).__oaResult;
     });
 
     if (data.verdict === 'skip') return null;

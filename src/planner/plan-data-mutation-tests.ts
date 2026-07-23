@@ -14,7 +14,7 @@
  * @packageDocumentation
  */
 
-import type { FieldValue, OrbitalSchema, Trait } from '@almadar/core';
+import type { Effect, FieldValue, OrbitalSchema, SExpr, Trait } from '@almadar/core';
 import { isEntityReference, isEntityCall, constTruth } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
@@ -106,7 +106,7 @@ interface PersistEffectInfo {
   successEvent?: string;
 }
 
-function findPersistKind(effects: ReadonlyArray<unknown>): PersistEffectInfo | null {
+function findPersistKind(effects: ReadonlyArray<Effect>): PersistEffectInfo | null {
   for (const effect of effects) {
     if (!Array.isArray(effect)) continue;
     if (effect[0] !== 'persist') continue;
@@ -119,10 +119,11 @@ function findPersistKind(effects: ReadonlyArray<unknown>): PersistEffectInfo | n
     for (let i = 3; i < effect.length; i++) {
       const arg = effect[i];
       if (arg === null || typeof arg !== 'object' || Array.isArray(arg)) continue;
-      const emit = (arg as { emit?: { success?: unknown } }).emit;
-      if (emit === undefined) continue;
-      if (typeof emit.success === 'string' && emit.success.length > 0) {
-        successEvent = emit.success;
+      const emit = (arg as Readonly<Record<string, SExpr>>)['emit'];
+      if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
+      const success = (emit as Readonly<Record<string, SExpr>>)['success'];
+      if (typeof success === 'string' && success.length > 0) {
+        successEvent = success;
         break;
       }
     }

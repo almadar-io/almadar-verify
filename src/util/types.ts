@@ -15,10 +15,12 @@ export interface VerifyResult {
   runtimeState?: RuntimeState;
 }
 
+import type { EntityData, FieldValue } from '@almadar/core';
+
 /** Runtime state snapshot read from window.__orbitalVerification */
 export interface RuntimeState {
-  traits: Record<string, { currentState: string; context: unknown }>;
-  entities: Record<string, unknown[]>;
+  traits: Record<string, { currentState: string; context: Record<string, FieldValue> }>;
+  entities: EntityData;
   events: string[];
   guards: Record<string, boolean>;
 }

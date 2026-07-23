@@ -20,7 +20,7 @@
  * @packageDocumentation
  */
 
-import type { FieldValue, OrbitalSchema, Trait, Transition } from '@almadar/core';
+import type { FieldValue, OrbitalSchema, SExpr, Trait, Transition } from '@almadar/core';
 import { isEntityReference, isEntityCall } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import {
@@ -183,10 +183,11 @@ function collectServerEmittedEvents(orbital: OrbitalSchema): Set<string> {
         for (let i = 2; i < effect.length; i++) {
           const node = effect[i];
           if (node === null || typeof node !== 'object' || Array.isArray(node)) continue;
-          const emit = (node as { emit?: { success?: unknown; failure?: unknown } }).emit;
-          if (emit === undefined) continue;
-          if (typeof emit.success === 'string') out.add(emit.success);
-          if (typeof emit.failure === 'string') out.add(emit.failure);
+          const emit = (node as Readonly<Record<string, SExpr>>)['emit'];
+          if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
+          const options = emit as Readonly<Record<string, SExpr>>;
+          if (typeof options['success'] === 'string') out.add(options['success']);
+          if (typeof options['failure'] === 'string') out.add(options['failure']);
         }
       }
     }
@@ -194,15 +195,15 @@ function collectServerEmittedEvents(orbital: OrbitalSchema): Set<string> {
   return out;
 }
 
-function walkActions(node: unknown, out: Set<string>): void {
+function walkActions(node: SExpr, out: Set<string>): void {
   if (node === null || typeof node !== 'object') return;
   if (Array.isArray(node)) {
     for (const child of node) walkActions(child, out);
     return;
   }
-  const obj = node as { action?: unknown; submitEvent?: unknown };
-  if (typeof obj.action === 'string') out.add(obj.action);
-  if (typeof obj.submitEvent === 'string') out.add(obj.submitEvent);
+  const obj = node as Readonly<Record<string, SExpr>>;
+  if (typeof obj['action'] === 'string') out.add(obj['action']);
+  if (typeof obj['submitEvent'] === 'string') out.add(obj['submitEvent']);
   for (const v of Object.values(obj)) {
     if (typeof v === 'object' && v !== null) walkActions(v, out);
   }
@@ -225,13 +226,13 @@ function findNestedForm(transition: Transition): NestedForm | null {
   for (const effect of transition.effects ?? []) {
     if (!Array.isArray(effect)) continue;
     if (effect[0] !== 'render-ui') continue;
-    const found = walkForFormFields(effect[2]);
+    const found = walkForFormFields(effect[2] as SExpr);
     if (found !== null) return found;
   }
   return null;
 }
 
-function walkForFormFields(node: unknown): NestedForm | null {
+function walkForFormFields(node: SExpr): NestedForm | null {
   if (node === null || typeof node !== 'object') return null;
   if (Array.isArray(node)) {
     for (const item of node) {
@@ -240,26 +241,28 @@ function walkForFormFields(node: unknown): NestedForm | null {
     }
     return null;
   }
-  const obj = node as { fields?: unknown; submitEvent?: unknown; [k: string]: unknown };
+  const obj = node as Readonly<Record<string, SExpr>>;
   // Direct hit: an object with a `fields:` array. Two flavors:
   //   - Object-style: `[{ name: "X", type: "string", ... }]`
   //   - String-style: `["X", "Y", "Z"]` — std-modal's default form-section
   //     ships this shape and delegates type info to the linked entity at
   //     render time (Form.tsx normalizes via entity lookup).
-  if (Array.isArray(obj.fields)) {
+  const fields = obj['fields'];
+  if (Array.isArray(fields)) {
     const names: string[] = [];
-    for (const f of obj.fields) {
+    for (const f of fields) {
       if (typeof f === 'string' && f.length > 0) {
         names.push(f);
       } else if (f !== null && typeof f === 'object' && !Array.isArray(f)) {
-        const name = (f as { name?: unknown }).name;
+        const name = (f as Readonly<Record<string, SExpr>>)['name'];
         if (typeof name === 'string') names.push(name);
       }
     }
     if (names.length > 0) {
+      const submitEvent = obj['submitEvent'];
       return {
         fields: names,
-        ...(typeof obj.submitEvent === 'string' && { submitEvent: obj.submitEvent }),
+        ...(typeof submitEvent === 'string' && { submitEvent }),
       };
     }
   }
@@ -285,11 +288,12 @@ function findRenderTarget(transition: Transition): RenderTarget | null {
     if (effect[0] !== 'render-ui') continue;
     const payload = effect[2];
     if (payload === null || typeof payload !== 'object') continue;
-    const obj = payload as { type?: unknown; fields?: unknown };
-    if (typeof obj.type !== 'string') continue;
+    const obj = payload as Readonly<Record<string, SExpr>>;
+    const patternType = obj['type'];
+    if (typeof patternType !== 'string') continue;
 
-    const pattern = obj.type;
-    const isForm = pattern.includes('form') || Array.isArray(obj.fields);
+    const pattern = patternType;
+    const isForm = pattern.includes('form') || Array.isArray(obj['fields']);
     return { pattern, isForm };
   }
   return null;

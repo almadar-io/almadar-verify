@@ -17,6 +17,7 @@ import {
   findDefaultRoute,
   findInitialState,
   findRouteForTrait,
+  findRouteForEmbedClosure,
   toEdgeWalkTransition,
 } from './internal/orbital-walk.js';
 
@@ -47,7 +48,7 @@ export function extractTraitWalkConfigs(orbital: OrbitalSchema): TraitWalkConfig
     if (trait.emits !== undefined && trait.emits.length > 0) {
       config.emitContracts = trait.emits;
     }
-    const route = findRouteForTrait(orb, trait.name) ?? findDefaultRoute(orb);
+    const route = findRouteForTrait(orb, trait.name) ?? findRouteForEmbedClosure(orb, trait.name) ?? findDefaultRoute(orb);
     if (route !== null) {
       (config as { route?: string }).route = route;
     }

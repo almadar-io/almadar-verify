@@ -22,6 +22,7 @@
 
 import {
   type OrbitalSchema,
+  type SExpr,
   type Trait,
   type StateMachine,
   type Transition,
@@ -49,23 +50,23 @@ const STATE_TARGET = 5;
 const GUARD_TARGET = 3;
 
 // ---------------------------------------------------------------------------
-// Narrowing helpers (no casts — narrow `unknown` structurally)
+// Narrowing helpers — core `SExpr` in, record atoms out
 // ---------------------------------------------------------------------------
 
-type UnknownRecord = Record<string, unknown>;
+type SExprRecord = Readonly<Record<string, SExpr>>;
 
-function asRecord(value: unknown): UnknownRecord | null {
+function asRecord(value: SExpr): SExprRecord | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as UnknownRecord)
+    ? (value as SExprRecord)
     : null;
 }
 
-function isLiteralTypeToken(value: unknown): value is string {
+function isLiteralTypeToken(value: SExpr): value is string {
   return typeof value === 'string' && value.length > 0 && !value.startsWith('@');
 }
 
 /** A FC-5 dynamic-collection children entry: `["array/map", expr, ["fn", param, node]]`. */
-function asMapChildEntry(value: unknown): UnknownRecord | null {
+function asMapChildEntry(value: SExpr): SExprRecord | null {
   if (!Array.isArray(value) || value[0] !== 'array/map' || value.length < 3) return null;
   const lambda = value[2];
   if (!Array.isArray(lambda) || lambda[0] !== 'fn' || lambda.length < 3) return null;
@@ -73,7 +74,7 @@ function asMapChildEntry(value: unknown): UnknownRecord | null {
 }
 
 /** `renderItem` may be a plain node record OR a `["fn", param, node]` lambda. */
-function asRenderItemNode(value: unknown): UnknownRecord | null {
+function asRenderItemNode(value: SExpr): SExprRecord | null {
   const record = asRecord(value);
   if (record) return record;
   if (Array.isArray(value) && value[0] === 'fn' && value.length >= 3) {
@@ -108,21 +109,22 @@ function tierBucketFor(type: string): PatternTierBucket {
 }
 
 /** Walk one render node, updating the accumulator and returning subtree depth (this node = 1). */
-function walkNode(node: UnknownRecord, acc: RenderAccumulator): number {
-  const type = node.type;
+function walkNode(node: SExprRecord, acc: RenderAccumulator): number {
+  const type = node['type'];
   if (isLiteralTypeToken(type)) {
     acc.types.add(type);
     acc.tierMix[tierBucketFor(type)] += 1;
   }
 
-  if (isLiteralTypeToken(node.direction)) acc.layout.axes.add(node.direction);
-  if (typeof node.justify === 'string') acc.layout.justifyUses += 1;
-  if (typeof node.align === 'string') acc.layout.alignUses += 1;
-  if (node.gap !== undefined && node.gap !== null) acc.layout.gapUses += 1;
+  const direction = node['direction'];
+  if (isLiteralTypeToken(direction)) acc.layout.axes.add(direction);
+  if (typeof node['justify'] === 'string') acc.layout.justifyUses += 1;
+  if (typeof node['align'] === 'string') acc.layout.alignUses += 1;
+  if (node['gap'] !== undefined && node['gap'] !== null) acc.layout.gapUses += 1;
 
   let deepestChild = 0;
 
-  const children = node.children;
+  const children = node['children'];
   if (Array.isArray(children) && children.length > 0) {
     let sawChild = false;
     for (const entry of children) {
@@ -142,7 +144,7 @@ function walkNode(node: UnknownRecord, acc: RenderAccumulator): number {
     if (sawChild) acc.collection.childrenArrays += 1;
   }
 
-  const renderItem = asRenderItemNode(node.renderItem);
+  const renderItem = asRenderItemNode(node['renderItem']);
   if (renderItem) {
     acc.collection.renderItemLambdas += 1;
     deepestChild = Math.max(deepestChild, walkNode(renderItem, acc));
@@ -157,10 +159,10 @@ function walkNode(node: UnknownRecord, acc: RenderAccumulator): number {
  *   depth inside effect S-expressions), skipping binding-string / null trees;
  * - `ui:` presentation-binding `content` nodes.
  */
-function collectRenderRoots(trait: Trait): UnknownRecord[] {
-  const roots: UnknownRecord[] = [];
+function collectRenderRoots(trait: Trait): SExprRecord[] {
+  const roots: SExprRecord[] = [];
 
-  const walkForRenderUi = (value: unknown): void => {
+  const walkForRenderUi = (value: SExpr): void => {
     if (Array.isArray(value)) {
       if (value[0] === 'render-ui' && value.length >= 3) {
         const tree = asRecord(value[2]);
@@ -175,11 +177,11 @@ function collectRenderRoots(trait: Trait): UnknownRecord[] {
     }
   };
 
-  if (trait.stateMachine) walkForRenderUi(trait.stateMachine.transitions);
-  if (trait.initialEffects) walkForRenderUi(trait.initialEffects);
-  if (trait.ticks) walkForRenderUi(trait.ticks);
+  if (trait.stateMachine) walkForRenderUi(trait.stateMachine.transitions as SExpr);
+  if (trait.initialEffects) walkForRenderUi(trait.initialEffects as SExpr);
+  if (trait.ticks) walkForRenderUi(trait.ticks as SExpr);
 
-  const ui = asRecord(trait.ui);
+  const ui = asRecord((trait.ui ?? null) as SExpr);
   if (ui) {
     for (const binding of Object.values(ui)) {
       const b = asRecord(binding);
@@ -206,7 +208,7 @@ function collectRenderRoots(trait: Trait): UnknownRecord[] {
 
 function knobTiersFor(trait: Trait): KnobTierFacts {
   const facts: KnobTierFacts = { domain: 0, presentation: 0, other: 0, untieredValues: 0 };
-  const config = asRecord(trait.config);
+  const config = asRecord((trait.config ?? null) as SExpr);
   if (!config) return facts;
   for (const entry of Object.values(config)) {
     const decl = asRecord(entry);

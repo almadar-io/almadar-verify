@@ -2,17 +2,23 @@
  * State bridge: read window.__orbitalVerification from a Playwright page.
  *
  * The OrbitalVerificationAPI is exposed by @almadar/ui's verificationRegistry.ts
- * on window.__orbitalVerification. This module provides typed access to it.
+ * on window.__orbitalVerification. This module provides typed access to it —
+ * every `page.evaluate` callback types the global through core's own
+ * `OrbitalVerificationAPI` window-bridge contract, never an untyped record.
  *
  * @packageDocumentation
  */
 
 import type { Page } from 'playwright';
 import type {
+  OrbitalVerificationAPI,
   TraitStateSnapshot,
   VerificationSnapshot,
 } from '@almadar/core';
 import type { RuntimeState } from '../util/types.js';
+
+/** The browser global carrying the verification bridge. */
+type VerificationWindow = Window & { __orbitalVerification?: OrbitalVerificationAPI };
 
 /**
  * Shape of `window.__orbitalVerification.getSnapshot()`. Re-exported as
@@ -36,9 +42,7 @@ export async function readVerificationSnapshot(
   page: Page
 ): Promise<OrbitalVerificationSnapshot | null> {
   return page.evaluate(() => {
-    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-      | { getSnapshot?: () => OrbitalVerificationSnapshot }
-      | undefined;
+    const api = (window as VerificationWindow).__orbitalVerification;
     return api?.getSnapshot?.() ?? null;
   });
 }
@@ -51,22 +55,19 @@ export async function readTraitStates(
   page: Page
 ): Promise<Record<string, string>> {
   return page.evaluate(() => {
-    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-      | { getTraitState?: (name: string) => { currentState: string } | null }
-      | undefined;
+    const api = (window as VerificationWindow).__orbitalVerification;
     if (!api?.getTraitState) return {};
 
     // We can't enumerate trait names from the API directly, so
     // use the snapshot's transitions to discover trait names.
-    const snapshotApi = api as unknown as { getSnapshot?: () => OrbitalVerificationSnapshot };
-    const snapshot = snapshotApi.getSnapshot?.();
+    const snapshot = api.getSnapshot?.();
     if (!snapshot) return {};
 
     const result: Record<string, string> = {};
     const traitNames = new Set(snapshot.transitions.map((t) => t.traitName));
     for (const name of traitNames) {
       const state = api.getTraitState(name);
-      if (state) result[name] = state.currentState;
+      if (typeof state === 'string') result[name] = state;
     }
     return result;
   });
@@ -74,25 +75,17 @@ export async function readTraitStates(
 
 /**
  * Read a single trait's current state from the verification API.
- * Handles both string and object return types from getTraitState.
+ * Core's contract types `getTraitState` as `(name) => string | undefined`.
  */
 export async function getTraitCurrentState(
   page: Page,
   traitName: string
 ): Promise<string | null> {
   return page.evaluate((name) => {
-    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-      | { getTraitState?: (n: string) => unknown }
-      | undefined;
+    const api = (window as VerificationWindow).__orbitalVerification;
     if (!api?.getTraitState) return null;
     const raw = api.getTraitState(name);
-    if (typeof raw === 'string') return raw;
-    if (raw && typeof raw === 'object') {
-      const obj = raw as Record<string, unknown>;
-      if (typeof obj.currentState === 'string') return obj.currentState;
-      if (typeof obj.name === 'string') return obj.name;
-    }
-    return null;
+    return typeof raw === 'string' ? raw : null;
   }, traitName);
 }
 
@@ -127,9 +120,7 @@ export async function readTraitSnapshots(
   page: Page,
 ): Promise<TraitStateSnapshot[]> {
   return page.evaluate(() => {
-    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-      | { getTraitSnapshots?: () => TraitStateSnapshot[] }
-      | undefined;
+    const api = (window as VerificationWindow).__orbitalVerification;
     return api?.getTraitSnapshots?.() ?? [];
   });
 }
@@ -142,10 +133,7 @@ export async function readEventLog(
   page: Page
 ): Promise<import('@almadar/core').EventLogEntry[]> {
   return page.evaluate(() => {
-    type Entry = import('@almadar/core').EventLogEntry;
-    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-      | { eventLog?: Entry[] }
-      | undefined;
+    const api = (window as VerificationWindow).__orbitalVerification;
     return api?.eventLog ?? [];
   });
 }
@@ -166,10 +154,7 @@ export async function readEventLogState(
   dropped: number;
 }> {
   return page.evaluate(() => {
-    type Entry = import('@almadar/core').EventLogEntry;
-    const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-      | { eventLog?: Entry[]; eventLogEpoch?: string; eventLogDropped?: number }
-      | undefined;
+    const api = (window as VerificationWindow).__orbitalVerification;
     return {
       entries: api?.eventLog ?? [],
       epoch: api?.eventLogEpoch ?? '',

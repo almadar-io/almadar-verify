@@ -49,7 +49,7 @@ async function flattenScrollersForCapture(page: Page): Promise<void> {
     // mutated state (height: auto, min-height: auto, overflow: visible),
     // which blocks page scroll for the rest of the session because the
     // restore phase's `.catch` would silently skip restoration entirely.
-    (window as unknown as { __screenshotRestoreSnaps__: Snap[] }).__screenshotRestoreSnaps__ = snaps;
+    (window as Window & { __screenshotRestoreSnaps__?: Snap[] }).__screenshotRestoreSnaps__ = snaps;
     try {
       const walk = (el: Element): void => {
         try {
@@ -108,7 +108,7 @@ async function flattenScrollersForCapture(page: Page): Promise<void> {
  */
 async function restoreScrollersAfterCapture(page: Page): Promise<void> {
   await page.evaluate(() => {
-    const snaps = (window as unknown as { __screenshotRestoreSnaps__?: Array<{ el: Element; style: string }> }).__screenshotRestoreSnaps__;
+    const snaps = (window as Window & { __screenshotRestoreSnaps__?: Array<{ el: Element; style: string }> }).__screenshotRestoreSnaps__;
     if (!snaps) return;
     for (const { el, style } of snaps) {
       try {
@@ -118,7 +118,7 @@ async function restoreScrollersAfterCapture(page: Page): Promise<void> {
         // Element may have been detached; skip.
       }
     }
-    delete (window as unknown as { __screenshotRestoreSnaps__?: unknown }).__screenshotRestoreSnaps__;
+    delete (window as Window & { __screenshotRestoreSnaps__?: Array<{ el: Element; style: string }> }).__screenshotRestoreSnaps__;
   }).catch(() => undefined);
 }
 

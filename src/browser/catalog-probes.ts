@@ -17,6 +17,10 @@
  */
 
 import type { Page } from 'playwright';
+import type { Effect, EntityRow, EventPayload, FieldValue, SExpr, TraitConfig } from '@almadar/core';
+
+/** Recursive IR value the probes walk: render trees, config values, payloads. */
+type ProbeValue = SExpr | EventPayload | FieldValue | EntityRow | ReadonlyArray<EntityRow> | undefined;
 
 // ── Shared transition shape ────────────────────────────────────────────
 
@@ -31,7 +35,7 @@ export interface TransitionLike {
   from: string | readonly string[];
   to: string;
   event: string;
-  effects: readonly unknown[];
+  effects: readonly Effect[];
 }
 
 /**
@@ -89,7 +93,7 @@ const EVENT_ARG_PROP_KEYS = new Set([
  * that's supposed to show up in the DOM.
  */
 export function collectCatalogBindings(
-  node: unknown,
+  node: ProbeValue,
   slot: string,
   rootPatternType: string,
   out: CatalogBinding[],
@@ -100,8 +104,9 @@ export function collectCatalogBindings(
     return;
   }
   if (typeof node !== 'object') return;
-  const obj = node as Record<string, unknown>;
-  const patternType = typeof obj.type === 'string' ? obj.type : rootPatternType;
+  const obj = node as Readonly<Record<string, ProbeValue>>;
+  const declaredType = obj['type'];
+  const patternType = typeof declaredType === 'string' ? declaredType : rootPatternType;
   for (const [key, value] of Object.entries(obj)) {
     if (EVENT_ARG_PROP_KEYS.has(key)) continue;
     if (typeof value === 'string' && value.startsWith('@')) {
@@ -121,8 +126,8 @@ export function collectCatalogBindings(
 }
 
 /** Walk a nested value by dotted path segments. Returns undefined on miss. */
-export function pickBySegments(root: unknown, segments: readonly string[]): unknown {
-  let current: unknown = root;
+export function pickBySegments(root: ProbeValue, segments: readonly string[]): ProbeValue {
+  let current: ProbeValue = root;
   for (const seg of segments) {
     if (current === null || current === undefined) return undefined;
     if (Array.isArray(current)) {
@@ -132,13 +137,13 @@ export function pickBySegments(root: unknown, segments: readonly string[]): unkn
       if (current === null || current === undefined) return undefined;
     }
     if (typeof current !== 'object') return undefined;
-    current = (current as Record<string, unknown>)[seg];
+    current = (current as Readonly<Record<string, ProbeValue>>)[seg];
   }
   return current;
 }
 
 /** Stringify a resolved binding value for DOM search. */
-export function valueToText(value: unknown): string | null {
+export function valueToText(value: ProbeValue): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -167,8 +172,8 @@ export async function probeBindingsForTransition(
   page: Page,
   _traitName: string,
   transition: TransitionLike,
-  traitConfig: Record<string, unknown> | undefined,
-  snapshot: { lastPayload?: unknown; data: Record<string, unknown> } | undefined,
+  traitConfig: TraitConfig | undefined,
+  snapshot: { lastPayload?: EventPayload; data: Record<string, EntityRow[]> } | undefined,
   linkedEntity: string | undefined,
 ): Promise<BindingProbeResult[]> {
   const bindings: CatalogBinding[] = [];
@@ -176,15 +181,17 @@ export async function probeBindingsForTransition(
     if (!Array.isArray(effect) || effect[0] !== 'render-ui') continue;
     const slot = typeof effect[1] === 'string' ? effect[1] : 'unknown';
     const config = effect[2];
-    const topType = typeof (config as { type?: unknown } | null)?.type === 'string'
-      ? (config as { type: string }).type
-      : 'unknown';
-    collectCatalogBindings(config, slot, topType, bindings);
+    const configRecord = config !== null && config !== undefined && typeof config === 'object' && !Array.isArray(config)
+      ? (config as Readonly<Record<string, ProbeValue>>)
+      : null;
+    const declaredTop = configRecord?.['type'];
+    const topType = typeof declaredTop === 'string' ? declaredTop : 'unknown';
+    collectCatalogBindings(config as ProbeValue, slot, topType, bindings);
   }
 
   const results: BindingProbeResult[] = [];
   for (const binding of bindings) {
-    let expected: unknown;
+    let expected: ProbeValue;
     let resolveDetail: string;
     if (binding.root === 'config') {
       expected = pickBySegments(traitConfig, binding.segments);
@@ -274,7 +281,7 @@ export interface MutationEffect {
 }
 
 /** Walk a transition's effects for persist/fetch operations. */
-export function collectMutationEffects(effects: readonly unknown[]): MutationEffect[] {
+export function collectMutationEffects(effects: readonly Effect[]): MutationEffect[] {
   const out: MutationEffect[] = [];
   for (const effect of effects) {
     if (!Array.isArray(effect)) continue;
@@ -404,19 +411,21 @@ export interface EmitDeclaration {
 }
 
 /** Walk a transition's effects and collect every `emit: {...}` option. */
-export function collectEmitDeclarations(effects: readonly unknown[]): EmitDeclaration[] {
+export function collectEmitDeclarations(effects: readonly Effect[]): EmitDeclaration[] {
   const out: EmitDeclaration[] = [];
   for (const effect of effects) {
     if (!Array.isArray(effect)) continue;
     const last = effect[effect.length - 1];
     if (last && typeof last === 'object' && !Array.isArray(last)) {
-      const obj = last as Record<string, unknown>;
-      const emit = obj.emit;
+      const obj = last as Readonly<Record<string, SExpr>>;
+      const emit = obj['emit'];
       if (emit && typeof emit === 'object' && !Array.isArray(emit)) {
-        const e = emit as Record<string, unknown>;
+        const e = emit as Readonly<Record<string, SExpr>>;
         const decl: EmitDeclaration = {};
-        if (typeof e.success === 'string') decl.success = e.success;
-        if (typeof e.failure === 'string') decl.failure = e.failure;
+        const success = e['success'];
+        const failure = e['failure'];
+        if (typeof success === 'string') decl.success = success;
+        if (typeof failure === 'string') decl.failure = failure;
         if (decl.success !== undefined || decl.failure !== undefined) {
           out.push(decl);
         }
@@ -635,19 +644,19 @@ export interface EntityFieldLike {
   type: string;
   required?: boolean;
   values?: readonly string[];
-  default?: unknown;
+  default?: FieldValue;
 }
 
 export interface FieldContentCheck {
   field: string;
   present: boolean;
-  value: unknown;
+  value: FieldValue | undefined;
   detail: string;
 }
 
 export interface EntityRowContentResult {
   entity: string;
-  rowId: unknown;
+  rowId: FieldValue | undefined;
   passed: boolean;
   checks: FieldContentCheck[];
   detail: string;
@@ -684,10 +693,10 @@ export interface EntityRowContentResult {
 export function probeEntityRowContent(input: {
   entityName: string;
   entityFields: readonly EntityFieldLike[];
-  rowsAfter: readonly Record<string, unknown>[];
-  rowsBefore?: readonly Record<string, unknown>[];
+  rowsAfter: readonly EntityRow[];
+  rowsBefore?: readonly EntityRow[];
 }): EntityRowContentResult {
-  const beforeIds = new Set<unknown>(
+  const beforeIds = new Set<FieldValue | undefined>(
     (input.rowsBefore ?? [])
       .map((r) => r.id)
       .filter((id) => id !== undefined && id !== null),
@@ -804,7 +813,7 @@ export interface ListRenderResult {
 export async function probeListRender(
   page: Page,
   transition: TransitionLike,
-  snapshot: { lastPayload?: unknown; data: Record<string, unknown> } | undefined,
+  snapshot: { lastPayload?: EventPayload; data: Record<string, EntityRow[]> } | undefined,
   linkedEntity: string | undefined,
 ): Promise<ListRenderResult[]> {
   const bindings: CatalogBinding[] = [];
@@ -812,10 +821,12 @@ export async function probeListRender(
     if (!Array.isArray(effect) || effect[0] !== 'render-ui') continue;
     const slot = typeof effect[1] === 'string' ? effect[1] : 'unknown';
     const config = effect[2];
-    const topType = typeof (config as { type?: unknown } | null)?.type === 'string'
-      ? (config as { type: string }).type
-      : 'unknown';
-    collectCatalogBindings(config, slot, topType, bindings);
+    const configRecord = config !== null && config !== undefined && typeof config === 'object' && !Array.isArray(config)
+      ? (config as Readonly<Record<string, ProbeValue>>)
+      : null;
+    const declaredTop = configRecord?.['type'];
+    const topType = typeof declaredTop === 'string' ? declaredTop : 'unknown';
+    collectCatalogBindings(config as ProbeValue, slot, topType, bindings);
   }
 
   const results: ListRenderResult[] = [];
@@ -832,7 +843,7 @@ export async function probeListRender(
     if (seenSites.has(siteKey)) continue;
     seenSites.add(siteKey);
 
-    let resolved: unknown;
+    let resolved: ProbeValue;
     if (binding.root === 'config') {
       // Config-bound list — usually a hard-coded array; verifier doesn't
       // assert content there. Skip.

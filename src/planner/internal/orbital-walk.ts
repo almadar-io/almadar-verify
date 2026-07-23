@@ -23,7 +23,7 @@ import type {
   TraitRef,
   Transition,
 } from '@almadar/core';
-import { isInlineTrait, isPageReference } from '@almadar/core';
+import { collectTraitEmbedAdjacency, isInlineTrait, isPageReference } from '@almadar/core';
 
 /**
  * Initial state for a state machine: the first state with `isInitial: true`,
@@ -112,6 +112,60 @@ export function findRouteForTrait(orb: Orbital, traitName: string): string | nul
   return null;
 }
 
+/** Per-orbital page-closure memo: for each page (decl order), the page's
+ *  declared traits plus their transitive `@trait.X` embed closure — the
+ *  exact set the client binds while that page is mounted. */
+const pageClosureMemo = new WeakMap<Orbital, ReadonlyArray<{ route: string; closure: ReadonlySet<string> }>>();
+
+function pageClosures(orb: Orbital): ReadonlyArray<{ route: string; closure: ReadonlySet<string> }> {
+  const cached = pageClosureMemo.get(orb);
+  if (cached !== undefined) return cached;
+  const adjacency = collectTraitEmbedAdjacency(orb);
+  const out: Array<{ route: string; closure: ReadonlySet<string> }> = [];
+  for (const ref of orb.pages ?? []) {
+    const path = pagePath(ref);
+    if (path === null) continue;
+    const traits = pageTraits(ref);
+    if (traits === null) continue;
+    const closure = new Set<string>();
+    const queue: string[] = [];
+    for (const t of traits) {
+      const name = traitRefName(t);
+      if (name !== null && !closure.has(name)) {
+        closure.add(name);
+        queue.push(name);
+      }
+    }
+    while (queue.length > 0) {
+      const current = queue.pop();
+      if (current === undefined) break;
+      for (const child of adjacency.get(current) ?? []) {
+        if (!closure.has(child)) {
+          closure.add(child);
+          queue.push(child);
+        }
+      }
+    }
+    out.push({ route: normalizeRoute(path), closure });
+  }
+  pageClosureMemo.set(orb, out);
+  return out;
+}
+
+/**
+ * Route for a trait bound only through a page's `@trait.X` embed closure
+ * (an inline chrome child of a page-declared composer, itself in no page
+ * decl). The client binds exactly the page decl + closure per mounted page
+ * (`OrbPreview.allPageTraits`), so probing such a trait anywhere else finds
+ * no state machine — this is the walker's mirror of that rule.
+ */
+export function findRouteForEmbedClosure(orb: Orbital, traitName: string): string | null {
+  for (const { route, closure } of pageClosures(orb)) {
+    if (closure.has(traitName)) return route;
+  }
+  return null;
+}
+
 /** Default route for an orbital when no per-trait page references exist: first page with a path. */
 export function findDefaultRoute(orb: Orbital): string | null {
   for (const ref of orb.pages ?? []) {
@@ -143,12 +197,17 @@ function pageTraits(ref: PageRef): ReadonlyArray<TraitRef> | null {
 }
 
 function traitRefMatches(ref: TraitRef, traitName: string): boolean {
-  if (typeof ref === 'string') return ref === traitName;
+  return traitRefName(ref) === traitName;
+}
+
+/** The referenced trait name of a page/orbital `TraitRef`, any form. */
+function traitRefName(ref: TraitRef): string | null {
+  if (typeof ref === 'string') return ref;
   if (ref !== null && typeof ref === 'object') {
-    if ('ref' in ref && typeof ref.ref === 'string') return ref.ref === traitName;
-    if ('name' in ref && typeof ref.name === 'string') return ref.name === traitName;
+    if ('ref' in ref && typeof ref.ref === 'string') return ref.ref;
+    if ('name' in ref && typeof ref.name === 'string') return ref.name;
   }
-  return false;
+  return null;
 }
 
 function normalizeRoute(path: string): string {

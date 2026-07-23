@@ -42,7 +42,7 @@ export function collectEntityFields(orbital: OrbitalSchema): Record<string, Enti
         // Preserve the enum `values` so payload synthesis picks a VALID option
         // (not a random faker string) for enum / `<select>` fields, and so
         // consumers (e.g. the crud-flow planner) can recognise enum fields.
-        const values = (f as { values?: unknown }).values;
+        const values = (f as { values?: ReadonlyArray<string> }).values;
         if (Array.isArray(values) && values.every((v): v is string => typeof v === 'string')) {
           def.values = values;
         }

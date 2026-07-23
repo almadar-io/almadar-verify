@@ -51,8 +51,7 @@ export async function waitForRuntime(page: Page, timeoutMs = 10000): Promise<voi
 
   while (Date.now() < deadline) {
     const ready = await page.evaluate(() => {
-      const api = (window as unknown as Record<string, unknown>).__orbitalVerification as
-        { getSnapshot?: () => { transitions: unknown[] } } | undefined;
+      const api = (window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI }).__orbitalVerification;
       if (!api?.getSnapshot) return false;
       const snap = api.getSnapshot();
       // Ready when at least one transition has been recorded (INIT fired)

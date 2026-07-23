@@ -64,8 +64,9 @@ export async function runInteractiveSession(
         container.innerHTML = html;
         document.body.appendChild(container);
 
-        (window as unknown as Record<string, unknown>).__isDone = () => {
-          (window as unknown as Record<string, unknown>).__isResult = true;
+        type SessionWindow = Window & { __isDone?: () => void; __isResult?: boolean };
+        (window as SessionWindow).__isDone = () => {
+          (window as SessionWindow).__isResult = true;
         };
       },
       {
@@ -92,7 +93,7 @@ export async function runInteractiveSession(
 
   try {
     await page.waitForFunction(
-      () => (window as unknown as Record<string, unknown>).__isResult,
+      () => (window as Window & { __isResult?: boolean }).__isResult,
       null,
       { timeout: 0 },
     );
@@ -104,8 +105,9 @@ export async function runInteractiveSession(
     await page.evaluate(() => {
       document.getElementById('orbital-session-container')?.remove();
       document.getElementById('orbital-session-style')?.remove();
-      delete (window as unknown as Record<string, unknown>).__isDone;
-      delete (window as unknown as Record<string, unknown>).__isResult;
+      type SessionWindow = Window & { __isDone?: () => void; __isResult?: boolean };
+      delete (window as SessionWindow).__isDone;
+      delete (window as SessionWindow).__isResult;
     });
   } catch {
     // page already closed — nothing to clean

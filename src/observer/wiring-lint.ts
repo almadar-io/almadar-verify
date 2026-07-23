@@ -25,25 +25,54 @@
  *    source's declared emit sites cannot supply (std-lms header
  *    "Edit Selected" emitting `EDIT_COURSE` with no `id` while the modal
  *    contract demands `id: string!`).
- * A fourth check (stray page-writer detection, the std-blaz unclaimed-writer
- * class) was calibrated OUT of v1: ">1 boot writers of main per page" flags
- * the audited-good layout+content convention (healthcare `/patients/upload`,
- * helpdesk `/replies`), because a page's main slot legitimately stacks the
- * shell and one content writer. A sound version needs the slot-outlet
- * contract (which named slots a bound tree actually declares outlets for) —
- * recorded in `Almadar_Verification_Gaps.md`.
+ *  - `unclaimed-main-writer` — a page-declared trait that renders slot `main`
+ *    but is referenced by no bound sibling's `@trait.X` embed (render trees
+ *    or config slots like `contentTrait`/`idleContent`). A healthy page has
+ *    exactly one unclaimed main-writer root (the shell/composer chain);
+ *    every extra root paints a second, stacked UI below the composed tree
+ *    (std-accounting `/entries`: two ledger apps on one page). This is the
+ *    claim-graph form of the v1-falsified ">1 boot writers" candidate — the
+ *    naive count flagged the audited-good shell+claimed-content convention;
+ *    counting only UNCLAIMED writers does not (see
+ *    `Almadar_Verification_Gaps.md` V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
  *
  * @packageDocumentation
  */
 
-import type { Orbital, OrbitalPage, OrbitalSchema, Trait } from '@almadar/core';
+import type {
+  AnyPatternConfig,
+  Effect,
+  EventPayload,
+  Orbital,
+  OrbitalPage,
+  OrbitalSchema,
+  RenderBinding,
+  ResolvedPatternProps,
+  SExpr,
+  Trait,
+  TraitConfigValue,
+} from '@almadar/core';
 import { collectTraitEmbedAdjacency, isInlineTrait, isPageReference } from '@almadar/core';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
+
+/** Every IR value shape the lint's tree walkers traverse: S-expressions
+ *  (state machines), call-site config values, render-ui pattern payloads,
+ *  and emit payloads. All are recursive JSON-shaped core types; object
+ *  nodes iterate via the same record reinterpretation core's own
+ *  `collectTraitRefsFromValue` uses. */
+type ScanNode =
+  | SExpr
+  | TraitConfigValue
+  | AnyPatternConfig
+  | ResolvedPatternProps
+  | RenderBinding
+  | EventPayload
+  | undefined;
 
 export type WiringLintSeverity = 'error' | 'warning';
 
 export interface WiringLintFinding {
-  check: 'client-unbound-state-machine' | 'listens-source-never-emits' | 'payload-starved-route';
+  check: 'client-unbound-state-machine' | 'listens-source-never-emits' | 'payload-starved-route' | 'unclaimed-main-writer';
   severity: WiringLintSeverity;
   orbital: string;
   trait: string;
@@ -62,7 +91,7 @@ export interface WiringLintResult {
  *  declared production site: its emits contract's payloadSchema, explicit
  *  `['emit', event, {…}]` effects, and `itemActions` entries (which deliver
  *  the native `{id, row}` payload per the DataGrid/browse contract). */
-function suppliedPayloadFields(trait: Trait, event: string): Set<string> | 'unknown-any' {
+function suppliedPayloadFields(trait: Trait, event: string): Set<string> | 'runtime-forwarded' {
   const supplied = new Set<string>();
   let declaredAnywhere = false;
 
@@ -93,24 +122,31 @@ function suppliedPayloadFields(trait: Trait, event: string): Set<string> | 'unkn
   // `action:` affordance forwards its `actionPayload` at runtime) — only
   // treat the payload as unknowable when no enumerable site declared the
   // event either.
-  if (!declaredAnywhere && collectRenderActionEvents(trait).has(event)) return 'unknown-any';
+  if (!declaredAnywhere && collectRenderActionEvents(trait).has(event)) return 'runtime-forwarded';
   return supplied;
+}
+
+/** Object-node view of a `ScanNode` — the same record reinterpretation core's
+ *  `collectTraitRefsFromValue` applies to `SExprAtom` object nodes. */
+function asRecordNode(node: object): Readonly<Record<string, ScanNode>> {
+  return node as Readonly<Record<string, ScanNode>>;
 }
 
 /** Events reachable as `action:` fields anywhere in the trait's render-ui
  *  trees or config values (inline buttons scope their emit to the composer). */
 function collectRenderActionEvents(trait: Trait): Set<string> {
   const out = new Set<string>();
-  const scan = (node: unknown): void => {
+  const scan = (node: ScanNode): void => {
     if (node === null || node === undefined) return;
     if (Array.isArray(node)) {
       for (const child of node) scan(child);
       return;
     }
     if (typeof node !== 'object') return;
-    const obj = node as Record<string, unknown>;
-    if (typeof obj['action'] === 'string' && obj['action'].length > 0) out.add(obj['action']);
-    for (const value of Object.values(obj)) scan(value);
+    const record = asRecordNode(node);
+    const action = record['action'];
+    if (typeof action === 'string' && action.length > 0) out.add(action);
+    for (const value of Object.values(record)) scan(value);
   };
   for (const transition of trait.stateMachine?.transitions ?? []) {
     for (const effect of transition.effects ?? []) {
@@ -125,24 +161,24 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
  *  trait's config tree (`[{ event, label, … }]`). */
 function configItemActionEvents(trait: Trait): Set<string> {
   const out = new Set<string>();
-  const scan = (node: unknown): void => {
+  const scan = (node: ScanNode): void => {
     if (node === null || node === undefined) return;
     if (Array.isArray(node)) {
       for (const child of node) scan(child);
       return;
     }
     if (typeof node !== 'object') return;
-    const obj = node as Record<string, unknown>;
-    const itemActions = obj['itemActions'];
+    const record = asRecordNode(node);
+    const itemActions = record['itemActions'];
     if (Array.isArray(itemActions)) {
       for (const entry of itemActions) {
         if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
-          const event = (entry as Record<string, unknown>)['event'];
+          const event = asRecordNode(entry)['event'];
           if (typeof event === 'string' && event.length > 0) out.add(event);
         }
       }
     }
-    for (const value of Object.values(obj)) scan(value);
+    for (const value of Object.values(record)) scan(value);
   };
   if (trait.config) scan(trait.config);
   for (const transition of trait.stateMachine?.transitions ?? []) {
@@ -215,6 +251,22 @@ function clientBoundTraits(orb: Orbital, adjacency: ReadonlyMap<string, Readonly
     }
   }
   return bound;
+}
+
+/** True when any transition/tick/initial effect of the trait writes the
+ *  `main` slot (`['render-ui', 'main', …]`). */
+function writesMainSlot(trait: Trait): boolean {
+  const effectLists: ReadonlyArray<ReadonlyArray<Effect> | undefined> = [
+    ...(trait.stateMachine?.transitions ?? []).map((transition) => transition.effects),
+    ...(trait.ticks ?? []).map((tick) => tick.effects),
+    trait.initialEffects,
+  ];
+  for (const effects of effectLists) {
+    for (const effect of effects ?? []) {
+      if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[1] === 'main') return true;
+    }
+  }
+  return false;
 }
 
 export function lintWiring(schema: OrbitalSchema): WiringLintResult {
@@ -301,7 +353,7 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
         const required = requiredContractFields(listener, listen.triggers);
         if (required.size === 0) continue;
         const supplied = suppliedPayloadFields(sourceTrait, listen.event);
-        if (supplied === 'unknown-any') continue;
+        if (supplied === 'runtime-forwarded') continue;
         const mapped = new Set(supplied);
         for (const [fromField, toField] of Object.entries(listen.payloadMapping ?? {})) {
           if (supplied.has(fromField)) mapped.add(toField);
@@ -316,10 +368,39 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             message:
               `route ${sourceName}.${listen.event} -> ${listen.triggers}: ${listenerName} requires ` +
               `{${missing.join(', ')}} but ${sourceName}'s declared emit sites for ${listen.event} supply ` +
-              `{${[...(supplied as Set<string>)].join(', ') || 'nothing'}} — the affordance is payload-starved and can never satisfy the contract`,
+              `{${[...supplied].join(', ') || 'nothing'}} — the affordance is payload-starved and can never satisfy the contract`,
             suggestion: `emit ${listen.event} from a row-scoped affordance (itemActions supplies {id, row} natively) or add the missing fields to the emit payload`,
           });
         }
+      }
+    }
+    // --- unclaimed-main-writer ------------------------------------------
+    for (const page of pages) {
+      const pageTraitNames = new Set((page.traits ?? []).map((pageTrait) => pageTrait.ref));
+      const claimed = new Set<string>();
+      for (const name of pageTraitNames) {
+        for (const child of adjacency.get(name) ?? []) claimed.add(child);
+      }
+      const roots: string[] = [];
+      for (const name of pageTraitNames) {
+        if (claimed.has(name)) continue;
+        const trait = traits.get(name);
+        if (trait === undefined) continue;
+        if (writesMainSlot(trait)) roots.push(name);
+      }
+      for (const root of roots.slice(1)) {
+        findings.push({
+          check: 'unclaimed-main-writer',
+          severity: 'error',
+          orbital: orb.name,
+          trait: root,
+          message:
+            `page "${page.path}": ${root} renders slot 'main' but no bound trait on the page embeds it — ` +
+            `it paints a second, stacked UI next to ${roots[0]} (unclaimed main-writer)`,
+          suggestion:
+            `embed <trait.${root} /> in the composer's render or a config slot (contentTrait/idleContent), ` +
+            `or remove ${root} from the page decl if it only hosts dialogs/logic`,
+        });
       }
     }
 

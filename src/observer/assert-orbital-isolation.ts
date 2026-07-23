@@ -87,11 +87,9 @@ function buildDeclaredCrossOrbitalChannels(orbital: OrbitalSchema): Set<string> 
         const source = listen.source;
         if (!source || typeof source !== 'object') continue;
         if ('kind' in source && source.kind === 'orbital') {
-          const sourceOrbital = (source as { orbital?: unknown }).orbital;
-          const sourceTrait = (source as { trait?: unknown }).trait;
-          if (typeof sourceOrbital === 'string' && typeof sourceTrait === 'string') {
-            set.add(`${sourceOrbital}.${sourceTrait}.${listen.event}`);
-          }
+          // Narrowed by the discriminant: core's ListenSource 'orbital' arm
+          // carries both fields as required strings.
+          set.add(`${source.orbital}.${source.trait}.${listen.event}`);
         }
       }
     }

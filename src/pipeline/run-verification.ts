@@ -679,7 +679,7 @@ function collectFrameIndices(verdicts: ReadonlyArray<Verdict>): ReadonlyArray<nu
 }
 
 function bindingDeltaToVerdict(
-  delta: { matched: ReadonlyArray<unknown>; missing: ReadonlyArray<{ slot: string; expected: string }> },
+  delta: import('../observer/types.js').BindingDelta,
   frameIndex: number,
 ): Verdict {
   if (delta.missing.length === 0) {
@@ -717,7 +717,7 @@ export function derivePortalExpectations(
     for (const traitRef of orb.traits ?? []) {
       // Reuse isInlineTrait inline to avoid pulling another import.
       if (typeof traitRef === 'string') continue;
-      if ('ref' in traitRef && typeof (traitRef as { ref?: unknown }).ref === 'string') continue;
+      if ('ref' in traitRef && typeof (traitRef as { ref?: string }).ref === 'string') continue;
       const trait = traitRef as import('@almadar/core').Trait;
       if (trait.stateMachine === undefined) continue;
 
@@ -785,14 +785,14 @@ export function derivePortalExpectations(
  * reactive binding — the pattern is unknown, so the effect is skipped
  * entirely rather than asserted as a cleared slot.
  */
-function scanRenderUiEffect(effect: unknown): { slot: string; pattern: string | null } | null {
+function scanRenderUiEffect(effect: import('@almadar/core').Effect | import('@almadar/core').SExpr): { slot: string; pattern: string | null } | null {
   if (!Array.isArray(effect)) return null;
   if (effect[0] !== 'render-ui') return null;
   const slot = typeof effect[1] === 'string' ? effect[1] : null;
   if (slot === null) return null;
-  const payload: unknown = effect[2];
-  if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
-    const t = (payload as { type?: unknown }).type;
+  const payload = effect[2];
+  if (payload !== null && payload !== undefined && typeof payload === 'object' && !Array.isArray(payload)) {
+    const t = (payload as Readonly<Record<string, import('@almadar/core').SExpr>>)['type'];
     // A reactive binding — string form (`'@config.x'`) or an S-expr —
     // resolves at runtime; the pattern is UNKNOWN, so skip the effect
     // rather than assert anything (pre-fix this fell through to

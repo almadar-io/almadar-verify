@@ -14,7 +14,7 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema } from '@almadar/core';
+import type { OrbitalSchema, SExpr } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
 
@@ -95,20 +95,21 @@ function collectPatternsInUse(orbital: OrbitalSchema): Set<string> {
       for (const effect of transition.effects ?? []) {
         if (!Array.isArray(effect)) continue;
         if (effect[0] !== 'render-ui') continue;
-        collectPatternTypes(effect[2], out);
+        collectPatternTypes(effect[2] as SExpr, out);
       }
     }
   }
   return out;
 }
 
-function collectPatternTypes(node: unknown, out: Set<string>): void {
+function collectPatternTypes(node: SExpr, out: Set<string>): void {
   if (node === null || typeof node !== 'object') return;
   if (Array.isArray(node)) {
     for (const child of node) collectPatternTypes(child, out);
     return;
   }
-  const obj = node as { type?: unknown; [k: string]: unknown };
-  if (typeof obj.type === 'string') out.add(obj.type);
+  const obj = node as Readonly<Record<string, SExpr>>;
+  const patternType = obj['type'];
+  if (typeof patternType === 'string') out.add(patternType);
   for (const value of Object.values(obj)) collectPatternTypes(value, out);
 }

@@ -25,6 +25,8 @@ export interface EntityBindingScan {
   agentOperators: string[];
 }
 
+import type { Effect, SExpr } from '@almadar/core';
+
 /**
  * Scan a transition's effects array for entity bindings in render-ui trees.
  *
@@ -32,13 +34,13 @@ export interface EntityBindingScan {
  * Returns which kinds of entity bindings were found so callers can decide
  * which DOM checks are applicable without relying on pattern names or event names.
  */
-export function scanEffectsForEntityBindings(effects: unknown[]): EntityBindingScan {
+export function scanEffectsForEntityBindings(effects: ReadonlyArray<Effect>): EntityBindingScan {
   let hasEntityFieldBindings = false;
   let hasEntityListBinding = false;
   let hasAgentEffects = false;
   const agentOperators: string[] = [];
 
-  function scan(value: unknown): void {
+  function scan(value: SExpr): void {
     if (hasEntityFieldBindings && hasEntityListBinding) return;
 
     if (Array.isArray(value)) {
@@ -53,7 +55,7 @@ export function scanEffectsForEntityBindings(effects: unknown[]): EntityBindingS
       }
       for (const item of value) scan(item);
     } else if (value && typeof value === 'object') {
-      const obj = value as Record<string, unknown>;
+      const obj = value as Readonly<Record<string, SExpr>>;
       for (const [key, val] of Object.entries(obj)) {
         if (key === 'entity' && typeof val === 'string') {
           hasEntityListBinding = true;
@@ -77,7 +79,7 @@ export function scanEffectsForEntityBindings(effects: unknown[]): EntityBindingS
     }
     // Scan render-ui for entity bindings
     if (op !== 'render-ui' || effect[2] == null) continue;
-    scan(effect[2]);
+    scan(effect[2] as SExpr);
   }
 
   return { hasEntityFieldBindings, hasEntityListBinding, hasAgentEffects, agentOperators };
@@ -89,8 +91,8 @@ export function scanEffectsForEntityBindings(effects: unknown[]): EntityBindingS
  * Used to determine whether a trait ever renders a list of entity rows,
  * which gates row-count checks after persist create/delete.
  */
-export function hasAnyEntityListBinding(transitions: Array<{ effects: unknown[] }>): boolean {
+export function hasAnyEntityListBinding(transitions: ReadonlyArray<{ effects?: ReadonlyArray<Effect> }>): boolean {
   return transitions.some(
-    (t) => scanEffectsForEntityBindings(t.effects).hasEntityListBinding
+    (t) => scanEffectsForEntityBindings(t.effects ?? []).hasEntityListBinding
   );
 }

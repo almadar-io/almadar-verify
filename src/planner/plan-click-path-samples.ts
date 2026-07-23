@@ -15,7 +15,7 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema } from '@almadar/core';
+import type { Effect, OrbitalSchema, SExpr } from '@almadar/core';
 import { isInlineTrait } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { findInitialState } from './internal/orbital-walk.js';
@@ -77,7 +77,7 @@ interface RenderSite {
  * Each (slot, event) pair is one render site, stamped with the state
  * the button is mounted in.
  */
-function collectRenderSites(trait: { stateMachine?: { transitions: ReadonlyArray<{ to?: string; effects?: ReadonlyArray<unknown> }> } }): RenderSite[] {
+function collectRenderSites(trait: { stateMachine?: { transitions: ReadonlyArray<{ to?: string; effects?: ReadonlyArray<Effect> }> } }): RenderSite[] {
   const sites: RenderSite[] = [];
   if (trait.stateMachine === undefined) return sites;
 
@@ -90,7 +90,7 @@ function collectRenderSites(trait: { stateMachine?: { transitions: ReadonlyArray
       const slot = typeof effect[1] === 'string' ? effect[1] : null;
       const uiPayload = effect[2];
       if (slot === null || uiPayload === undefined) continue;
-      collectActionsFromUI(uiPayload, slot, transition.to, sites);
+      collectActionsFromUI(uiPayload as SExpr, slot, transition.to, sites);
     }
   }
 
@@ -110,19 +110,20 @@ function findTransitionTarget(
 }
 
 /** Recursively walk a render-ui payload looking for `action: "<EVENT>"` fields. */
-function collectActionsFromUI(node: unknown, slot: string, state: string, out: RenderSite[]): void {
+function collectActionsFromUI(node: SExpr, slot: string, state: string, out: RenderSite[]): void {
   if (node === null || typeof node !== 'object') return;
   if (Array.isArray(node)) {
     for (const child of node) collectActionsFromUI(child, slot, state, out);
     return;
   }
-  const obj = node as { action?: unknown; children?: unknown; fields?: unknown; [k: string]: unknown };
-  if (typeof obj.action === 'string' && obj.action.length > 0) {
-    out.push({ slot, event: obj.action, state });
+  const obj = node as Readonly<Record<string, SExpr>>;
+  const action = obj['action'];
+  if (typeof action === 'string' && action.length > 0) {
+    out.push({ slot, event: action, state });
   }
   // Recurse into common nested-children fields.
-  if (obj.children !== undefined) collectActionsFromUI(obj.children, slot, state, out);
-  if (obj.fields !== undefined) collectActionsFromUI(obj.fields, slot, state, out);
+  if (obj['children'] !== undefined) collectActionsFromUI(obj['children'], slot, state, out);
+  if (obj['fields'] !== undefined) collectActionsFromUI(obj['fields'], slot, state, out);
   // Generic recursion through every value (for nested patterns like `cta`, `header`, etc.).
   for (const key of Object.keys(obj)) {
     if (key === 'action' || key === 'children' || key === 'fields') continue;

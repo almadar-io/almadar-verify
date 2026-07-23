@@ -111,15 +111,11 @@ export function createPlaywrightDriver(
       }
       return ctx.page.evaluate(
         (name) => {
-          const api = (window as unknown as { __orbitalVerification?: { getTraitState?: (n: string) => unknown } }).__orbitalVerification;
+          // Core's OrbitalVerificationAPI contract: getTraitState returns
+          // `string | undefined` (the current state name).
+          const api = (window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI }).__orbitalVerification;
           const raw = api?.getTraitState?.(name);
-          if (typeof raw === 'string') return raw;
-          if (raw !== null && typeof raw === 'object') {
-            const obj = raw as { currentState?: unknown; name?: unknown };
-            if (typeof obj.currentState === 'string') return obj.currentState;
-            if (typeof obj.name === 'string') return obj.name;
-          }
-          return null;
+          return typeof raw === 'string' ? raw : null;
         },
         traitName,
       );

@@ -38,6 +38,7 @@
 import type {
   FieldValue,
   OrbitalSchema,
+  SExpr,
   Trait,
   TraitEventListener,
   Transition,
@@ -344,10 +345,11 @@ function findPersistInfo(transition: Transition): { kind: 'create' | 'update' | 
     for (let i = 3; i < effect.length; i++) {
       const arg = effect[i];
       if (arg === null || typeof arg !== 'object' || Array.isArray(arg)) continue;
-      const emit = (arg as { emit?: { success?: unknown } }).emit;
-      if (emit === undefined) continue;
-      if (typeof emit.success === 'string' && emit.success.length > 0) {
-        successEvent = emit.success;
+      const emit = (arg as Readonly<Record<string, SExpr>>)['emit'];
+      if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
+      const success = (emit as Readonly<Record<string, SExpr>>)['success'];
+      if (typeof success === 'string' && success.length > 0) {
+        successEvent = success;
         break;
       }
     }
@@ -411,13 +413,13 @@ function findNestedForm(transition: Transition): NestedForm | null {
   for (const effect of transition.effects ?? []) {
     if (!Array.isArray(effect)) continue;
     if (effect[0] !== 'render-ui') continue;
-    const found = walkForFormFields(effect[2]);
+    const found = walkForFormFields(effect[2] as SExpr);
     if (found !== null) return found;
   }
   return null;
 }
 
-function walkForFormFields(node: unknown): NestedForm | null {
+function walkForFormFields(node: SExpr): NestedForm | null {
   if (node === null || typeof node !== 'object') return null;
   if (Array.isArray(node)) {
     for (const item of node) {
@@ -426,21 +428,23 @@ function walkForFormFields(node: unknown): NestedForm | null {
     }
     return null;
   }
-  const obj = node as { fields?: unknown; submitEvent?: unknown; [k: string]: unknown };
-  if (Array.isArray(obj.fields)) {
+  const obj = node as Readonly<Record<string, SExpr>>;
+  const fields = obj['fields'];
+  if (Array.isArray(fields)) {
     const names: string[] = [];
-    for (const f of obj.fields) {
+    for (const f of fields) {
       if (typeof f === 'string' && f.length > 0) {
         names.push(f);
       } else if (f !== null && typeof f === 'object' && !Array.isArray(f)) {
-        const name = (f as { name?: unknown }).name;
+        const name = (f as Readonly<Record<string, SExpr>>)['name'];
         if (typeof name === 'string') names.push(name);
       }
     }
     if (names.length > 0) {
+      const submitEvent = obj['submitEvent'];
       return {
         fields: names,
-        ...(typeof obj.submitEvent === 'string' && { submitEvent: obj.submitEvent }),
+        ...(typeof submitEvent === 'string' && { submitEvent }),
       };
     }
   }
