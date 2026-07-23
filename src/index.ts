@@ -269,6 +269,7 @@ export { assertCrudFlow } from './observer/assert-crud-flow.js';
 export { assertPortalPerStep } from './observer/assert-portal-per-step.js';
 export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { auditListens, type ListensAuditResult } from './observer/click-wiring-audit.js';
+export { lintWiring, type WiringLintFinding, type WiringLintResult, type WiringLintSeverity } from './observer/wiring-lint.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
 export { verdictToChecks, type VerdictCheck } from './observer/verdict-checks.js';
 
