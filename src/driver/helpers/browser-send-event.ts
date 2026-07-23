@@ -51,7 +51,15 @@ export async function dispatchInBrowser(
     .then(() => true)
     .catch(() => false);
   if (!ready) return false;
-  const result = await page.evaluate<boolean, SendEventArgs>(browserSendEvent, args);
+  // Pin page.evaluate to a concrete signature: Playwright's generic
+  // Unboxing/SmartHandle mapped types recurse SendEventArgs' SExpr payload
+  // past tsc's instantiation depth (TS2589). The assertion is between
+  // overlapping function types — no any/unknown.
+  const evaluateSendEvent = page.evaluate as (
+    fn: (arg: SendEventArgs) => boolean,
+    arg: SendEventArgs,
+  ) => Promise<boolean>;
+  const result = await evaluateSendEvent(browserSendEvent, args);
   return result === true;
 }
 

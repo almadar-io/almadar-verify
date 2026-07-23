@@ -36,7 +36,9 @@ export function collectEffectEmittedEvents(
 
 function collectFromNode(node: Effect | SExpr, out: Set<string>): void {
   if (Array.isArray(node)) {
-    for (const child of node) collectFromNode(child, out);
+    // Effect tuples are structurally SExpr arrays — iterate under that shape
+    // (the tuple union's element type otherwise degrades to `unknown`).
+    for (const child of node as readonly SExpr[]) collectFromNode(child, out);
     return;
   }
   if (node !== null && typeof node === 'object') {
