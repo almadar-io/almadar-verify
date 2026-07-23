@@ -291,3 +291,128 @@ describe('lintWiring — payload-starved-route', () => {
     expect(result.findings).toEqual([]);
   });
 });
+
+describe('lintWiring — unclaimed-main-writer', () => {
+  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
+  const contentBody = { type: 'stack', children: [{ type: 'typography', content: 'rows' }] };
+
+  const shell = {
+    name: 'AppLayout',
+    config: { contentTrait: '@trait.Search' },
+    stateMachine: {
+      transitions: [
+        { from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: ['@trait.Search'] })] },
+      ],
+    },
+  };
+  const search = {
+    name: 'Search',
+    config: { idleContent: '@trait.Catalog' },
+    stateMachine: {
+      transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender({ type: 'box', children: ['@trait.Catalog'] })] }],
+    },
+  };
+  const catalog = {
+    name: 'Catalog',
+    stateMachine: {
+      transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender(contentBody)] }],
+    },
+  };
+  const page = (extraRefs: string[]) => ({
+    name: 'P',
+    path: '/p',
+    traits: [{ ref: 'AppLayout' }, { ref: 'Search' }, { ref: 'Catalog' }, ...extraRefs.map((ref) => ({ ref }))],
+  });
+
+  it('is clean on the composed convention (shell + channel-claimed content body)', () => {
+    const result = lintWiring(
+      schemaWith({ name: 'O', traits: [shell, search, catalog], pages: [page([])] }),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it('warns on an unclaimed second content body (the std-accounting /entries shape)', () => {
+    const secondBrowse = {
+      name: 'SecondBrowse',
+      stateMachine: {
+        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender({ type: 'data-grid' })] }],
+      },
+    };
+    const result = lintWiring(
+      schemaWith({ name: 'O', traits: [shell, search, catalog, secondBrowse], pages: [page(['SecondBrowse'])] }),
+    );
+    expect(result.errors).toBe(0);
+    expect(result.warnings).toBe(1);
+    expect(result.findings[0]?.check).toBe('unclaimed-main-writer');
+    expect(result.findings[0]?.trait).toBe('SecondBrowse');
+  });
+
+  it('is clean once the second body is claimed through the channel (the applied fix)', () => {
+    const claimedBrowse = {
+      name: 'SecondBrowse',
+      stateMachine: {
+        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender({ type: 'data-grid' })] }],
+      },
+    };
+    const fixedSearch = { ...search, config: { idleContent: '@trait.SecondBrowse' } };
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [shell, fixedSearch, claimedBrowse],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'AppLayout' }, { ref: 'Search' }, { ref: 'SecondBrowse' }] }],
+      }),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it('ignores modal-cleanup placeholder main-writes (childless box)', () => {
+    const modal = {
+      name: 'Edit',
+      stateMachine: {
+        transitions: [
+          { from: 'open', event: 'CLOSE', to: 'closed', effects: [mainRender({ type: 'box' }), ['render-ui', 'modal', null]] },
+        ],
+      },
+    };
+    const result = lintWiring(
+      schemaWith({ name: 'O', traits: [shell, search, catalog, modal], pages: [page(['Edit'])] }),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it('ignores page-mounted atomic chrome', () => {
+    const chrome = {
+      name: 'InlineIconRender1',
+      stateMachine: {
+        transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender({ type: 'icon' })] }],
+      },
+    };
+    const result = lintWiring(
+      schemaWith({ name: 'O', traits: [shell, search, catalog, chrome], pages: [page(['InlineIconRender1'])] }),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it('ignores a page-mounted feature when no channel body exists (shell+feature convention)', () => {
+    const bareShell = {
+      name: 'AppLayout',
+      stateMachine: {
+        transitions: [{ from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: [] })] }],
+      },
+    };
+    const feature = {
+      name: 'Upload',
+      stateMachine: {
+        transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender(contentBody)] }],
+      },
+    };
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [bareShell, feature],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'AppLayout' }, { ref: 'Upload' }] }],
+      }),
+    );
+    expect(result.findings).toEqual([]);
+  });
+});

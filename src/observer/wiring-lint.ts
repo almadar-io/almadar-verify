@@ -25,16 +25,17 @@
  *    source's declared emit sites cannot supply (std-lms header
  *    "Edit Selected" emitting `EDIT_COURSE` with no `id` while the modal
  *    contract demands `id: string!`).
- *  - `unclaimed-main-writer` — a page-declared trait that renders slot `main`
- *    but is referenced by no bound sibling's `@trait.X` embed (render trees
- *    or config slots like `contentTrait`/`idleContent`). A healthy page has
- *    exactly one unclaimed main-writer root (the shell/composer chain);
- *    every extra root paints a second, stacked UI below the composed tree
- *    (std-accounting `/entries`: two ledger apps on one page). This is the
- *    claim-graph form of the v1-falsified ">1 boot writers" candidate — the
- *    naive count flagged the audited-good shell+claimed-content convention;
- *    counting only UNCLAIMED writers does not (see
- *    `Almadar_Verification_Gaps.md` V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
+ *  - `unclaimed-main-writer` (warning) — a page-declared trait rendering a
+ *    content-grade body into slot `main` while the page's content channel
+ *    (`contentTrait`/`idleContent` config slots) already claims one: the
+ *    std-accounting `/entries` two-ledger-UIs class. Warning, not error:
+ *    corpus calibration showed statics cannot split that class from the
+ *    dedicated-feature convention (a page-mounted feature complementing the
+ *    shell's catalog — healthcare `/patients/upload`, ecommerce `/checkout`,
+ *    both audited-good). Placeholder-box main-writes (modal cleanup), atomic
+ *    chrome, and claimed embeds are excluded. Supersedes the v1-falsified
+ *    ">1 boot writers" candidate (see `Almadar_Verification_Gaps.md`
+ *    V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
  *
  * @packageDocumentation
  */
@@ -52,7 +53,7 @@ import type {
   Trait,
   TraitConfigValue,
 } from '@almadar/core';
-import { collectTraitEmbedAdjacency, isInlineTrait, isPageReference } from '@almadar/core';
+import { collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference } from '@almadar/core';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -253,20 +254,23 @@ function clientBoundTraits(orb: Orbital, adjacency: ReadonlyMap<string, Readonly
   return bound;
 }
 
-/** True when any transition/tick/initial effect of the trait writes the
- *  `main` slot (`['render-ui', 'main', …]`). */
-function writesMainSlot(trait: Trait): boolean {
-  const effectLists: ReadonlyArray<ReadonlyArray<Effect> | undefined> = [
-    ...(trait.stateMachine?.transitions ?? []).map((transition) => transition.effects),
-    ...(trait.ticks ?? []).map((tick) => tick.effects),
-    trait.initialEffects,
-  ];
-  for (const effects of effectLists) {
-    for (const effect of effects ?? []) {
-      if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[1] === 'main') return true;
-    }
-  }
-  return false;
+/** True when the trait has a content-grade `main` render anywhere in its
+ *  transition/tick/initial effects (descends into `if` branches). The
+ *  content-grade classification itself lives in `@almadar/core`
+ *  (`isContentBodyPattern`) — single owner, no local lists. */
+function isContentMainWriter(trait: Trait): boolean {
+  const scanNode = (node: unknown): boolean => {
+    if (!Array.isArray(node)) return false;
+    if (isMainSlotRenderUi(node)) return isContentBodyPattern(node[2]);
+    return node.some(scanNode);
+  };
+  const scanEffects = (effects: ReadonlyArray<Effect> | undefined): boolean =>
+    (effects ?? []).some((effect) => scanNode(effect));
+  return (
+    (trait.stateMachine?.transitions ?? []).some((transition) => scanEffects(transition.effects)) ||
+    (trait.ticks ?? []).some((tick) => scanEffects(tick.effects)) ||
+    scanEffects(trait.initialEffects)
+  );
 }
 
 export function lintWiring(schema: OrbitalSchema): WiringLintResult {
@@ -375,31 +379,53 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
       }
     }
     // --- unclaimed-main-writer ------------------------------------------
+    // The defect is TWO content bodies painting one page's main: one claimed
+    // through the content channel (contentTrait/idleContent config slots) and
+    // one page-mounted but never embedded. Corpus calibration (2026-07-23):
+    // statics cannot split the /entries duplicate-body class from the
+    // dedicated-feature convention (healthcare /patients/upload, ecommerce
+    // /checkout — a page-mounted feature complementing the shell's catalog,
+    // both audited-good), so this check REPORTS (warning) for human/runtime
+    // arbitration — `slot:contention` in the client console + page captures
+    // are the arbiters. Modals (placeholder-box main-writes), atomic chrome,
+    // and claimed embeds are excluded by construction.
+    const channelAdj = collectTraitConfigRefAdjacency(orb);
+    const claimedByBound = new Set<string>();
+    for (const [source, targets] of adjacency) {
+      if (!bound.has(source)) continue;
+      for (const target of targets) claimedByBound.add(target);
+    }
     for (const page of pages) {
-      const pageTraitNames = new Set((page.traits ?? []).map((pageTrait) => pageTrait.ref));
-      const claimed = new Set<string>();
-      for (const name of pageTraitNames) {
-        for (const child of adjacency.get(name) ?? []) claimed.add(child);
+      let channelBody = false;
+      for (const [source, targets] of channelAdj) {
+        if (!bound.has(source)) continue;
+        for (const target of targets) {
+          const targetTrait = traits.get(target);
+          if (targetTrait !== undefined && isContentMainWriter(targetTrait)) {
+            channelBody = true;
+            break;
+          }
+        }
+        if (channelBody) break;
       }
-      const roots: string[] = [];
-      for (const name of pageTraitNames) {
-        if (claimed.has(name)) continue;
+      if (!channelBody) continue;
+      for (const pageTrait of page.traits ?? []) {
+        const name = pageTrait.ref;
+        if (claimedByBound.has(name)) continue;
+        if ((channelAdj.get(name)?.size ?? 0) > 0) continue;
         const trait = traits.get(name);
-        if (trait === undefined) continue;
-        if (writesMainSlot(trait)) roots.push(name);
-      }
-      for (const root of roots.slice(1)) {
+        if (trait === undefined || !isContentMainWriter(trait)) continue;
         findings.push({
           check: 'unclaimed-main-writer',
-          severity: 'error',
+          severity: 'warning',
           orbital: orb.name,
-          trait: root,
+          trait: name,
           message:
-            `page "${page.path}": ${root} renders slot 'main' but no bound trait on the page embeds it — ` +
-            `it paints a second, stacked UI next to ${roots[0]} (unclaimed main-writer)`,
+            `page "${page.path}": ${name} renders a content body into slot 'main' while the page's content ` +
+            `channel already supplies one — a second, stacked UI if this is not a deliberate dedicated-feature page`,
           suggestion:
-            `embed <trait.${root} /> in the composer's render or a config slot (contentTrait/idleContent), ` +
-            `or remove ${root} from the page decl if it only hosts dialogs/logic`,
+            `embed <trait.${name} /> in the composer's render or a config slot (contentTrait/idleContent), ` +
+            `or remove ${name} from the page decl if it only hosts dialogs/logic`,
         });
       }
     }
