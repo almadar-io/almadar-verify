@@ -358,9 +358,16 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
         if (required.size === 0) continue;
         const supplied = suppliedPayloadFields(sourceTrait, listen.event);
         if (supplied === 'runtime-forwarded') continue;
+        // payloadMapping is {targetField: "@payload.<sourceField>" | literal}
+        // (the runtime's application shape, OrbitalServerRuntime ~:1257) — a
+        // literal value supplies the field unconditionally.
         const mapped = new Set(supplied);
-        for (const [fromField, toField] of Object.entries(listen.payloadMapping ?? {})) {
-          if (supplied.has(fromField)) mapped.add(toField);
+        for (const [toField, expr] of Object.entries(listen.payloadMapping ?? {})) {
+          if (expr.startsWith('@payload.')) {
+            if (supplied.has(expr.slice('@payload.'.length))) mapped.add(toField);
+          } else {
+            mapped.add(toField);
+          }
         }
         const missing = [...required].filter((field) => !mapped.has(field));
         if (missing.length > 0) {

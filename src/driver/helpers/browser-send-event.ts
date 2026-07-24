@@ -50,17 +50,57 @@ export async function dispatchInBrowser(
     .waitForFunction(browserBridgeReady, undefined, { timeout: 10_000 })
     .then(() => true)
     .catch(() => false);
-  if (!ready) return false;
+  if (!ready) {
+    console.error(`[dispatch] bridge-not-ready: event=${event} scope=${traitScope ?? ''}`);
+    return false;
+  }
   // Pin page.evaluate to a concrete signature: Playwright's generic
   // Unboxing/SmartHandle mapped types recurse SendEventArgs' SExpr payload
   // past tsc's instantiation depth (TS2589). The assertion is between
-  // overlapping function types — no any/unknown.
-  const evaluateSendEvent = page.evaluate as (
+  // overlapping function types — no any/unknown. MUST stay `.bind(page)`:
+  // a bare `page.evaluate as (...)` detaches the method, `this` is
+  // undefined at the call, and Playwright's first deref (`this._mainFrame`)
+  // throws on EVERY dispatch — the walk-killing "_mainFrame" failure.
+  const evaluateSendEvent = page.evaluate.bind(page) as (
     fn: (arg: SendEventArgs) => boolean,
     arg: SendEventArgs,
   ) => Promise<boolean>;
-  const result = await evaluateSendEvent(browserSendEvent, args);
+  const result = await evaluateSendEvent(browserSendEvent, args).catch(async (err: Error) => {
+    // A prior dispatch can trigger a client-side navigation (itemAction
+    // routing, page-decl hrefs); an evaluate racing that document swap dies
+    // on a detached frame (Playwright surfaces it as `_mainFrame` of
+    // undefined or "Execution context was destroyed") and previously
+    // aborted the WHOLE walk. Re-arm on the new document and retry once;
+    // a second failure reports "not delivered" exactly like the readiness
+    // gate above. Genuine teardown (browser/context closed) stays fatal.
+    if (!isNavigationRace(err)) throw err;
+    console.error(`[dispatch] nav-race caught: event=${event} scope=${traitScope ?? ''} — re-arming`);
+    await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
+    const rearmed = await page
+      .waitForFunction(browserBridgeReady, undefined, { timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!rearmed) {
+      console.error(`[dispatch] nav-race re-arm failed: event=${event}`);
+      return false;
+    }
+    return evaluateSendEvent(browserSendEvent, args).catch((retryErr: Error) => {
+      console.error(`[dispatch] nav-race retry failed: event=${event} err=${retryErr.message}`);
+      return false;
+    });
+  });
+  if (result !== true) console.error(`[dispatch] sendEvent returned ${String(result)}: event=${event} scope=${traitScope ?? ''}`);
   return result === true;
+}
+
+function isNavigationRace(err: Error): boolean {
+  const m = err.message;
+  return (
+    m.includes("reading '_mainFrame'") ||
+    m.includes('Execution context was destroyed') ||
+    m.includes('Frame was detached') ||
+    m.includes('frame was detached')
+  );
 }
 
 function browserBridgeReady(): boolean {
