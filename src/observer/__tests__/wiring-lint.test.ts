@@ -292,6 +292,67 @@ describe('lintWiring — payload-starved-route', () => {
     );
     expect(result.findings).toEqual([]);
   });
+
+  // `with { k: <expr> }` values are full s-expressions, not just renames. A
+  // value supplies its target when every `@payload.<field>` it reads is itself
+  // supplied by the emitter — the escalating-ladder shape, where each rung
+  // projects the next rung's inputs out of a carried request object.
+  const ladderSchema = (emitterPayload: { name: string; type: string }[]) =>
+    schemaWith({
+      name: 'LadderOrbital',
+      traits: [
+        {
+          name: 'LookupRung',
+          stateMachine: { transitions: [{ from: 'idle', event: 'LOOKUP', to: 'checked', effects: [] }] },
+          emits: [
+            {
+              event: 'LOOKUP',
+              scope: 'internal',
+              payloadSchema: [
+                { name: 'candidate', type: 'string', required: true },
+                { name: 'accepted', type: 'array', required: true },
+              ],
+            },
+          ],
+          listens: [
+            {
+              event: 'EXACT_UNMATCHED',
+              triggers: 'LOOKUP',
+              source: { kind: 'trait', trait: 'ExactRung' },
+              payloadMapping: {
+                candidate: '@payload.candidate',
+                accepted: ['object/get', '@payload.request', 'accepted'],
+              },
+            },
+          ],
+        },
+        {
+          name: 'ExactRung',
+          stateMachine: { transitions: [] },
+          emits: [{ event: 'EXACT_UNMATCHED', scope: 'internal', payloadSchema: emitterPayload }],
+        },
+      ],
+      pages: [{ name: 'P', path: '/p', traits: [{ ref: 'LookupRung' }, { ref: 'ExactRung' }] }],
+    });
+
+  it('credits an expression mapping whose @payload reads are all supplied', () => {
+    const result = lintWiring(
+      ladderSchema([
+        { name: 'candidate', type: 'string' },
+        { name: 'request', type: 'object' },
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it('still reports starvation when an expression reads an unsupplied field', () => {
+    // `request` is not emitted, so `(object/get @payload.request "accepted")`
+    // evaluates over a hole and `accepted` is never really supplied.
+    const result = lintWiring(ladderSchema([{ name: 'candidate', type: 'string' }]));
+    const starved = result.findings.filter((f) => f.check === 'payload-starved-route');
+    expect(starved).toHaveLength(1);
+    expect(starved[0].message).toContain('accepted');
+  });
 });
 
 describe('lintWiring — unclaimed-main-writer', () => {

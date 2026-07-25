@@ -68,7 +68,7 @@ import type {
   Trait,
   TraitConfigValue,
 } from '@almadar/core';
-import { collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference } from '@almadar/core';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference } from '@almadar/core';
 import { collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -438,16 +438,18 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
         if (required.size === 0) continue;
         const supplied = suppliedPayloadFields(sourceTrait, listen.event);
         if (supplied === 'runtime-forwarded') continue;
-        // payloadMapping is {targetField: "@payload.<sourceField>" | literal}
-        // (the runtime's application shape, OrbitalServerRuntime ~:1257) — a
-        // literal value supplies the field unconditionally.
+        // payloadMapping is {targetField: SExpr} — every value is evaluated
+        // against the source payload (core `applyListenPayloadMapping`). A
+        // value reads the source only through its `@payload.<field>` bindings:
+        // none at all is a literal or a self-contained computation and supplies
+        // the field unconditionally; otherwise every field it reads must itself
+        // be supplied, or the expression evaluates over a hole.
         const mapped = new Set(supplied);
         for (const [toField, expr] of Object.entries(listen.payloadMapping ?? {})) {
-          if (expr.startsWith('@payload.')) {
-            if (supplied.has(expr.slice('@payload.'.length))) mapped.add(toField);
-          } else {
-            mapped.add(toField);
-          }
+          const reads = collectBindings(expr)
+            .filter((b) => b.startsWith('@payload.'))
+            .map((b) => b.slice('@payload.'.length));
+          if (reads.every((field) => supplied.has(field))) mapped.add(toField);
         }
         const missing = [...required].filter((field) => !mapped.has(field));
         if (missing.length > 0) {
