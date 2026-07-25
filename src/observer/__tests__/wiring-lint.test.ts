@@ -275,7 +275,9 @@ describe('lintWiring — payload-starved-route', () => {
                 event: 'TOP_SEARCH',
                 triggers: 'SEARCH',
                 source: { kind: 'trait', trait: 'Layout' },
-                payloadMapping: { value: 'searchTerm' },
+                // Canonical shape (core `applyListenPayloadMapping`):
+                // {targetField: "@payload.<sourceField>"}.
+                payloadMapping: { searchTerm: '@payload.value' },
               },
             ],
           },
@@ -414,5 +416,87 @@ describe('lintWiring — unclaimed-main-writer', () => {
       }),
     );
     expect(result.findings).toEqual([]);
+  });
+});
+
+describe('lintWiring — steady-state-no-init-reentry', () => {
+  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
+  const rowsBody = { type: 'stack', children: [{ type: 'data-grid' }] };
+  const spinner = { type: 'loading-state', title: 'Loading…' };
+  const fetchRows = ['fetch', 'Board', { emit: { success: 'RowsLoaded', failure: 'RowsFailed' } }];
+
+  /** The std-board shape: `loading` fetches, `browsing` shows the rows. */
+  const browseTrait = (browsingTransitions: unknown[]) => ({
+    name: 'Board',
+    stateMachine: {
+      states: [{ name: 'loading', isInitial: true }, { name: 'browsing' }],
+      transitions: [
+        { from: 'loading', event: 'INIT', to: 'loading', effects: [fetchRows, mainRender(spinner)] },
+        { from: 'loading', event: 'RowsLoaded', to: 'browsing', effects: [mainRender(rowsBody)] },
+        ...browsingTransitions,
+      ],
+    },
+  });
+
+  const page = { name: 'P', path: '/board', traits: [{ ref: 'Board' }] };
+
+  it('flags a loaded steady state that handles no INIT (the permanent-spinner family)', () => {
+    const result = lintWiring(
+      schemaWith({ name: 'O', traits: [browseTrait([{ from: 'browsing', event: 'OPEN_CARD', to: 'browsing', effects: [] }])], pages: [page] }),
+    );
+    const finding = result.findings.find((f) => f.check === 'steady-state-no-init-reentry');
+    expect(finding).toBeDefined();
+    expect(finding?.trait).toBe('Board');
+    expect(finding?.severity).toBe('warning');
+    expect(finding?.message).toContain("'browsing'");
+    expect(finding?.suggestion).toContain('INIT re-entry');
+  });
+
+  it('is clean once the steady state mirrors the loading INIT (the applied fix)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [browseTrait([{ from: 'browsing', event: 'INIT', to: 'loading', effects: [fetchRows, mainRender(spinner)] }])],
+        pages: [page],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
+  });
+
+  it('accepts a wildcard INIT as covering every steady state', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [browseTrait([{ from: '*', event: 'INIT', to: 'loading', effects: [fetchRows] }])],
+        pages: [page],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
+  });
+
+  it('ignores a steady state that paints no content body (nothing visible to strand)', () => {
+    const logger = {
+      name: 'Board',
+      stateMachine: {
+        states: [{ name: 'loading', isInitial: true }, { name: 'browsing' }],
+        transitions: [
+          { from: 'loading', event: 'INIT', to: 'loading', effects: [fetchRows] },
+          { from: 'loading', event: 'RowsLoaded', to: 'browsing', effects: [['set', '@entity.rows', '?data']] },
+        ],
+      },
+    };
+    const result = lintWiring(schemaWith({ name: 'O', traits: [logger], pages: [page] }));
+    expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
+  });
+
+  it('ignores a trait the client never binds (no page decl, no embed)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [browseTrait([]), { name: 'Shell', stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] } }],
+        pages: [{ name: 'P', path: '/board', traits: [{ ref: 'Shell' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
   });
 });

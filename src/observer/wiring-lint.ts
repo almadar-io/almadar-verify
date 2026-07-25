@@ -16,6 +16,21 @@
  *    closure (`OrbPreview.allPageTraits`), so the trait can never handle an
  *    event in the shipped app (std-ecommerce `CartItemRemoveConfirm`: dead
  *    cart-remove modal).
+ *  - `steady-state-no-init-reentry` (warning) — a state a trait settles in
+ *    after one of its own `fetch` effects succeeds, which declares no `INIT`
+ *    transition of its own. The server machine rests there between visits, so
+ *    a revisit's re-INIT finds no transition and is dropped while the
+ *    freshly-mounted client sits in `loading` forever (the 39-carrier
+ *    W-ATOM-NO-INIT-REENTRY-IN-STEADY-STATE family: std-board `viewing_board`,
+ *    std-invoice/std-donor/... `browsing`). Warning, not error, for the same
+ *    reason as `unclaimed-main-writer`: whether a dropped re-INIT strands the
+ *    user depends on who owns the page's content region afterwards, which
+ *    statics cannot settle without a slot-outlet contract. Corpus calibration
+ *    (2026-07-25): the `browsing`/`viewing` content-owner shapes are
+ *    probe-proven carriers, while std-app-search's `results` is a proven FALSE
+ *    positive — the page's content trait repaints main on revisit, live-probed
+ *    GREEN through an in-app round trip. Live revisit probes remain the
+ *    arbiter per finding.
  *  - `listens-source-never-emits` — a `listens { A.EVENT -> X }` route whose
  *    source trait exists but never produces EVENT (not in its emits
  *    contract, no effect `emit:` option, no `action:`/`itemActions`
@@ -54,7 +69,7 @@ import type {
   TraitConfigValue,
 } from '@almadar/core';
 import { collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference } from '@almadar/core';
-import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
+import { collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
  *  (state machines), call-site config values, render-ui pattern payloads,
@@ -73,7 +88,12 @@ type ScanNode =
 export type WiringLintSeverity = 'error' | 'warning';
 
 export interface WiringLintFinding {
-  check: 'client-unbound-state-machine' | 'listens-source-never-emits' | 'payload-starved-route' | 'unclaimed-main-writer';
+  check:
+    | 'client-unbound-state-machine'
+    | 'steady-state-no-init-reentry'
+    | 'listens-source-never-emits'
+    | 'payload-starved-route'
+    | 'unclaimed-main-writer';
   severity: WiringLintSeverity;
   orbital: string;
   trait: string;
@@ -259,18 +279,23 @@ function clientBoundTraits(orb: Orbital, adjacency: ReadonlyMap<string, Readonly
  *  content-grade classification itself lives in `@almadar/core`
  *  (`isContentBodyPattern`) — single owner, no local lists. */
 function isContentMainWriter(trait: Trait): boolean {
+  return (
+    (trait.stateMachine?.transitions ?? []).some((transition) => writesContentMain(transition.effects)) ||
+    (trait.ticks ?? []).some((tick) => writesContentMain(tick.effects)) ||
+    writesContentMain(trait.initialEffects)
+  );
+}
+
+/** True when this one effect list paints a content-grade body into `main`,
+ *  including through `if` branches. Shared by the trait-level writer test and
+ *  the per-transition steady-state test. */
+function writesContentMain(effects: ReadonlyArray<Effect> | undefined): boolean {
   const scanNode = (node: unknown): boolean => {
     if (!Array.isArray(node)) return false;
     if (isMainSlotRenderUi(node)) return isContentBodyPattern(node[2]);
     return node.some(scanNode);
   };
-  const scanEffects = (effects: ReadonlyArray<Effect> | undefined): boolean =>
-    (effects ?? []).some((effect) => scanNode(effect));
-  return (
-    (trait.stateMachine?.transitions ?? []).some((transition) => scanEffects(transition.effects)) ||
-    (trait.ticks ?? []).some((tick) => scanEffects(tick.effects)) ||
-    scanEffects(trait.initialEffects)
-  );
+  return (effects ?? []).some((effect) => scanNode(effect));
 }
 
 export function lintWiring(schema: OrbitalSchema): WiringLintResult {
@@ -312,6 +337,61 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             ? `add ${name} to the page decl mounting its embedded children (${childPages.join(', ')})`
             : `add ${name} to the page decl of the page whose traits route events to it`,
       });
+    }
+
+    // --- steady-state-no-init-reentry ------------------------------------
+    for (const [name, trait] of traits) {
+      const machine = trait.stateMachine;
+      const transitions = machine?.transitions ?? [];
+      if (transitions.length === 0) continue;
+
+      // Only page-mounted traits can strand a user: an unbound trait's dropped
+      // INIT paints nothing either way.
+      if (!bound.has(name)) continue;
+
+      const loadedBy = collectFetchSuccessEvents(transitions);
+      if (loadedBy.size === 0) continue;
+
+      // `from: '*'` is a legal state name in the IR's transition contract and
+      // means "any state", so one wildcard INIT covers every steady state.
+      if (transitions.some((t) => t.event === 'INIT' && t.from === '*')) continue;
+
+      const initialState = machine?.states?.find((state) => state.isInitial)?.name;
+      const statesWithInit = new Set(
+        transitions.filter((t) => t.event === 'INIT').map((t) => t.from),
+      );
+
+      // The stranded surface has to be a content body in `main`: a state that
+      // paints only chrome (or nothing) has no spinner to hang on.
+      const contentStates = new Set(
+        transitions
+          .filter((t) => writesContentMain(t.effects))
+          // Effects paint on the way IN, so the body belongs to the target state.
+          .map((t) => t.to),
+      );
+
+      const loadedStates = new Set(
+        transitions.filter((t) => loadedBy.has(t.event)).map((t) => t.to),
+      );
+
+      for (const state of loadedStates) {
+        if (!contentStates.has(state)) continue;
+        // The initial state's own INIT is what performed the load.
+        if (state === initialState) continue;
+        if (statesWithInit.has(state)) continue;
+        findings.push({
+          check: 'steady-state-no-init-reentry',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: name,
+          message:
+            `${name} settles in '${state}' after a fetch succeeds, but '${state}' handles no INIT — on a page revisit ` +
+            `the server machine is already resting there and drops the client's re-INIT, so the surface hangs on its spinner`,
+          suggestion:
+            `add an INIT re-entry to '${state}' in ${name} mirroring the loading state's own ` +
+            `INIT (fetch + loading render), the shape std-browse uses`,
+        });
+      }
     }
 
     // --- listens-source-never-emits + payload-starved-route --------------

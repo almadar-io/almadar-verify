@@ -34,6 +34,37 @@ export function collectEffectEmittedEvents(
   return out;
 }
 
+/** Collect the `emit.success` event of every `fetch` effect — the events that
+ *  mean "the data landed", so their transition targets are *loaded* states.
+ *  Narrower on purpose than {@link collectEffectEmittedEvents}, which merges
+ *  success with failure and covers every effect kind. */
+export function collectFetchSuccessEvents(
+  transitions: ReadonlyArray<{ effects?: ReadonlyArray<Effect> }>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const t of transitions) {
+    for (const eff of t.effects ?? []) collectFetchSuccessFromNode(eff, out);
+  }
+  return out;
+}
+
+function collectFetchSuccessFromNode(node: Effect | SExpr, out: Set<string>): void {
+  if (!Array.isArray(node)) return;
+  // Effect tuples are structurally SExpr arrays (see collectFromNode).
+  const nodes = node as readonly SExpr[];
+  if (nodes[0] === 'fetch') {
+    for (const child of nodes) {
+      if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+      const emit = (child as Readonly<Record<string, SExpr>>)['emit'];
+      if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
+      const success = (emit as Readonly<Record<string, SExpr>>)['success'];
+      if (typeof success === 'string' && success !== '') out.add(success);
+    }
+  }
+  // A fetch can sit inside an `(if …)` wrapper, so keep descending.
+  for (const child of nodes) collectFetchSuccessFromNode(child, out);
+}
+
 function collectFromNode(node: Effect | SExpr, out: Set<string>): void {
   if (Array.isArray(node)) {
     // Effect tuples are structurally SExpr arrays — iterate under that shape
