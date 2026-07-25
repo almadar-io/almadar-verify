@@ -49,9 +49,10 @@
     "eslint": "10.0.0",
     "playwright": "1.50.1",
     "tsup": "^8.0.0",
-    "typescript": "^5.4.0",
     "vitest": "^1.6.0",
-    "turbo": "^2.8.17"
+    "turbo": "^2.8.17",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   },
   "repository": {
     "type": "git",
