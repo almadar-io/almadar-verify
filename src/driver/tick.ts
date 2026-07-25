@@ -246,8 +246,14 @@ function decideAccepted(
   serverResponse: ServerResponseTrace | null,
 ): boolean {
   if (step.guardCase === 'fail') {
-    // Guard-fail: state should NOT change.
-    return stateAfter === step.from || stateAfter === stateBefore;
+    // Guard-fail: state should NOT change — unless a complementary sibling
+    // arm of the same (from, event) caught the failing payload, which is
+    // the state machine working (planner-supplied guardSiblingTargets).
+    return (
+      stateAfter === step.from ||
+      stateAfter === stateBefore ||
+      (stateAfter !== null && (step.guardSiblingTargets ?? []).includes(stateAfter))
+    );
   }
   if (step.payloadCase === 'malformed') {
     // Malformed: the API-boundary validator must REJECT the empty/bad

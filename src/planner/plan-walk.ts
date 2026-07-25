@@ -190,6 +190,17 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
     payloadCase,
     ...(input.guardSteerable !== undefined && { guardSteerable: input.guardSteerable }),
   };
+  // Complementary guarded arms on the same (from, event): a guard-fail probe
+  // for THIS arm may legitimately fire a SIBLING arm (std-ml-similarity's
+  // `COMPARE -> embedding when (> len 0)` / `COMPARE -> resolved when (== len 0)`).
+  // Landing on a sibling's target is the guard system working, not a
+  // divergence — record the siblings so `decideAccepted` can credit it.
+  if (guardCase === 'fail') {
+    const siblings = trait.transitions
+      .filter((t) => t.from === transition.from && t.event === transition.event && t.to !== transition.to)
+      .map((t) => t.to);
+    if (siblings.length > 0) step.guardSiblingTargets = siblings;
+  }
   // Acceptance closures (forward / guard-pass / success variants only; the
   // guard-fail / malformed variants expect the state to HOLD).
   if (guardCase !== 'fail' && payloadCase !== 'malformed') {

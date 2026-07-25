@@ -243,6 +243,16 @@ export interface ExtendedWalkStep extends WalkStep {
    * the guard is payload-steerable (the normal case).
    */
   guardSteerable?: boolean;
+
+  /**
+   * Guard-fail variants only: the OTHER declared targets of this step's
+   * `(from, event)` pair. When complementary guarded arms share an event,
+   * the fail-probe payload for one arm legitimately fires a sibling arm —
+   * `decideAccepted` credits landing on any of these instead of
+   * hard-requiring the state to hold. Undefined when the arm has no
+   * siblings (the normal single-arm case).
+   */
+  guardSiblingTargets?: readonly string[];
 }
 
 /**

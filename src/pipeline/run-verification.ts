@@ -342,11 +342,28 @@ export async function runVerification<Ctx extends DriverContext>(
               reconcileFrame.stateAfter !== null &&
               !reconcileAccepted.includes(reconcileFrame.stateAfter)
             ) {
-              replayDivergences.push(
-                `${trait.traitName}: reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`,
-              );
-              replayDivergeFrames.push(reconcileFrame.index);
-              log(`  [${stepIdx + 1}/${plan.length}] replay diverged at ${reconcileStep.event}: expected ${reconcileStep.to}, got ${reconcileFrame.stateAfter} — aborting preamble`);
+              // The other half of the branching case named above: when
+              // `(from, event)` declares SEVERAL guarded targets, the BFS
+              // planned one of them and the runtime's guard truth selected
+              // another. Landing on a sibling declared target is the state
+              // machine working, not nondeterminism — the replay simply
+              // can't establish this precondition, which the skip below
+              // already reports. Only a state NO transition declares for
+              // this `(from, event)` is a genuine divergence.
+              const declaredTargets = trait.transitions
+                .filter((t) => t.from === reconcileStep.from && t.event === reconcileStep.event)
+                .map((t) => t.to);
+              const tookSiblingBranch =
+                declaredTargets.length > 1 && declaredTargets.includes(reconcileFrame.stateAfter);
+              if (!tookSiblingBranch) {
+                replayDivergences.push(
+                  `${trait.traitName}: reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`,
+                );
+                replayDivergeFrames.push(reconcileFrame.index);
+                log(`  [${stepIdx + 1}/${plan.length}] replay diverged at ${reconcileStep.event}: expected ${reconcileStep.to}, got ${reconcileFrame.stateAfter} — aborting preamble`);
+              } else {
+                log(`  [${stepIdx + 1}/${plan.length}] guard branch at ${reconcileStep.event}: planned ${reconcileStep.to}, guard selected ${reconcileFrame.stateAfter} (also declared) — aborting preamble`);
+              }
               preconditionUnreachable = true;
               preconditionReason = `precondition '${step.from}' unreachable — reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`;
               break;

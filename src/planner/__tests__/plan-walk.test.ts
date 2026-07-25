@@ -313,4 +313,44 @@ describe('planWalk', () => {
       expect(steps.every((s) => s.guardSteerable === undefined)).toBe(true);
     });
   });
+
+  describe('guardSiblingTargets', () => {
+    it('a guard-fail probe on complementary arms carries the sibling targets', () => {
+      // std-ml-similarity's COMPARE shape: two guarded arms on one event.
+      const trait: TraitWalkConfig = {
+        traitName: 'SimilarityRun',
+        initialState: 'idle',
+        transitions: [
+          {
+            from: 'idle', event: 'COMPARE', to: 'embedding',
+            hasGuard: true, guard: ['>', ['array/len', '@payload.candidates'], 0],
+          },
+          {
+            from: 'idle', event: 'COMPARE', to: 'resolved',
+            hasGuard: true, guard: ['==', ['array/len', '@payload.candidates'], 0],
+          },
+        ],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      const failSteps = steps.filter((s) => s.guardCase === 'fail');
+      expect(failSteps.length).toBeGreaterThan(0);
+      const embeddingFail = failSteps.find((s) => s.to === 'embedding');
+      expect(embeddingFail?.guardSiblingTargets).toEqual(['resolved']);
+      const resolvedFail = failSteps.find((s) => s.to === 'resolved');
+      expect(resolvedFail?.guardSiblingTargets).toEqual(['embedding']);
+    });
+
+    it('a single-arm guard-fail probe carries no sibling stamp', () => {
+      const trait: TraitWalkConfig = {
+        traitName: 'Single',
+        initialState: 'a',
+        transitions: [
+          { from: 'a', event: 'GO', to: 'b', hasGuard: true, guard: ['>', '@payload.n', 0] },
+        ],
+      };
+      const steps = planWalk({ trait, includeAutoInit: false });
+      const fail = steps.find((s) => s.guardCase === 'fail');
+      expect(fail?.guardSiblingTargets).toBeUndefined();
+    });
+  });
 });
