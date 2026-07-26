@@ -100,6 +100,28 @@ seedRandom(42);
  *
  * Returns a string (all HTML inputs accept string values).
  */
+/**
+ * A valid value for a semantic-domain field, or `undefined` when the type is not
+ * one. Three near-identical payload switches used to fall through to
+ * `randomWords(2)` for these, which the emitted `z.string().email()` refinement
+ * rejects on submit — turning a real feature into a verifier regression.
+ */
+function semanticPayloadValue(type: string | undefined): string | undefined {
+  switch (type) {
+    case 'email':
+      return 'verify@example.com';
+    case 'url':
+    case 'image':
+      return 'https://example.com/verify';
+    case 'phone':
+      return '+1-555-0100';
+    case 'uuid':
+      return '00000000-0000-4000-8000-000000000001';
+    default:
+      return undefined;
+  }
+}
+
 export function generateFieldValue(inputType: string, _fieldName: string): string {
   switch (inputType) {
     case 'number':
@@ -250,6 +272,11 @@ export function buildMinimalPayload(
             row[ef.name] = ef.values[0];
             continue;
           }
+          const semantic = semanticPayloadValue(ef.type);
+          if (semantic !== undefined) {
+            row[ef.name] = semantic;
+            continue;
+          }
           switch (ef.type) {
             case 'number':
             case 'integer':
@@ -313,6 +340,11 @@ export function buildMinimalPayload(
               obj[ef.name] = ef.values[0];
               continue;
             }
+            const semanticObj = semanticPayloadValue(ef.type);
+            if (semanticObj !== undefined) {
+              obj[ef.name] = semanticObj;
+              continue;
+            }
             switch (ef.type) {
               case 'number':
               case 'integer':
@@ -352,6 +384,11 @@ export function buildMinimalPayload(
           for (const ef of entityFields) {
             if (ef.values && ef.values.length > 0) {
               row[ef.name] = ef.values[0];
+              continue;
+            }
+            const semanticRow = semanticPayloadValue(ef.type);
+            if (semanticRow !== undefined) {
+              row[ef.name] = semanticRow;
               continue;
             }
             switch (ef.type) {
