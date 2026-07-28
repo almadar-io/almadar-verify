@@ -225,7 +225,10 @@ function collectDispatchErrors(
       `dispatch failed: driver did not deliver event '${step.event}' to trait '${step.traitName}'`,
     );
   }
-  if (stateAfter === null && !allowStateless) {
+  // A navigate-carrying transition can swap the page and unmount the trait
+  // before the state read — a null read there is the navigation working,
+  // not a stateless dispatch.
+  if (stateAfter === null && !allowStateless && step.navigates !== true) {
     errors.push(
       `stateless dispatch: getState returned null after event '${step.event}' on trait '${step.traitName}' (pass allowStateless to credit drivers with no state reader)`,
     );

@@ -253,6 +253,15 @@ export interface ExtendedWalkStep extends WalkStep {
    * siblings (the normal single-arm case).
    */
   guardSiblingTargets?: readonly string[];
+
+  /**
+   * The step's transition carries a `navigate` effect: firing it can swap
+   * the page and unmount the trait, so a `null` post-dispatch state read
+   * is legitimate (`collectDispatchErrors` accepts it instead of flagging
+   * a stateless dispatch). Stamped by `planWalk` from
+   * `WalkTransition.navigates`.
+   */
+  navigates?: boolean;
 }
 
 /**

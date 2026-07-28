@@ -12,7 +12,6 @@
  */
 
 import type {
-  EdgeWalkTransition,
   Orbital,
   OrbitalSchema,
   Page,
@@ -24,6 +23,7 @@ import type {
   Transition,
 } from '@almadar/core';
 import { collectTraitEmbedAdjacency, isInlineTrait, isPageReference } from '@almadar/core';
+import type { WalkTransition } from '../../engine/types.js';
 
 /**
  * Initial state for a state machine: the first state with `isInitial: true`,
@@ -75,11 +75,16 @@ export function traitBootRenderSlots(trait: Trait): Set<string> {
 }
 
 /**
- * Project a core `Transition` into the kernel walker's `EdgeWalkTransition`.
+ * Project a core `Transition` into the kernel walker's `WalkTransition`.
  */
-export function toEdgeWalkTransition(t: Transition): EdgeWalkTransition {
+export function toEdgeWalkTransition(t: Transition): WalkTransition {
   const hasGuard = t.guard !== undefined && t.guard !== null;
-  const out: EdgeWalkTransition = { from: t.from, event: t.event, to: t.to, hasGuard };
+  const out: WalkTransition = { from: t.from, event: t.event, to: t.to, hasGuard };
+  // Firing this transition can swap the page (trait unmounts) — the
+  // dispatch-error gate accepts a null post-dispatch state read for it.
+  if ((t.effects ?? []).some((e) => Array.isArray(e) && e[0] === 'navigate')) {
+    out.navigates = true;
+  }
   // Pass through the guard regardless of whether it's an array (S-expr
   // call like `["or", ...]`, `["=", ...]`) or a string atom (bare-
   // binding existence check like `"@payload.row"` declared by

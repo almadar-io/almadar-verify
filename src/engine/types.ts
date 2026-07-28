@@ -18,11 +18,24 @@
 
 import type { EdgeWalkTransition, Event, TraitEventContract, TraitTick, WalkStep } from '@almadar/core';
 
+/**
+ * `EdgeWalkTransition` + kernel-side flags derived from the transition's
+ * effects (same derivation family as `TraitWalkConfig.effectEmittedEvents`).
+ */
+export interface WalkTransition extends EdgeWalkTransition {
+  /**
+   * The transition's effects include a `navigate` — firing it can swap the
+   * page and unmount the trait, so a post-dispatch state read may
+   * legitimately return `null` (see `collectDispatchErrors`).
+   */
+  navigates?: boolean;
+}
+
 /** Configuration for a single trait's walk. */
 export interface TraitWalkConfig {
   traitName: string;
   initialState: string;
-  transitions: EdgeWalkTransition[];
+  transitions: WalkTransition[];
   /** Route path for this trait's page (e.g., "products", "orders"). */
   route?: string;
   /**

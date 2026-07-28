@@ -189,6 +189,7 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
     coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, guardCase, payloadCase),
     payloadCase,
     ...(input.guardSteerable !== undefined && { guardSteerable: input.guardSteerable }),
+    ...(transition.navigates === true && { navigates: true }),
   };
   // Complementary guarded arms on the same (from, event): a guard-fail probe
   // for THIS arm may legitimately fire a SIBLING arm (std-ml-similarity's

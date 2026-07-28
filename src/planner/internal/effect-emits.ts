@@ -65,6 +65,33 @@ function collectFetchSuccessFromNode(node: Effect | SExpr, out: Set<string>): vo
   for (const child of nodes) collectFetchSuccessFromNode(child, out);
 }
 
+/** Collect BOTH `emit.success` and `emit.failure` of every `fetch`/`persist`
+ *  effect in one transition's effect list — the operation-result events the
+ *  requesting machine must be able to hear wherever it lands (the
+ *  `async-result-deaf-target` lint contract). */
+export function collectAsyncResultEvents(effects: ReadonlyArray<Effect>): Set<string> {
+  const out = new Set<string>();
+  for (const eff of effects) collectAsyncResultFromNode(eff, out);
+  return out;
+}
+
+function collectAsyncResultFromNode(node: Effect | SExpr, out: Set<string>): void {
+  if (!Array.isArray(node)) return;
+  const nodes = node as readonly SExpr[];
+  if (nodes[0] === 'fetch' || nodes[0] === 'persist') {
+    for (const child of nodes) {
+      if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+      const emit = (child as Readonly<Record<string, SExpr>>)['emit'];
+      if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
+      for (const v of Object.values(emit as Readonly<Record<string, SExpr>>)) {
+        if (typeof v === 'string' && v !== '') out.add(v);
+      }
+    }
+  }
+  // fetch/persist can sit inside an `(if …)` wrapper, so keep descending.
+  for (const child of nodes) collectAsyncResultFromNode(child, out);
+}
+
 function collectFromNode(node: Effect | SExpr, out: Set<string>): void {
   if (Array.isArray(node)) {
     // Effect tuples are structurally SExpr arrays — iterate under that shape

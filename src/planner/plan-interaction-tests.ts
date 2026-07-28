@@ -12,7 +12,8 @@
  *   - `formData` (when target pattern is a form, derived from the
  *     transition's payload schema + linked entity field metadata)
  *   - Preceded by `triggerKind: 'replay'` steps when fromState !=
- *     initialState (BFS shortest path inline).
+ *     initialState (via `planReplayTo` — the one replay planner, so hops
+ *     carry synthesized payloads and skip effect-emitted events).
  *
  * Pure. No `Page`, no DOM, no schema-side helpers — operates on the
  * typed `@almadar/core` `OrbitalSchema`.
@@ -28,10 +29,23 @@ import {
   findInitialState,
 } from './internal/orbital-walk.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
+import { extractTraitWalkConfigs } from './extract-trait-walk-configs.js';
+import { planReplayTo } from './plan-replay-to.js';
 
 export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[] {
   const result: ExtendedWalkStep[] = [];
   const entityFieldsByName = collectEntityFields(orbital);
+
+  // Repositioning preambles go through the ONE replay planner
+  // (`planReplayTo`): payload synthesis from the event's declared schema,
+  // guard-pass merge, and effect-emitted-hop exclusion. The private BFS this
+  // planner used to carry dispatched every hop with `{}` — any hop whose
+  // event requires payload fields (OPEN_X `id!`) was validator-rejected, the
+  // precondition never established, and every steady-detail arm
+  // (`viewing_single`) stayed uncovered (the std-trial/std-dunning class).
+  const walkConfigs = new Map(
+    extractTraitWalkConfigs(orbital).map((c) => [c.traitName, c]),
+  );
 
   // Orbital-wide set of events surfaced as DOM affordances anywhere
   // (`action: "EVENT"`, `submitEvent: "EVENT"`). Buttons that fire a
@@ -61,20 +75,17 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
       const renderTarget = findRenderTarget(transition);
       if (renderTarget === null) continue;
 
-      const replayPath = bfsReplayPath(trait, initial, transition.from);
+      const walkConfig = walkConfigs.get(trait.name);
+      const replayPath = walkConfig !== undefined
+        ? planReplayTo({ trait: walkConfig, targetState: transition.from }, entityFieldsByName)
+        : null;
       if (replayPath === null) continue;
 
-      // Replay steps first.
+      // Replay steps first (retagged so coverage attributes the hop to the
+      // interaction under test).
       for (const step of replayPath) {
         result.push({
-          from: step.from,
-          event: step.event,
-          to: step.to,
-          guardCase: null,
-          payload: {},
-          isRepositioning: true,
-          traitName: trait.name,
-          triggerKind: 'replay',
+          ...step,
           coverageKey: `${trait.name}:${step.from}+${step.event}->${step.to}[replay:interaction:${transition.event}]`,
         });
       }
@@ -314,43 +325,6 @@ function extractPayloadSchema(
     type: f.type,
     required: f.required,
   }));
-}
-
-/** BFS shortest path from `from` to `to` over the trait's non-INIT transitions. */
-function bfsReplayPath(
-  trait: Trait,
-  from: string,
-  to: string,
-): Array<{ from: string; event: string; to: string }> | null {
-  if (from === to) return [];
-  if (trait.stateMachine === undefined) return null;
-
-  const adjacency = new Map<string, ReadonlyArray<Transition>>();
-  for (const t of trait.stateMachine.transitions) {
-    if (t.event === 'INIT' && t.from === from) continue;
-    const list = adjacency.get(t.from);
-    adjacency.set(t.from, list === undefined ? [t] : [...list, t]);
-  }
-
-  const visited = new Set<string>([from]);
-  const queue: Array<{ state: string; path: Array<{ from: string; event: string; to: string }> }> = [
-    { state: from, path: [] },
-  ];
-
-  while (queue.length > 0) {
-    const node = queue.shift();
-    if (node === undefined) break;
-    const edges = adjacency.get(node.state) ?? [];
-    for (const edge of edges) {
-      if (visited.has(edge.to)) continue;
-      const newPath = [...node.path, { from: edge.from, event: edge.event, to: edge.to }];
-      if (edge.to === to) return newPath;
-      visited.add(edge.to);
-      queue.push({ state: edge.to, path: newPath });
-    }
-  }
-
-  return null;
 }
 
 /**

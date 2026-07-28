@@ -317,18 +317,34 @@ function lastServerResponseFor(
  * `data-pattern` on the slot's first child is recorded by `assertPortalPerStep`
  * via the `portals` array (top-level pattern only — nested patterns are
  * not enumerated here).
+ *
+ * Stability poll (V-PORTAL-PER-STEP-SINGLE-SHOT-RACE): a single-shot read
+ * races async paints — a render landing one beat after settle read as
+ * "slot not mounted" while sibling observers poll. Sample until two
+ * consecutive reads agree (bounded ~1s) so the recorded snapshot is the
+ * settled DOM, not a mid-paint frame.
  */
 async function probePortals(page: Page): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>> {
   try {
     const slots = PORTAL_SLOTS as ReadonlyArray<PortalSlot>;
-    const results = await page.evaluate((slotNames: ReadonlyArray<string>) => {
-      return slotNames.map((name) => {
-        const el = document.getElementById(`slot-${name}`);
-        if (el === null) return { slot: name, mounted: false, childCount: 0 };
-        return { slot: name, mounted: true, childCount: el.children.length };
-      });
-    }, [...slots]);
-    return results as ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>;
+    const readOnce = async (): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>> => {
+      const results = await page.evaluate((slotNames: ReadonlyArray<string>) => {
+        return slotNames.map((name) => {
+          const el = document.getElementById(`slot-${name}`);
+          if (el === null) return { slot: name, mounted: false, childCount: 0 };
+          return { slot: name, mounted: true, childCount: el.children.length };
+        });
+      }, [...slots]);
+      return results as ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>;
+    };
+    let prev = await readOnce();
+    for (let i = 0; i < 5; i++) {
+      await page.waitForTimeout(200);
+      const next = await readOnce();
+      if (JSON.stringify(next) === JSON.stringify(prev)) return next;
+      prev = next;
+    }
+    return prev;
   } catch {
     // Page may have navigated mid-snapshot; return empty so verdicts
     // surface as "slot not mounted" instead of crashing the run.

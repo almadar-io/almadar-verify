@@ -31,6 +31,15 @@
  *    positive — the page's content trait repaints main on revisit, live-probed
  *    GREEN through an in-app round trip. Live revisit probes remain the
  *    arbiter per finding.
+ *  - `async-result-deaf-target` (warning) — a transition that CHANGES state
+ *    while one of its `fetch`/`persist` effects declares `emit: { success,
+ *    failure }` events the TARGET state does not handle: the requester departs
+ *    to a state deaf to its own operation result, so when the cascade lands
+ *    the machine drops it and deadlocks (the std-dunning `SET_STATUS ->
+ *    loading` class, 2026-07-27: the persist's `DunningCaseUpdated` was only
+ *    handled in `browsing`, wedging every subsequent walk step in `loading`).
+ *    Self-transitions (`from === to`) are excluded — the machine stays in an
+ *    interactive state, a different (render-drop) class, not a wedge.
  *  - `listens-source-never-emits` — a `listens { A.EVENT -> X }` route whose
  *    source trait exists but never produces EVENT (not in its emits
  *    contract, no effect `emit:` option, no `action:`/`itemActions`
@@ -69,7 +78,7 @@ import type {
   TraitConfigValue,
 } from '@almadar/core';
 import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference } from '@almadar/core';
-import { collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
+import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
  *  (state machines), call-site config values, render-ui pattern payloads,
@@ -91,6 +100,8 @@ export interface WiringLintFinding {
   check:
     | 'client-unbound-state-machine'
     | 'steady-state-no-init-reentry'
+    | 'async-result-deaf-target'
+    | 'groupby-enum-column-gap'
     | 'listens-source-never-emits'
     | 'payload-starved-route'
     | 'unclaimed-main-writer';
@@ -178,6 +189,13 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
   return out;
 }
 
+/** Config keys whose arrays carry `{ event, label, … }` action descriptors
+ *  that the substrate turns into bus-emitting affordances. `itemActions` is
+ *  the grid/list contract; `agendaItemActions` (std-calendar agenda rows) and
+ *  `detailActions` (std-browse master-detail record pane) forward to the same
+ *  DOM-click emit path. */
+const ACTION_DESCRIPTOR_KEYS = ['itemActions', 'agendaItemActions', 'detailActions'] as const;
+
 /** Events declared in `itemActions`-shaped config arrays anywhere in the
  *  trait's config tree (`[{ event, label, … }]`). */
 function configItemActionEvents(trait: Trait): Set<string> {
@@ -190,9 +208,15 @@ function configItemActionEvents(trait: Trait): Set<string> {
     }
     if (typeof node !== 'object') return;
     const record = asRecordNode(node);
-    const itemActions = record['itemActions'];
-    if (Array.isArray(itemActions)) {
-      for (const entry of itemActions) {
+    for (const key of ACTION_DESCRIPTOR_KEYS) {
+      let actions = record[key];
+      // Resolved orbs carry config values knob-wrapped ({ default, type });
+      // the descriptor array lives under `default`.
+      if (actions !== null && typeof actions === 'object' && !Array.isArray(actions)) {
+        actions = asRecordNode(actions)['default'];
+      }
+      if (!Array.isArray(actions)) continue;
+      for (const entry of actions) {
         if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
           const event = asRecordNode(entry)['event'];
           if (typeof event === 'string' && event.length > 0) out.add(event);
@@ -392,6 +416,82 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             `INIT (fetch + loading render), the shape std-browse uses`,
         });
       }
+    }
+
+    // --- async-result-deaf-target -----------------------------------------
+    for (const [name, trait] of traits) {
+      const transitions = trait.stateMachine?.transitions ?? [];
+      if (transitions.length === 0) continue;
+      const handledIn = (state: string): Set<string> =>
+        new Set(transitions.filter((t) => t.from === state || t.from === '*').map((t) => t.event));
+      for (const transition of transitions) {
+        if (transition.from === transition.to) continue;
+        const results = collectAsyncResultEvents(transition.effects ?? []);
+        if (results.size === 0) continue;
+        const handled = handledIn(transition.to);
+        const deaf = [...results].filter((event) => !handled.has(event));
+        if (deaf.length === 0) continue;
+        findings.push({
+          check: 'async-result-deaf-target',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: name,
+          message:
+            `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' fires a fetch/persist whose ` +
+            `result event(s) ${deaf.map((e) => `'${e}'`).join(', ')} are not handled in '${transition.to}' — the ` +
+            `cascade lands on a deaf state and the machine wedges there`,
+          suggestion:
+            `handle ${deaf.map((e) => `'${e}'`).join(', ')} in '${transition.to}' (mirror the arms the source state ` +
+            `declares for them), or route the effect's emit to an event '${transition.to}' already handles`,
+        });
+      }
+    }
+
+    // --- groupby-enum-column-gap ------------------------------------------
+    // Structural contract: a trait config carrying BOTH a `groupByField`
+    // string and a `columns` array of `{ key }` descriptors buckets rows by
+    // strict key equality — a linked-entity enum value with no matching
+    // column key silently hides its rows (the std-board cancelled-class).
+    // Detected by config SHAPE, never by atom name.
+    for (const [name, trait] of traits) {
+      const config = trait.config;
+      if (config === null || typeof config !== 'object' || Array.isArray(config)) continue;
+      const record = config as Readonly<Record<string, TraitConfigValue>>;
+      const groupByField = record['groupByField'];
+      const columns = record['columns'];
+      if (typeof groupByField !== 'string' || groupByField.length === 0) continue;
+      if (!Array.isArray(columns) || columns.length === 0) continue;
+      const columnKeys = new Set<string>();
+      for (const col of columns) {
+        if (col !== null && typeof col === 'object' && !Array.isArray(col)) {
+          const key = (col as Readonly<Record<string, TraitConfigValue>>)['key'];
+          if (typeof key === 'string' && key.length > 0) columnKeys.add(key);
+        }
+      }
+      if (columnKeys.size === 0) continue;
+      const entityName = trait.linkedEntity;
+      if (typeof entityName !== 'string') continue;
+      // Inline entity decls live on `orb.entity` (primary) + `auxiliaryEntities`.
+      const entityRefs = [orb.entity, ...(orb.auxiliaryEntities ?? [])];
+      const entity = entityRefs.find(
+        (ref): ref is Extract<typeof ref, { name: string }> =>
+          typeof ref === 'object' && ref !== null && 'fields' in ref && ref.name === entityName,
+      );
+      const field = entity?.fields?.find((f) => f.name === groupByField);
+      const values = field !== undefined && 'values' in field ? field.values : undefined;
+      if (!Array.isArray(values) || values.length === 0) continue;
+      const hidden = values.filter((v): v is string => typeof v === 'string' && !columnKeys.has(v));
+      if (hidden.length === 0) continue;
+      findings.push({
+        check: 'groupby-enum-column-gap',
+        severity: 'warning',
+        orbital: orb.name,
+        trait: name,
+        message:
+          `${name} buckets ${entityName} rows by '${groupByField}' into columns [${[...columnKeys].join(', ')}], ` +
+          `but the field's enum also allows [${hidden.join(', ')}] — rows with those values match no column and silently disappear`,
+        suggestion: `add a column entry for each missing key (${hidden.join(', ')}) or narrow the ${entityName}.${groupByField} enum`,
+      });
     }
 
     // --- listens-source-never-emits + payload-starved-route --------------
