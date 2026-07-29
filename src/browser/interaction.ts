@@ -122,6 +122,9 @@ function semanticPayloadValue(type: string | undefined): string | undefined {
   }
 }
 
+/** String forms a planner may hand a checkbox that mean "unchecked". */
+const FALSEY_FORM_VALUES: ReadonlySet<string> = new Set(['', 'false', '0', 'no', 'off', 'null', 'undefined']);
+
 export function generateFieldValue(inputType: string, _fieldName: string): string {
   switch (inputType) {
     case 'number':
@@ -493,6 +496,24 @@ export async function fillFormFieldsWithValues(
     }
   }
 
+  // Check boolean inputs. Excluded from the text selector above because
+  // `fill()` throws on them — but skipping them entirely drops the key from
+  // the submitted payload, which reads as a broken behavior rather than an
+  // unset control.
+  const toggles = container.locator('input[type="checkbox"]:visible, input[type="radio"]:visible');
+  const toggleCount = await toggles.count();
+  for (let i = 0; i < toggleCount; i++) {
+    try {
+      const toggle = toggles.nth(i);
+      const nameAttr = await toggle.getAttribute('name') ?? '';
+      await toggle.setChecked(true);
+      values[keyFor(nameAttr, `toggle-${i}`)] = 'true';
+      count++;
+    } catch {
+      // Toggle may have become detached
+    }
+  }
+
   // Fill textareas
   const textareas = container.locator('textarea:visible');
   const taCount = await textareas.count();
@@ -618,11 +639,19 @@ export async function fillFormFieldsFromMap(
     const tag = visible
       ? await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => null)
       : null;
+    // `fill()` THROWS on controls it cannot type into ("Input of type
+    // 'checkbox' cannot be filled", "Cannot type text into input[type=number]"),
+    // which aborts the rest of the form and makes the submit fire with a
+    // half-built payload — a red that says nothing about the behavior.
+    const inputType = tag === 'input'
+      ? (await field.getAttribute('type').catch(() => null)) ?? 'text'
+      : null;
     domLog.debug('dom:fill:field-attempt', {
       name,
       selector: fieldSelector,
       visible,
       tag,
+      inputType,
     });
     if (!visible) {
       domLog.debug('dom:fill:field-result', {
@@ -651,6 +680,20 @@ export async function fillFormFieldsFromMap(
           if (optionValues.length === 0) throw new Error('select has no selectable options');
           await field.selectOption(optionValues[0]);
         }
+      } else if (inputType === 'checkbox' || inputType === 'radio') {
+        // A boolean field is SET, not typed. Leaving it untouched (the old
+        // behaviour of the generic scanner) silently drops the key from the
+        // submitted payload.
+        await field.setChecked(!FALSEY_FORM_VALUES.has(stringValue.toLowerCase()));
+      } else if (inputType === 'number' || inputType === 'range') {
+        // The planner types form fields as `string`, so a numeric input can
+        // receive a word. Re-synthesize in range rather than fail the form.
+        const numeric = Number(stringValue);
+        await field.fill(
+          Number.isFinite(numeric) && stringValue.trim() !== ''
+            ? stringValue
+            : generateFieldValue('number', name),
+        );
       } else {
         await field.fill(stringValue);
       }
@@ -660,6 +703,7 @@ export async function fillFormFieldsFromMap(
         result: 'filled',
         value: stringValue,
         tag,
+        inputType,
       });
     } catch (err) {
       // Field exists with the right tag but value couldn't be set

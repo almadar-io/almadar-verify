@@ -60,6 +60,16 @@
  *    chrome, and claimed embeds are excluded. Supersedes the v1-falsified
  *    ">1 boot writers" candidate (see `Almadar_Verification_Gaps.md`
  *    V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
+ *  - `embedded-sibling-single-referrer` — a trait embedded via `@trait.X` by
+ *    more than one referrer in one orbital. Both resolvers materialise a
+ *    sub-view PER EMBEDDER, so this can only mean the invariant broke: the
+ *    child's `@config.X` forwards chain to ONE referrer
+ *    (`@almadar/core`'s `collectEmbeddedTraitReferrers` — first wins), and
+ *    `useUISlots.updateTraitContent` is keyed by trait name, so the second
+ *    embedder renders the first's data with the first's config. The
+ *    C-SIBLING-PULL-SHARED-ACROSS-REBINDS class: `std-realtime-chat`'s
+ *    conversation rail listed chat messages because `ChannelRail` and
+ *    `ChatThread` shared one pulled `DenseTableView`.
  *
  * @packageDocumentation
  */
@@ -77,7 +87,7 @@ import type {
   Trait,
   TraitConfigValue,
 } from '@almadar/core';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference } from '@almadar/core';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -104,7 +114,8 @@ export interface WiringLintFinding {
     | 'groupby-enum-column-gap'
     | 'listens-source-never-emits'
     | 'payload-starved-route'
-    | 'unclaimed-main-writer';
+    | 'unclaimed-main-writer'
+    | 'embedded-sibling-single-referrer';
   severity: WiringLintSeverity;
   orbital: string;
   trait: string;
@@ -412,10 +423,52 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             `${name} settles in '${state}' after a fetch succeeds, but '${state}' handles no INIT — on a page revisit ` +
             `the server machine is already resting there and drops the client's re-INIT, so the surface hangs on its spinner`,
           suggestion:
-            `add an INIT re-entry to '${state}' in ${name} mirroring the loading state's own ` +
-            `INIT (fetch + loading render), the shape std-browse uses`,
+            `add an INIT re-entry to '${state}' in ${name} that re-fetches and RE-ENTERS '${state}' ` +
+            `without repainting a loading body — the shape std-browse uses. Copying the loading ` +
+            `state's INIT verbatim reintroduces the flicker: '${state}' already holds rendered ` +
+            `content, so a skeleton render unmounts it on every revisit`,
         });
       }
+    }
+
+    // --- embedded-sibling-single-referrer ---------------------------------
+    // Invert the embed adjacency: every child must have exactly one referrer.
+    // The pull materialises per embedder on both paths, so a second referrer
+    // means the two are sharing one declaration — and a declaration can only
+    // carry one entity rebind, one call-site config chain and one render.
+    const referrersByChild = new Map<string, string[]>();
+    for (const [referrer, children] of adjacency) {
+      for (const child of children) {
+        if (!traits.has(child)) continue;
+        const list = referrersByChild.get(child);
+        if (list) list.push(referrer);
+        else referrersByChild.set(child, [referrer]);
+      }
+    }
+    for (const [child, referrers] of referrersByChild) {
+      if (referrers.length < 2) continue;
+      // Discriminator, not a heuristic: only a child that declares a
+      // `@config.X` forward has an embedder-dependent render. Corpus
+      // calibration (2026-07-29): 45 traits are embedded twice, 44 of them
+      // inert shared chrome (one `Divider`/`Typography` embedded from two
+      // states of the same trait pair) that renders identically either way.
+      // The remaining one is the real class.
+      if (!traitDeclaresConfigForward(traits.get(child))) continue;
+      const sorted = [...referrers].sort();
+      findings.push({
+        check: 'embedded-sibling-single-referrer',
+        severity: 'warning',
+        orbital: orb.name,
+        trait: child,
+        message:
+          `${child} declares @config forwards and is embedded via @trait by ${referrers.length} referrers ` +
+          `(${sorted.join(', ')}) — one declaration cannot serve two embedders: its forwards chain to the first ` +
+          `referrer only, and the client keys rendered content by trait name, so the second embedder shows the ` +
+          `first's resolved config`,
+        suggestion:
+          `declare ${child} once per embedder (the sibling pull does exactly this for imported atoms), or move ` +
+          `the forwarded knobs to literals so the render no longer depends on which trait embeds it`,
+      });
     }
 
     // --- async-result-deaf-target -----------------------------------------
