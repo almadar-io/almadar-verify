@@ -27,6 +27,7 @@ import {
   type StateMachine,
   type Transition,
   getPatternDefinition,
+  isInlineTrait,
 } from '@almadar/core';
 import type {
   StructuralQualityReport,
@@ -390,13 +391,9 @@ export function scoreStructuralQuality(schema: OrbitalSchema): StructuralQuality
 
   const orbitalList = Array.isArray(schema.orbitals) ? schema.orbitals : [];
   orbitalList.forEach((orbital, index) => {
-    const orb = asRecord(orbital);
-    const traits: Trait[] =
-      orb && Array.isArray(orb.traits)
-        ? orb.traits.filter((t): t is Trait => asRecord(t) !== null && typeof (t as Trait).name === 'string')
-        : [];
+    const traits: Trait[] = (orbital.traits ?? []).filter(isInlineTrait);
     const name =
-      orb && typeof orb.name === 'string' && orb.name.length > 0 ? orb.name : `orbital-${index}`;
+      typeof orbital.name === 'string' && orbital.name.length > 0 ? orbital.name : `orbital-${index}`;
 
     const facts = analyzeOrbital(traits);
     orbitals[name] = facts;

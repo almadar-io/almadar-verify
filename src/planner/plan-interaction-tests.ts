@@ -21,7 +21,7 @@
  * @packageDocumentation
  */
 
-import type { FieldValue, OrbitalSchema, SExpr, Trait, Transition } from '@almadar/core';
+import type { AnyPatternConfig, FieldValue, OrbitalSchema, SExpr, Trait, Transition } from '@almadar/core';
 import { isEntityReference, isEntityCall } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import {
@@ -206,7 +206,7 @@ function collectServerEmittedEvents(orbital: OrbitalSchema): Set<string> {
   return out;
 }
 
-function walkActions(node: SExpr, out: Set<string>): void {
+function walkActions(node: SExpr | AnyPatternConfig | null, out: Set<string>): void {
   if (node === null || typeof node !== 'object') return;
   if (Array.isArray(node)) {
     for (const child of node) walkActions(child, out);

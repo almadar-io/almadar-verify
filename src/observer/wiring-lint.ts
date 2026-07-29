@@ -60,6 +60,15 @@
  *    chrome, and claimed embeds are excluded. Supersedes the v1-falsified
  *    ">1 boot writers" candidate (see `Almadar_Verification_Gaps.md`
  *    V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
+ *  - `dead-lifecycle-action` — a rendered affordance (`action:` field or an
+ *    `itemActions`-shaped descriptor) targeting a lifecycle event (`INIT`,
+ *    `LOAD`, `$MOUNT`). The runtime never delivers lifecycle events from the
+ *    bus (`useTraitStateMachine` LIFECYCLE_EVENTS — correctly: a bare
+ *    `UI:INIT` would broadcast a re-INIT into every trait on the page), so
+ *    the control does nothing when clicked. The std-realtime-chat
+ *    "Back to chat" class (2026-07-29): 63 sites across 31 organisms used
+ *    `action={INIT}` as a Back affordance on screens that replaced `main`,
+ *    stranding the viewer with no way home.
  *  - `embedded-sibling-single-referrer` — a trait embedded via `@trait.X` by
  *    more than one referrer in one orbital. Both resolvers materialise a
  *    sub-view PER EMBEDDER, so this can only mean the invariant broke: the
@@ -115,6 +124,7 @@ export interface WiringLintFinding {
     | 'listens-source-never-emits'
     | 'payload-starved-route'
     | 'unclaimed-main-writer'
+    | 'dead-lifecycle-action'
     | 'embedded-sibling-single-referrer';
   severity: WiringLintSeverity;
   orbital: string;
@@ -199,6 +209,12 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
   if (trait.config) scan(trait.config);
   return out;
 }
+
+/** Mount-time events the runtime fires internally, once per trait, and
+ *  deliberately never delivers from the bus (`useTraitStateMachine`
+ *  LIFECYCLE_EVENTS — the qualified self-subscription and the bare-cascade
+ *  routing both skip them). A rendered affordance targeting one is dead. */
+const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set(['INIT', 'LOAD', '$MOUNT']);
 
 /** Config keys whose arrays carry `{ event, label, … }` action descriptors
  *  that the substrate turns into bus-emitting affordances. `itemActions` is
@@ -372,6 +388,28 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             ? `add ${name} to the page decl mounting its embedded children (${childPages.join(', ')})`
             : `add ${name} to the page decl of the page whose traits route events to it`,
       });
+    }
+
+    // --- dead-lifecycle-action -------------------------------------------
+    for (const [name, trait] of traits) {
+      const actionEvents = collectRenderActionEvents(trait);
+      const descriptorEvents = configItemActionEvents(trait);
+      for (const event of new Set([...actionEvents, ...descriptorEvents])) {
+        if (!LIFECYCLE_EVENTS.has(event)) continue;
+        findings.push({
+          check: 'dead-lifecycle-action',
+          severity: 'error',
+          orbital: orb.name,
+          trait: name,
+          message:
+            `${name} renders an affordance targeting '${event}' — a lifecycle event the runtime never delivers ` +
+            `from the bus, so the control does nothing when clicked`,
+          suggestion:
+            `emit a first-class user event instead; if this is a "back" affordance on a screen that replaced main, ` +
+            `recut the screen as a modal overlay owned by a dedicated overlay trait (the std-realtime-chat ` +
+            `ChatOverlayPanel shape), so dismissing is one (render-ui modal null) and main is never repainted`,
+        });
+      }
     }
 
     // --- steady-state-no-init-reentry ------------------------------------
