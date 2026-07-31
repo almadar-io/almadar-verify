@@ -561,3 +561,142 @@ describe('lintWiring — steady-state-no-init-reentry', () => {
     expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
   });
 });
+
+describe('lintWiring — unscoped-owned-entity', () => {
+  /**
+   * An app whose `Ticket.assignee` points at the `[identity]` `Person`.
+   * `readPolicy` is the `@read` directive; absent means ALLOW-ALL.
+   */
+  function appWithOwnerColumn(readPolicy?: unknown): OrbitalSchema {
+    return {
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'TicketOrbital',
+          entity: {
+            name: 'Ticket',
+            persistence: 'persistent',
+            collection: 'tickets',
+            ...(readPolicy === undefined ? {} : { read_policy: readPolicy }),
+            fields: [
+              { name: 'id', type: 'string' },
+              { name: 'assignee', type: 'relation', relation: { entity: 'Person' } },
+            ],
+          },
+          traits: [],
+          pages: [],
+        },
+        {
+          name: 'PersonOrbital',
+          entity: {
+            name: 'Person',
+            identity: true,
+            persistence: 'persistent',
+            collection: 'people',
+            fields: [{ name: 'id', type: 'string' }],
+          },
+          traits: [],
+          pages: [],
+        },
+      ],
+    } as unknown as OrbitalSchema;
+  }
+
+  const unscoped = (schema: OrbitalSchema) =>
+    lintWiring(schema).findings.filter((f) => f.check === 'unscoped-owned-entity');
+
+  it('flags an owner column with no @read — undeclared is allow-all, not deny-all', () => {
+    const found = unscoped(appWithOwnerColumn());
+    expect(found).toHaveLength(1);
+    expect(found[0]?.entity).toBe('Ticket');
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.message).toContain('assignee');
+  });
+
+  it('is silent once @read is declared', () => {
+    expect(unscoped(appWithOwnerColumn(['=', '@entity.assignee', '@user.id']))).toHaveLength(0);
+  });
+
+  it('is silent for an app that declares no [identity] entity at all', () => {
+    // Owner columns are resolved from the DECLARED relation to the identity
+    // entity. With no identity there is nothing to scope against, so an
+    // un-migrated app stays quiet rather than emitting noise for every entity.
+    const schema = {
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'TicketOrbital',
+          entity: {
+            name: 'Ticket',
+            persistence: 'persistent',
+            collection: 'tickets',
+            fields: [{ name: 'assignee', type: 'relation', relation: { entity: 'Person' } }],
+          },
+          traits: [],
+          pages: [],
+        },
+      ],
+    } as unknown as OrbitalSchema;
+    expect(unscoped(schema)).toHaveLength(0);
+  });
+
+  it('does not guess from a field NAME — a bare string owner is invisible', () => {
+    // Name matching would scope the wrong column. The campaign retypes these to
+    // a real reference, and the lint lights up only then.
+    const schema = appWithOwnerColumn();
+    const ticket = (schema.orbitals[0] as unknown as { entity: { fields: unknown[] } }).entity;
+    ticket.fields = [{ name: 'assignee', type: 'string' }];
+    expect(unscoped(schema)).toHaveLength(0);
+  });
+});
+
+describe('lintWiring — unscoped-owned-entity respects a declared waiver', () => {
+  function appWithWaiver(waiver?: Record<string, string>): OrbitalSchema {
+    return {
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'ReplyOrbital',
+          entity: {
+            name: 'TicketReply',
+            persistence: 'persistent',
+            collection: 'ticketreplies',
+            ...(waiver === undefined ? {} : { access_waivers: waiver }),
+            fields: [{ name: 'authorId', type: 'relation', relation: { entity: 'Person' } }],
+          },
+          traits: [],
+          pages: [],
+        },
+        {
+          name: 'PersonOrbital',
+          entity: {
+            name: 'Person',
+            identity: true,
+            persistence: 'persistent',
+            collection: 'people',
+            fields: [{ name: 'id', type: 'string' }],
+          },
+          traits: [],
+          pages: [],
+        },
+      ],
+    } as unknown as OrbitalSchema;
+  }
+
+  const unscoped = (schema: OrbitalSchema) =>
+    lintWiring(schema).findings.filter((f) => f.check === 'unscoped-owned-entity');
+
+  it('flags the omission when nothing declares it', () => {
+    expect(unscoped(appWithWaiver())).toHaveLength(1);
+  });
+
+  it('goes quiet once `@read none "<reason>"` declares it', () => {
+    // The point of the waiver: a lint that keeps flagging correct code is one
+    // people learn to scroll past, which costs the signal on the real gaps.
+    expect(unscoped(appWithWaiver({ read: 'visibility follows the Ticket' }))).toHaveLength(0);
+  });
+
+  it('a waiver on a DIFFERENT operation does not silence @read', () => {
+    expect(unscoped(appWithWaiver({ delete: 'moderation only' }))).toHaveLength(1);
+  });
+});

@@ -10,6 +10,12 @@
  * heuristics.
  *
  * Checks:
+ *  - `unscoped-owned-entity` (warning) — a persisted entity that declares an
+ *    owner column (a relation to the `[identity]` entity) but no `@read`
+ *    directive. An undeclared policy is ALLOW-ALL, not deny-all, so every
+ *    viewer reads every row while the app looks authorization-aware. This is
+ *    the ratchet for the persona/authorization campaign: it measures how much
+ *    of the corpus is still unscoped without reddening `orb validate`.
  *  - `client-unbound-state-machine` — a trait owning a state machine that is
  *    in no page decl and not in any page's `@trait.X` embed closure. The
  *    client binds state machines exactly for page-declared traits plus that
@@ -88,6 +94,7 @@ import type {
   Effect,
   EventPayload,
   Orbital,
+  OrbitalEntity,
   OrbitalPage,
   OrbitalSchema,
   RenderBinding,
@@ -96,6 +103,7 @@ import type {
   Trait,
   TraitConfigValue,
 } from '@almadar/core';
+import { ownerFieldsFromSchema } from '@almadar/core/mock';
 import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
@@ -125,13 +133,20 @@ export interface WiringLintFinding {
     | 'payload-starved-route'
     | 'unclaimed-main-writer'
     | 'dead-lifecycle-action'
-    | 'embedded-sibling-single-referrer';
+    | 'embedded-sibling-single-referrer'
+    | 'unscoped-owned-entity';
   severity: WiringLintSeverity;
   orbital: string;
   trait: string;
   message: string;
   /** Ready-to-apply fix direction, phrased against the `.lolo` source. */
   suggestion: string;
+  /**
+   * Set when the finding is about an ENTITY rather than a trait
+   * (`unscoped-owned-entity`). `trait` then carries the entity name too, so
+   * existing consumers that print `trait` still show something meaningful.
+   */
+  entity?: string;
 }
 
 export interface WiringLintResult {
@@ -710,6 +725,51 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
       }
     }
 
+  }
+
+  // --- unscoped-owned-entity ---------------------------------------------
+  // Owner columns come from `ownerFieldsFromSchema`, which resolves them from
+  // the DECLARED relation to the `[identity]` entity — never by name matching,
+  // so it cannot scope the wrong column. Empty when the app declares no
+  // identity, which keeps every un-migrated app silent.
+  const ownerColumns = ownerFieldsFromSchema(schema);
+  if (ownerColumns.length > 0) {
+    const ownersByEntity = new Map<string, string[]>();
+    for (const pair of ownerColumns) {
+      const [entityName, fieldName] = pair.split('.');
+      if (entityName === undefined || fieldName === undefined) continue;
+      ownersByEntity.set(entityName, [...(ownersByEntity.get(entityName) ?? []), fieldName]);
+    }
+    for (const orb of schema.orbitals) {
+      for (const ref of [orb.entity, ...(orb.auxiliaryEntities ?? [])]) {
+        if (typeof ref !== 'object' || ref === null || !('fields' in ref)) continue;
+        const def = ref as OrbitalEntity;
+        const owners = ownersByEntity.get(def.name);
+        if (owners === undefined || owners.length === 0) continue;
+        if (def.read_policy !== undefined) continue;
+        // `@read none "<reason>"` — the author declared the omission and said
+        // why. Treat it as answered: a lint that keeps flagging correct code is
+        // one agents learn to scroll past.
+        if (def.access_waivers?.read !== undefined) continue;
+        findings.push({
+          check: 'unscoped-owned-entity',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: def.name,
+          entity: def.name,
+          message:
+            `${def.name} declares owner column(s) ${owners.map((f) => `\`${f}\``).join(', ')} ` +
+            `pointing at the [identity] entity, but no @read directive — and an undeclared policy is ` +
+            `ALLOW-ALL, not deny-all, so every viewer reads every row`,
+          suggestion:
+            `declare @read on ${def.name} scoping rows to the viewer, e.g. ` +
+            `@read ["=", (object/get @entity ${owners[0]}), @user.id] — or, when visibility genuinely ` +
+            `depends on a DIFFERENT entity (a membership/enrolment join a per-row predicate cannot ` +
+            `express), omit @read and state that reason in a comment on the entity, citing ` +
+            `R-ENTITY-ACCESS-NO-COLLECTION-AGGREGATE-BINDING`,
+        });
+      }
+    }
   }
 
   const errors = findings.filter((finding) => finding.severity === 'error').length;
