@@ -797,3 +797,45 @@ describe('lintWiring — dead-lifecycle-emit', () => {
     expect(result.findings.filter((f) => f.check === 'dead-lifecycle-emit')).toHaveLength(0);
   });
 });
+
+describe('lintWiring — dead-lifecycle-action reads registry-declared event props', () => {
+  const pageFor = (trait: string) => ({ name: 'P', path: '/p', traits: [{ ref: trait }] });
+  const traitRendering = (name: string, node: Record<string, unknown>) => ({
+    name,
+    stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [['render-ui', 'main', node]] }] },
+  });
+  const lifecycleFindings = (node: Record<string, unknown>) =>
+    lintWiring(
+      schemaWith({ name: 'O', traits: [traitRendering('T', node)], pages: [pageFor('T')] }),
+    ).findings.filter((f) => f.check === 'dead-lifecycle-action');
+
+  it('flags `action` — the shape the pre-widening rule already caught', () => {
+    expect(lifecycleFindings({ type: 'button', action: 'INIT' })).toHaveLength(1);
+  });
+
+  it("flags error-state's `retryEvent`/`onRetry` (the std-cms upload-failure retry)", () => {
+    expect(lifecycleFindings({ type: 'error-state', retryEvent: 'INIT', onRetry: 'INIT' })).toHaveLength(1);
+  });
+
+  it("flags form-section's `cancelEvent` (the std-form-advanced dead Cancel)", () => {
+    expect(lifecycleFindings({ type: 'form-section', cancelEvent: 'INIT' })).toHaveLength(1);
+  });
+
+  it("flags empty-state's `actionEvent` (the std-inventory 'Back to inventory')", () => {
+    expect(lifecycleFindings({ type: 'empty-state', actionEvent: 'LOAD' })).toHaveLength(1);
+  });
+
+  it('resolves the prop against the node type — an undeclared prop of the same name is not an affordance', () => {
+    expect(lifecycleFindings({ type: 'typography', retryEvent: 'INIT' })).toHaveLength(0);
+  });
+
+  it('leaves a first-class event on a declared prop alone', () => {
+    expect(lifecycleFindings({ type: 'error-state', retryEvent: 'RETRY', onRetry: 'RETRY' })).toHaveLength(0);
+  });
+
+  it('reads an event-list descriptor array through its declared eventField', () => {
+    expect(
+      lifecycleFindings({ type: 'data-grid', itemActions: [{ event: 'INIT', label: 'Refresh' }] }),
+    ).toHaveLength(1);
+  });
+});

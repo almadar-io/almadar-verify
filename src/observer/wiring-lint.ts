@@ -66,9 +66,15 @@
  *    chrome, and claimed embeds are excluded. Supersedes the v1-falsified
  *    ">1 boot writers" candidate (see `Almadar_Verification_Gaps.md`
  *    V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
- *  - `dead-lifecycle-action` — a rendered affordance (`action:` field or an
- *    `itemActions`-shaped descriptor) targeting a lifecycle event (`INIT`,
- *    `LOAD`, `$MOUNT`). The runtime never delivers lifecycle events from the
+ *  - `dead-lifecycle-action` — a rendered affordance targeting a lifecycle
+ *    event (`INIT`, `LOAD`, `$MOUNT`). The affordance set is registry-derived,
+ *    not a key list: `action:` plus every prop the node's own pattern declares
+ *    as an event outlet (`kind: "event" | "event-ref" | "callback"` —
+ *    `cancelEvent`, `retryEvent`, `onRetry`, …) and every `kind: "event-list"`
+ *    descriptor array, via `eventKeyPropsOf`/`eventListPropsOf`. Reading only
+ *    `action:` undercounted the class silently for every pattern that names its
+ *    outlet something else (`V-DEAD-LIFECYCLE-ACTION-MISSES-EVENT-PROPS`).
+ *    The runtime never delivers lifecycle events from the
  *    bus (`useTraitStateMachine` LIFECYCLE_EVENTS — correctly: a bare
  *    `UI:INIT` would broadcast a re-INIT into every trait on the page), so
  *    the control does nothing when clicked. The std-realtime-chat
@@ -120,7 +126,7 @@ import type {
   TraitConfigValue,
 } from '@almadar/core';
 import { ownerFieldsFromSchema } from '@almadar/core/mock';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -218,8 +224,17 @@ function asRecordNode(node: object): Readonly<Record<string, ScanNode>> {
   return node as Readonly<Record<string, ScanNode>>;
 }
 
-/** Events reachable as `action:` fields anywhere in the trait's render-ui
- *  trees or config values (inline buttons scope their emit to the composer). */
+/** Events reachable as an affordance prop anywhere in the trait's render-ui
+ *  trees or config values (inline buttons scope their emit to the composer).
+ *
+ *  Two sources, both declared:
+ *  - `action:` on any node — the shape every clickable core primitive uses,
+ *    read unscoped because it also appears in bare config descriptors that
+ *    carry no `type:` to resolve against;
+ *  - every OTHER prop the node's own pattern declares as an event outlet
+ *    (`eventKeyPropsOf` — `cancelEvent`, `retryEvent`, `onRetry`, …), resolved
+ *    against `type:` so the prop's meaning comes from the registry rather than
+ *    from its name. */
 function collectRenderActionEvents(trait: Trait): Set<string> {
   const out = new Set<string>();
   const scan = (node: ScanNode): void => {
@@ -232,6 +247,13 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
     const record = asRecordNode(node);
     const action = record['action'];
     if (typeof action === 'string' && action.length > 0) out.add(action);
+    const patternType = record['type'];
+    if (typeof patternType === 'string') {
+      for (const prop of eventKeyPropsOf(patternType)) {
+        const value = record[prop];
+        if (typeof value === 'string' && value.length > 0) out.add(value);
+      }
+    }
     for (const value of Object.values(record)) scan(value);
   };
   for (const transition of trait.stateMachine?.transitions ?? []) {
@@ -250,10 +272,15 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
 const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set(['INIT', 'LOAD', '$MOUNT']);
 
 /** Config keys whose arrays carry `{ event, label, … }` action descriptors
- *  that the substrate turns into bus-emitting affordances. `itemActions` is
+ *  that the substrate turns into bus-emitting affordances, for nodes that
+ *  carry no resolvable `type:` (bare config descriptors). `itemActions` is
  *  the grid/list contract; `agendaItemActions` (std-calendar agenda rows) and
  *  `detailActions` (std-browse master-detail record pane) forward to the same
- *  DOM-click emit path. */
+ *  DOM-click emit path but are NOT registry-declared as `kind: "event-list"`
+ *  (`S-EVENT-LIST-PROPS-UNDECLARED-IN-REGISTRY`), so they stay listed here.
+ *  Where a node does declare a `type:`, `eventListPropsOf` is authoritative
+ *  and covers the registry's `leftActions`/`rightActions`/`topBarActions`
+ *  siblings this list never knew about. */
 const ACTION_DESCRIPTOR_KEYS = ['itemActions', 'agendaItemActions', 'detailActions'] as const;
 
 /** Events declared in `itemActions`-shaped config arrays anywhere in the
@@ -268,7 +295,12 @@ function configItemActionEvents(trait: Trait): Set<string> {
     }
     if (typeof node !== 'object') return;
     const record = asRecordNode(node);
-    for (const key of ACTION_DESCRIPTOR_KEYS) {
+    const patternType = record['type'];
+    const declared =
+      typeof patternType === 'string' ? eventListPropsOf(patternType) : new Map<string, string>();
+    const keys = new Set<string>([...ACTION_DESCRIPTOR_KEYS, ...declared.keys()]);
+    for (const key of keys) {
+      const eventField = declared.get(key) ?? 'event';
       let actions = record[key];
       // Resolved orbs carry config values knob-wrapped ({ default, type });
       // the descriptor array lives under `default`.
@@ -278,7 +310,7 @@ function configItemActionEvents(trait: Trait): Set<string> {
       if (!Array.isArray(actions)) continue;
       for (const entry of actions) {
         if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
-          const event = asRecordNode(entry)['event'];
+          const event = asRecordNode(entry)[eventField];
           if (typeof event === 'string' && event.length > 0) out.add(event);
         }
       }
