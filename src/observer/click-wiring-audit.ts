@@ -2,11 +2,12 @@
  * `auditListens` — static audit of an orbital's `emits` → `listens` wiring.
  *
  * A trait's `emits {}` contract declares events it broadcasts for other
- * traits to react to. Each declared emit is "wired" when either the
- * emitting trait itself reacts to it (a self-transition on the same event
- * key) or some trait's `listens {}` block subscribes to it. An emit with
- * neither is a dead broadcast — the fix is always a `listens` line on the
- * consuming trait, never a heuristic guess.
+ * traits to react to. Each declared emit is "wired" when the emitting trait
+ * itself reacts to it (a self-transition on the same event key), when an
+ * embedding host up the embed chain does (embedded chrome emits under its
+ * embedder's scope), or when some trait's `listens {}` block subscribes to it.
+ * An emit with none of the three is a dead broadcast — the fix is always a
+ * `listens` line on the consuming trait, never a heuristic guess.
  *
  * Events emitted by a `fetch`/`persist` effect's `emit: { success, failure }`
  * option (see `collectEffectEmittedEvents`) are excluded: those are
@@ -23,6 +24,7 @@
  */
 
 import type { OrbitalSchema, TraitEventListener } from '@almadar/core';
+import { collectEmbeddedTraitReferrers } from '@almadar/core';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
 
 /** For each trait, the set of events its own state machine transitions on. */
@@ -75,13 +77,35 @@ export function buildDeclaredListeners(orbital: OrbitalSchema): Map<string, Set<
   return map;
 }
 
+/**
+ * Walk the embed chain upward from `trait`, in order, stopping on a cycle.
+ *
+ * Embedded chrome (a named `<trait.X />` embed or a compiler-lowered
+ * `Inline*Render` child) emits under its EMBEDDER's scope: the runtime's embed
+ * routing delivers the event to the host, never to a subscription on the
+ * child's own bus key. So a host's self-transition IS the child's wiring —
+ * `assertClickNoListener` has always credited it, and this audit not doing so
+ * was `T-AUDIT-LISTENS-INLINE-CHILD-FALSE-POSITIVE`.
+ */
+function embedHostChain(trait: string, hosts: ReadonlyMap<string, string>): string[] {
+  const chain: string[] = [];
+  const seen = new Set<string>([trait]);
+  for (let host = hosts.get(trait); host !== undefined && !seen.has(host); host = hosts.get(host)) {
+    seen.add(host);
+    chain.push(host);
+  }
+  return chain;
+}
+
 /** One trait's declared `emits` event, and whether anything reacts to it. */
 export interface ListensAuditEmitter {
   trait: string;
   event: string;
   wired: boolean;
   /** How it's wired, or null when unwired. */
-  via: 'self-transition' | 'listens' | null;
+  via: 'self-transition' | 'host-transition' | 'listens' | null;
+  /** The embedding host that handles it, when `via` is `'host-transition'`. */
+  host?: string;
 }
 
 export interface ListensAuditResult {
@@ -96,6 +120,7 @@ export interface ListensAuditResult {
 export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
   const traitTransitions = buildTraitTransitions(orbital);
   const declaredListeners = buildDeclaredListeners(orbital);
+  const embedHosts = collectEmbeddedTraitReferrers(orbital);
   const emitters: ListensAuditEmitter[] = [];
   const missing: ListensAuditResult['missing'] = [];
 
@@ -119,11 +144,20 @@ export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
 
         const selfHandled = selfEvents.has(event);
         const sources = declaredListeners.get(event);
+        const hostHandler = embedHostChain(traitName, embedHosts).find(
+          (host) => traitTransitions.get(host)?.has(event) === true || sources?.has(host) === true,
+        );
         const listenerHandled = sources !== undefined && (sources.has('*') || sources.has(traitName));
-        const wired = selfHandled || listenerHandled;
-        const via: ListensAuditEmitter['via'] = selfHandled ? 'self-transition' : listenerHandled ? 'listens' : null;
+        const wired = selfHandled || hostHandler !== undefined || listenerHandled;
+        const via: ListensAuditEmitter['via'] = selfHandled
+          ? 'self-transition'
+          : hostHandler !== undefined
+            ? 'host-transition'
+            : listenerHandled
+              ? 'listens'
+              : null;
 
-        emitters.push({ trait: traitName, event, wired, via });
+        emitters.push({ trait: traitName, event, wired, via, ...(hostHandler ? { host: hostHandler } : {}) });
         if (!wired) {
           missing.push({
             trait: traitName,

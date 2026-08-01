@@ -75,6 +75,22 @@
  *    "Back to chat" class (2026-07-29): 63 sites across 31 organisms used
  *    `action={INIT}` as a Back affordance on screens that replaced `main`,
  *    stranding the viewer with no way home.
+ *  - `dead-bodiless-action` — a state-CHANGING transition (`from !== to`) that
+ *    carries no effects at all. `get_state_render_effects` (orbital-core
+ *    `kernel.rs:530`) re-applies a state's render only in the no-transition
+ *    branch, so arriving in a state BY transition paints exactly what the arm
+ *    renders — nothing. The machine leaves the old state while the screen keeps
+ *    its paint, so every affordance routed to that arm is dead AND the surface
+ *    now disagrees with the state it is in. `dead-lifecycle-action` cannot see
+ *    this class: the target is a first-class user event, and the affordance
+ *    usually lives in a nested inline trait whose own machine has no such arm
+ *    (std-builder `SchemaPreview`'s "Back to Editor", found by hand 2026-08-01
+ *    while closing the D2 leftovers).
+ *  - `dead-lifecycle-emit` — an arm whose effects `(emit INIT|LOAD|$MOUNT)`.
+ *    The client publishes `UI:INIT` (`createClientEffectHandlers.ts:66`) but
+ *    subscribes to no lifecycle event (`useTraitStateMachine.ts:1854,1911`), so
+ *    the emit is dropped and whatever it meant to repaint never renders. The
+ *    Rust kernel has no such exclusion, so this is also a two-path divergence.
  *  - `embedded-sibling-single-referrer` — a trait embedded via `@trait.X` by
  *    more than one referrer in one orbital. Both resolvers materialise a
  *    sub-view PER EMBEDDER, so this can only mean the invariant broke: the
@@ -133,6 +149,8 @@ export interface WiringLintFinding {
     | 'payload-starved-route'
     | 'unclaimed-main-writer'
     | 'dead-lifecycle-action'
+    | 'dead-bodiless-action'
+    | 'dead-lifecycle-emit'
     | 'embedded-sibling-single-referrer'
     | 'unscoped-owned-entity';
   severity: WiringLintSeverity;
@@ -424,6 +442,72 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             `recut the screen as a modal overlay owned by a dedicated overlay trait (the std-realtime-chat ` +
             `ChatOverlayPanel shape), so dismissing is one (render-ui modal null) and main is never repainted`,
         });
+      }
+    }
+
+    // --- dead-bodiless-action --------------------------------------------
+    // `get_state_render_effects` re-applies a state's render ONLY in the
+    // no-transition branch, so entering a state BY transition paints exactly
+    // what that arm renders. An arm with no effects at all therefore paints
+    // nothing — the affordance pointing at it is as dead as one targeting INIT,
+    // and the lifecycle check above never sees it.
+    for (const [name, trait] of traits) {
+      if (!bound.has(name)) continue; // an unbound trait's arms never run at all
+      // States this trait actually paints. A lifecycle trait that renders
+      // nothing has no paint to strand, so its effect-less arms are not a
+      // defect — the finding only exists where a screen is left standing.
+      const painted = new Set(
+        (trait.stateMachine?.transitions ?? [])
+          .filter((transition) => (transition.effects ?? []).some((effect) => isMainSlotRenderUi(effect)))
+          .map((transition) => transition.to),
+      );
+      for (const arm of trait.stateMachine?.transitions ?? []) {
+        if (arm.from === arm.to) continue; // a self-transition leaves the current paint standing
+        if ((arm.effects ?? []).length > 0) continue;
+        if (!painted.has(arm.from)) continue;
+        findings.push({
+          check: 'dead-bodiless-action',
+          severity: 'error',
+          orbital: orb.name,
+          trait: name,
+          message:
+            `${name}: '${arm.event}' moves ${arm.from} -> ${arm.to} but carries no effects — the machine leaves ` +
+            `${arm.from} while the screen keeps ${arm.from}'s paint, so every affordance routed here is dead and ` +
+            `the surface now disagrees with the state it is in`,
+          suggestion:
+            `give the arm the body ${arm.to} should show — copy ${arm.to}'s INIT render (and its fetch, if any) ` +
+            `into the arm. An (emit INIT) is not a substitute: the bus never delivers lifecycle events`,
+        });
+      }
+    }
+
+    // --- dead-lifecycle-emit ---------------------------------------------
+    // `(emit INIT)` as a repaint: the client publishes `UI:INIT`
+    // (`createClientEffectHandlers.ts:66`) but nothing subscribes to it — both
+    // the self and bare-cascade subscription loops skip LIFECYCLE_EVENTS
+    // (`useTraitStateMachine.ts:1854,1911`). The arm therefore runs its sets
+    // and paints nothing. The Rust kernel has no such exclusion, so this also
+    // diverges between the two execution paths.
+    for (const [name, trait] of traits) {
+      for (const arm of trait.stateMachine?.transitions ?? []) {
+        for (const effect of arm.effects ?? []) {
+          if (!Array.isArray(effect) || effect[0] !== 'emit') continue;
+          const event = effect[1];
+          if (typeof event !== 'string' || !LIFECYCLE_EVENTS.has(event)) continue;
+          findings.push({
+            check: 'dead-lifecycle-emit',
+            severity: 'error',
+            orbital: orb.name,
+            trait: name,
+            message:
+              `${name}: '${arm.event}' (${arm.from} -> ${arm.to}) emits '${event}' — the client subscribes to no ` +
+              `lifecycle event, so the emit is dropped and whatever it was meant to repaint never renders ` +
+              `(the Rust kernel has no such exclusion, so the two paths also disagree)`,
+            suggestion:
+              `render inline instead: put the body '${event}' would have painted directly in this arm. If the ` +
+              `intent was to re-run a fetch, carry the (fetch …) here too`,
+          });
+        }
       }
     }
 

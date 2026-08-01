@@ -1,27 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import type { OrbitalSchema } from '@almadar/core';
+import type { Effect, OrbitalSchema, StateMachine, Trait, Transition } from '@almadar/core';
 import { auditListens } from '../click-wiring-audit.js';
+
+/** A complete `StateMachine` from just its transitions — states and events are
+ *  derivable, and spelling them out per fixture obscures what each test is about. */
+function machine(transitions: Transition[]): StateMachine {
+  const states = [...new Set(transitions.flatMap((t) => [t.from, t.to].flat()))];
+  const events = [...new Set(transitions.map((t) => t.event))];
+  return {
+    states: states.map((name, i) => ({ name, isInitial: i === 0 })),
+    events: events.map((key) => ({ key, name: key })),
+    transitions,
+  };
+}
+
+/** A trait with only the fields this audit reads; `scope` is the one other required field. */
+function trait(fields: Omit<Trait, 'scope'>): Trait {
+  return { scope: 'collection', ...fields };
+}
+
+/** One orbital holding `traits`; the audit never reads the entity or pages. */
+function schema(traits: Trait[]): OrbitalSchema {
+  return {
+    name: 'AuditFixture',
+    orbitals: [{ name: 'Fixture', entity: 'Note', traits, pages: [] }],
+  };
+}
 
 describe('auditListens', () => {
   it('wires a declared emit picked up by a listens block', () => {
-    const orbital = {
-      orbitals: [
-        {
-          traits: [
-            {
-              name: 'Browse',
-              stateMachine: { transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing' }] },
-              emits: [{ event: 'REQUEST_DELETE', scope: 'internal' }],
-            },
-            {
-              name: 'Delete',
-              stateMachine: { transitions: [{ from: 'idle', event: 'DELETE', to: 'confirming' }] },
-              listens: [{ event: 'REQUEST_DELETE', triggers: 'DELETE', source: { kind: 'trait', trait: 'Browse' } }],
-            },
-          ],
-        },
-      ],
-    } as unknown as OrbitalSchema;
+    const orbital = schema([
+      trait({
+        name: 'Browse',
+        stateMachine: machine([{ from: 'browsing', event: 'INIT', to: 'browsing' }]),
+        emits: [{ event: 'REQUEST_DELETE', scope: 'internal' }],
+      }),
+      trait({
+        name: 'Delete',
+        stateMachine: machine([{ from: 'idle', event: 'DELETE', to: 'confirming' }]),
+        listens: [
+          { event: 'REQUEST_DELETE', triggers: 'DELETE', source: { kind: 'trait', trait: 'Browse' } },
+        ],
+      }),
+    ]);
 
     const result = auditListens(orbital);
     expect(result.missing).toEqual([]);
@@ -31,19 +52,13 @@ describe('auditListens', () => {
   });
 
   it('wires a declared emit the emitting trait handles itself (self-transition)', () => {
-    const orbital = {
-      orbitals: [
-        {
-          traits: [
-            {
-              name: 'Timer',
-              stateMachine: { transitions: [{ from: 'running', event: 'PAUSE', to: 'paused' }] },
-              emits: [{ event: 'PAUSE', scope: 'internal' }],
-            },
-          ],
-        },
-      ],
-    } as unknown as OrbitalSchema;
+    const orbital = schema([
+      trait({
+        name: 'Timer',
+        stateMachine: machine([{ from: 'running', event: 'PAUSE', to: 'paused' }]),
+        emits: [{ event: 'PAUSE', scope: 'internal' }],
+      }),
+    ]);
 
     const result = auditListens(orbital);
     expect(result.missing).toEqual([]);
@@ -53,55 +68,99 @@ describe('auditListens', () => {
   });
 
   it('flags a declared emit with no self-transition and no listener, suggesting the listens fix', () => {
-    const orbital = {
-      orbitals: [
-        {
-          traits: [
-            {
-              name: 'Browse',
-              stateMachine: { transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing' }] },
-              emits: [{ event: 'ORPHAN_EVENT', scope: 'internal' }],
-            },
-          ],
-        },
-      ],
-    } as unknown as OrbitalSchema;
+    const orbital = schema([
+      trait({
+        name: 'Browse',
+        stateMachine: machine([{ from: 'browsing', event: 'INIT', to: 'browsing' }]),
+        emits: [{ event: 'ORPHAN_EVENT', scope: 'internal' }],
+      }),
+    ]);
 
     const result = auditListens(orbital);
     expect(result.emitters).toEqual([
       { trait: 'Browse', event: 'ORPHAN_EVENT', wired: false, via: null },
     ]);
     expect(result.missing).toEqual([
-      { trait: 'Browse', event: 'ORPHAN_EVENT', suggestion: 'listens { Browse.ORPHAN_EVENT -> ORPHAN_EVENT }' },
+      {
+        trait: 'Browse',
+        event: 'ORPHAN_EVENT',
+        suggestion: 'listens { Browse.ORPHAN_EVENT -> ORPHAN_EVENT }',
+      },
     ]);
   });
 
+  // T-AUDIT-LISTENS-INLINE-CHILD-FALSE-POSITIVE: an `Inline*Render` child
+  // emits under its embedder's scope, so the HOST's self-transition is the
+  // child's wiring. The audit used to report every such button unwired and
+  // suggest a `listens` line that must never be applied.
+  it('wires an embedded child whose host carries the transition', () => {
+    const renderEmbed: Effect = ['render-ui', 'modal', '@trait.InlineButtonRender5'];
+    const orbital = schema([
+      trait({
+        name: 'NoteOverlayPanel',
+        stateMachine: machine([
+          { from: 'idle', event: 'CLOSE_OVERLAY', to: 'idle', effects: [renderEmbed] },
+        ]),
+      }),
+      trait({
+        name: 'InlineButtonRender5',
+        config: { action: { type: 'string', default: 'CLOSE_OVERLAY' } },
+        emits: [{ event: 'CLOSE_OVERLAY', scope: 'internal' }],
+      }),
+    ]);
+
+    const result = auditListens(orbital);
+    expect(result.missing).toEqual([]);
+    expect(result.emitters).toEqual([
+      {
+        trait: 'InlineButtonRender5',
+        event: 'CLOSE_OVERLAY',
+        wired: true,
+        via: 'host-transition',
+        host: 'NoteOverlayPanel',
+      },
+    ]);
+  });
+
+  it('still flags an embedded child no host anywhere up the chain handles', () => {
+    const renderEmbed: Effect = ['render-ui', 'main', '@trait.InlineButtonRender1'];
+    const orbital = schema([
+      trait({
+        name: 'Panel',
+        stateMachine: machine([{ from: 'idle', event: 'INIT', to: 'idle', effects: [renderEmbed] }]),
+      }),
+      trait({
+        name: 'InlineButtonRender1',
+        config: { action: { type: 'string', default: 'ORPHAN_EVENT' } },
+        emits: [{ event: 'ORPHAN_EVENT', scope: 'internal' }],
+      }),
+    ]);
+
+    const result = auditListens(orbital);
+    expect(result.emitters).toEqual([
+      { trait: 'InlineButtonRender1', event: 'ORPHAN_EVENT', wired: false, via: null },
+    ]);
+    expect(result.missing).toHaveLength(1);
+  });
+
   it('excludes fetch/persist success|failure auto-emits (never button-ish)', () => {
-    const orbital = {
-      orbitals: [
-        {
-          traits: [
-            {
-              name: 'Circuit',
-              stateMachine: {
-                transitions: [
-                  {
-                    from: 'closed',
-                    event: 'INIT',
-                    to: 'closed',
-                    effects: [['fetch', 'Node', { emit: { success: 'NodeLoaded', failure: 'NodeLoadFailed' } }]],
-                  },
-                ],
-              },
-              emits: [
-                { event: 'NodeLoaded', scope: 'internal' },
-                { event: 'NodeLoadFailed', scope: 'internal' },
-              ],
-            },
-          ],
-        },
-      ],
-    } as unknown as OrbitalSchema;
+    const fetchEffect: Effect = [
+      'fetch',
+      'Node',
+      { emit: { success: 'NodeLoaded', failure: 'NodeLoadFailed' } },
+    ];
+    const orbital = schema([
+      trait({
+        name: 'Circuit',
+        stateMachine: machine([
+          { from: 'closed', event: 'INIT', to: 'closed', effects: [fetchEffect] },
+        ]),
+        emits: [
+          { event: 'NodeLoaded', scope: 'internal' },
+          { event: 'NodeLoadFailed', scope: 'internal' },
+        ],
+      }),
+    ]);
 
     const result = auditListens(orbital);
     expect(result.emitters).toEqual([]);

@@ -700,3 +700,100 @@ describe('lintWiring — unscoped-owned-entity respects a declared waiver', () =
     expect(unscoped(appWithWaiver({ delete: 'moderation only' }))).toHaveLength(1);
   });
 });
+
+describe('lintWiring — dead-bodiless-action', () => {
+  const painted = (slot: string) => ['render-ui', slot, { type: 'stack', children: [] }];
+
+  it('flags a state-changing arm with no effects, on a state this trait paints', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'PreviewOrbital',
+        traits: [
+          {
+            name: 'SchemaPreview',
+            stateMachine: {
+              transitions: [
+                { from: 'loading', event: 'PREVIEW_ERROR', to: 'error', effects: [painted('main')] },
+                { from: 'error', event: 'START_PREVIEW', to: 'loading', effects: [] },
+              ],
+            },
+          },
+        ],
+        pages: [{ name: 'PreviewPage', path: '/preview', traits: [{ ref: 'SchemaPreview' }] }],
+      }),
+    );
+    const found = result.findings.filter((f) => f.check === 'dead-bodiless-action');
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('error -> loading');
+  });
+
+  it('does not flag a lifecycle trait that paints nothing, nor a bodiless self-transition', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'PreviewOrbital',
+        traits: [
+          {
+            name: 'ProjectErasure',
+            stateMachine: {
+              transitions: [
+                { from: 'execScanning', event: 'ExecScanLoaded', to: 'idle', effects: [] },
+                { from: 'idle', event: 'STOP', to: 'idle', effects: [] },
+              ],
+            },
+          },
+        ],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'ProjectErasure' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'dead-bodiless-action')).toHaveLength(0);
+  });
+});
+
+describe('lintWiring — dead-lifecycle-emit', () => {
+  it('flags (emit INIT) used as a repaint', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'PreviewOrbital',
+        traits: [
+          {
+            name: 'SchemaPreview',
+            stateMachine: {
+              transitions: [
+                {
+                  from: 'previewing',
+                  event: 'STOP_PREVIEW',
+                  to: 'idle',
+                  effects: [['set', '@entity.isRunning', false], ['emit', 'INIT']],
+                },
+              ],
+            },
+          },
+        ],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'SchemaPreview' }] }],
+      }),
+    );
+    const found = result.findings.filter((f) => f.check === 'dead-lifecycle-emit');
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain("emits 'INIT'");
+  });
+
+  it('leaves a normal (emit X) alone', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'PreviewOrbital',
+        traits: [
+          {
+            name: 'SchemaPreview',
+            stateMachine: {
+              transitions: [
+                { from: 'previewing', event: 'STOP_PREVIEW', to: 'idle', effects: [['emit', 'PREVIEW_STOPPED']] },
+              ],
+            },
+          },
+        ],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'SchemaPreview' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'dead-lifecycle-emit')).toHaveLength(0);
+  });
+});
