@@ -371,7 +371,15 @@ function embeddedTraitRefs(effects: ReadonlyArray<Effect> | undefined): Set<stri
   return out;
 }
 
-/** Every event a trait can fire from its own config — `events { ACTION: X }`. */
+/**
+ * Every event an embedded trait can fire — what it declares in `emits`, plus
+ * any affordance in its own config.
+ *
+ * `events { ACTION: CONFIRM_VOID_CLICKED }` on the call site is a RENAME, and
+ * resolve has already applied it: the button's `emits` carries the renamed
+ * event by the time the lint sees it. So `emits` is the honest source here, not
+ * the rename map.
+ */
 function configAffordanceEvents(trait: Trait): Set<string> {
   const out = new Set<string>();
   const scan = (node: ScanNode): void => {
@@ -396,10 +404,8 @@ function configAffordanceEvents(trait: Trait): Set<string> {
     for (const value of Object.values(record)) scan(value);
   };
   if (trait.config) scan(trait.config);
-  // `events { ACTION: CONFIRM_VOID_CLICKED }` — the component's event slot is
-  // the key, the app event it fires is the value.
-  for (const value of Object.values(trait.events ?? {})) {
-    if (typeof value === 'string' && value.length > 0) out.add(value);
+  for (const emit of trait.emits ?? []) {
+    if (typeof emit.event === 'string' && emit.event.length > 0) out.add(emit.event);
   }
   return out;
 }
