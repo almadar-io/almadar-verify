@@ -487,17 +487,26 @@ function mainWriteOffersAWayOn(body: ScanNode, traits: ReadonlyMap<string, Trait
  *  routing both skip them). A rendered affordance targeting one is dead. */
 const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set(['INIT', 'LOAD', '$MOUNT']);
 
-/** Config keys whose arrays carry `{ event, label, … }` action descriptors
- *  that the substrate turns into bus-emitting affordances, for nodes that
- *  carry no resolvable `type:` (bare config descriptors). `itemActions` is
- *  the grid/list contract; `agendaItemActions` (std-calendar agenda rows) and
- *  `detailActions` (std-browse master-detail record pane) forward to the same
- *  DOM-click emit path but are NOT registry-declared as `kind: "event-list"`
- *  (`S-EVENT-LIST-PROPS-UNDECLARED-IN-REGISTRY`), so they stay listed here.
- *  Where a node does declare a `type:`, `eventListPropsOf` is authoritative
- *  and covers the registry's `leftActions`/`rightActions`/`topBarActions`
- *  siblings this list never knew about. */
-const ACTION_DESCRIPTOR_KEYS = ['itemActions', 'agendaItemActions', 'detailActions'] as const;
+/** An action-descriptor array is recognised STRUCTURALLY, not by name: a
+ *  config array whose entries are objects carrying an `event` string is what
+ *  the substrate turns into bus-emitting affordances. That is the source tag.
+ *  The old hardcoded `['itemActions','agendaItemActions','detailActions']`
+ *  list is gone — it silently missed every knob nobody thought to add
+ *  (`S-EVENT-LIST-PROPS-UNDECLARED-IN-REGISTRY`). Where a node declares a
+ *  `type:`, `eventListPropsOf` stays authoritative, because the registry is
+ *  the only thing that knows a descriptor's event field is named something
+ *  other than `event`.
+ */
+function descriptorEvents(value: unknown, eventField: string): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const event = asRecordNode(entry)[eventField];
+    if (typeof event === 'string' && event.length > 0) out.push(event);
+  }
+  return out;
+}
 
 /** Events declared in `itemActions`-shaped config arrays anywhere in the
  *  trait's config tree (`[{ event, label, … }]`). */
@@ -514,22 +523,14 @@ function configItemActionEvents(trait: Trait): Set<string> {
     const patternType = record['type'];
     const declared =
       typeof patternType === 'string' ? eventListPropsOf(patternType) : new Map<string, string>();
-    const keys = new Set<string>([...ACTION_DESCRIPTOR_KEYS, ...declared.keys()]);
-    for (const key of keys) {
-      const eventField = declared.get(key) ?? 'event';
-      let actions = record[key];
+    for (const [key, raw] of Object.entries(record)) {
       // Resolved orbs carry config values knob-wrapped ({ default, type });
       // the descriptor array lives under `default`.
-      if (actions !== null && typeof actions === 'object' && !Array.isArray(actions)) {
-        actions = asRecordNode(actions)['default'];
-      }
-      if (!Array.isArray(actions)) continue;
-      for (const entry of actions) {
-        if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
-          const event = asRecordNode(entry)[eventField];
-          if (typeof event === 'string' && event.length > 0) out.add(event);
-        }
-      }
+      const actions =
+        raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+          ? asRecordNode(raw)['default']
+          : raw;
+      for (const event of descriptorEvents(actions, declared.get(key) ?? 'event')) out.add(event);
     }
     for (const value of Object.values(record)) scan(value);
   };
