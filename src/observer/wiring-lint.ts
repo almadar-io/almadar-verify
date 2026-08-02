@@ -157,6 +157,7 @@ export interface WiringLintFinding {
     | 'dead-lifecycle-action'
     | 'dead-bodiless-action'
     | 'dead-lifecycle-emit'
+    | 'mutation-affordance-never-persists'
     | 'embedded-sibling-single-referrer'
     | 'unscoped-owned-entity';
   severity: WiringLintSeverity;
@@ -252,6 +253,50 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
       for (const prop of eventKeyPropsOf(patternType)) {
         const value = record[prop];
         if (typeof value === 'string' && value.length > 0) out.add(value);
+      }
+    }
+    for (const value of Object.values(record)) scan(value);
+  };
+  for (const transition of trait.stateMachine?.transitions ?? []) {
+    for (const effect of transition.effects ?? []) {
+      if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
+    }
+  }
+  if (trait.config) scan(trait.config);
+  return out;
+}
+
+/**
+ * Rendered affordances as `(event, label)` pairs — buttons and action
+ * descriptors that carry BOTH a target event and user-visible text.
+ *
+ * The label is what makes `mutation-affordance-never-persists` safe to run:
+ * plenty of arms legitimately only re-fetch or navigate, so the check keys on
+ * controls whose own wording promises something durable ("Archive", "Publish").
+ * Without that, the rule flags every read-only affordance in the corpus.
+ */
+function labelledAffordances(trait: Trait): Array<readonly [string, string]> {
+  const out: Array<readonly [string, string]> = [];
+  const scan = (node: ScanNode): void => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      for (const child of node) scan(child);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const record = asRecordNode(node);
+    const label = record['label'];
+    if (typeof label === 'string' && label.length > 0) {
+      const action = record['action'];
+      if (typeof action === 'string' && action.length > 0) out.push([action, label] as const);
+      const event = record['event'];
+      if (typeof event === 'string' && event.length > 0) out.push([event, label] as const);
+      const patternType = record['type'];
+      if (typeof patternType === 'string') {
+        for (const prop of eventKeyPropsOf(patternType)) {
+          const value = record[prop];
+          if (typeof value === 'string' && value.length > 0) out.push([value, label] as const);
+        }
       }
     }
     for (const value of Object.values(record)) scan(value);
@@ -509,6 +554,87 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
           suggestion:
             `give the arm the body ${arm.to} should show — copy ${arm.to}'s INIT render (and its fetch, if any) ` +
             `into the arm. An (emit INIT) is not a substitute: the bus never delivers lifecycle events`,
+        });
+      }
+    }
+
+    // --- mutation-affordance-never-persists ------------------------------
+    // A control wired to a real, deliverable event whose arm chain reaches no
+    // `persist`. Neither sibling check can see it: `dead-lifecycle-action`
+    // needs a lifecycle target, `dead-bodiless-action` needs an EMPTY effects
+    // list — these arms have effects, just not durable ones. Verified live 7+
+    // times (std-moderation-rule ARCHIVE_RULE, std-help-{article,category}
+    // PUBLISH/ARCHIVE, std-donation-receipt, std-donor, std-time-tracking ×3),
+    // each a button whose spinner claims to save and does not.
+    //
+    // Deliberately narrow, to stay quiet on the legitimate shapes: only
+    // affordances whose LABEL names a mutation are considered, and an arm that
+    // reaches a persist *transitively* (via an event it emits, within this
+    // trait) counts as persisting.
+    // The chain is ORBITAL-WIDE, not per-trait: the corpus idiom is a modal
+    // emitting SAVE, a sibling persistor `listens { Modal.SAVE -> DO_CREATE }`,
+    // and the persist living on DO_CREATE. A per-trait walk flags every one of
+    // those as dead. So close over emits AND listens across all traits to a
+    // fixpoint, then ask whether the affordance's event reaches a persist.
+    const hasPersist = (effects: ReadonlyArray<Effect> | undefined): boolean =>
+      (effects ?? []).some((e) => Array.isArray(e) && typeof e[0] === 'string' && e[0].startsWith('persist'));
+    const persisting = new Set<string>();
+    for (const [, trait] of traits) {
+      for (const arm of trait.stateMachine?.transitions ?? []) {
+        if (hasPersist(arm.effects)) persisting.add(arm.event);
+      }
+    }
+    for (let pass = 0; pass < 8; pass++) {
+      const before = persisting.size;
+      for (const [, trait] of traits) {
+        // a listens route `Source.EVENT -> LOCAL`: firing EVENT triggers LOCAL
+        for (const listen of trait.listens ?? []) {
+          const local = listen.triggers;
+          if (typeof local === 'string' && persisting.has(local) && typeof listen.event === 'string') {
+            persisting.add(listen.event);
+          }
+        }
+        for (const arm of trait.stateMachine?.transitions ?? []) {
+          if (persisting.has(arm.event)) continue;
+          for (const effect of arm.effects ?? []) {
+            if (!Array.isArray(effect) || effect[0] !== 'emit') continue;
+            const emitted = effect[1];
+            if (typeof emitted === 'string' && persisting.has(emitted)) {
+              persisting.add(arm.event);
+              break;
+            }
+          }
+        }
+      }
+      if (persisting.size === before) break;
+    }
+    // Only labels that PROMISE durability. "Cancel"/"Close"/"Back" abort a flow
+    // and are correct with no persist; including them made the first draft of
+    // this check flag 10 controls in one file, all of them fine.
+    const MUTATING_LABEL = /^(archive|publish|unpublish|deactivate|retire|void|revoke|issue)\b/i;
+    for (const [name, trait] of traits) {
+      if (!bound.has(name)) continue;
+      const arms = trait.stateMachine?.transitions ?? [];
+      const seen = new Set<string>();
+      for (const [event, label] of labelledAffordances(trait)) {
+        if (LIFECYCLE_EVENTS.has(event)) continue;           // dead-lifecycle-action owns these
+        if (!MUTATING_LABEL.test(label)) continue;
+        if (!arms.some((a) => a.event === event)) continue;  // unhandled: a different class
+        if (persisting.has(event)) continue;
+        if (seen.has(event)) continue;                        // one finding per control
+        seen.add(event);
+        findings.push({
+          check: 'mutation-affordance-never-persists',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: name,
+          message:
+            `${name}: '${label}' fires '${event}', and no arm reachable from it anywhere in this orbital ` +
+            `persists — the control is delivered and handled, but nothing durable happens, so the change ` +
+            `is lost on reload`,
+          suggestion:
+            `give the arm a (persist create|update|delete …), or route it into the arm that already ` +
+            `persists. A re-fetch is not a save: it re-reads the row the click was supposed to change`,
         });
       }
     }
