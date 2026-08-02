@@ -126,7 +126,7 @@ import type {
   TraitConfigValue,
 } from '@almadar/core';
 import { ownerFieldsFromSchema } from '@almadar/core/mock';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isInlineTrait, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -158,6 +158,7 @@ export interface WiringLintFinding {
     | 'dead-bodiless-action'
     | 'dead-lifecycle-emit'
     | 'mutation-affordance-never-persists'
+    | 'viewer-stranded'
     | 'embedded-sibling-single-referrer'
     | 'unscoped-owned-entity';
   severity: WiringLintSeverity;
@@ -310,6 +311,77 @@ function labelledAffordances(trait: Trait): Array<readonly [string, string]> {
   return out;
 }
 
+/**
+ * Does this `main` body still offer the viewer a way on?
+ *
+ * JSX hoists every inline component into its own `@trait.InlineXRenderN`, so
+ * the payload is mostly `"@trait.…"` strings and a naive scan sees no props.
+ * Three things count, and the first two are why the pre-contract drafts of
+ * this rule flagged 832 and 672 arms respectively:
+ *   1. a DATA SURFACE — a pattern the registry gives a `kind: "entity"` prop.
+ *      Its rows ARE the navigation.
+ *   2. a LABELLED control — an event paired with visible text. Labelless does
+ *      not count: `EmptyState.ACTION` with no `actionLabel` declares an event
+ *      and renders no button, which is the dead affordance being hunted.
+ *   3. a NON-INLINE sibling embed, which brings its own surface.
+ */
+function mainWriteOffersAWayOn(body: ScanNode, traits: ReadonlyMap<string, Trait>): boolean {
+  const visited = new Set<string>();
+  const LABEL_KEYS = ['label', 'actionLabel', 'submitLabel', 'cancelLabel'] as const;
+  let found = false;
+
+  const scan = (node: ScanNode): void => {
+    if (found || node === null || node === undefined) return;
+    if (typeof node === 'string') {
+      if (!node.startsWith('@trait.')) return;
+      const name = node.slice('@trait.'.length);
+      const embedded = traits.get(name);
+      if (embedded === undefined) return;
+      if (!isInlineTrait(embedded)) { found = true; return; }
+      if (visited.has(name)) return;
+      visited.add(name);
+      for (const transition of embedded.stateMachine?.transitions ?? []) {
+        for (const effect of transition.effects ?? []) {
+          if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
+        }
+      }
+      if (embedded.config) scan(embedded.config);
+      return;
+    }
+    if (Array.isArray(node)) { for (const child of node) scan(child); return; }
+    if (typeof node !== 'object') return;
+    const record = asRecordNode(node);
+    const patternType = record['type'];
+    if (typeof patternType === 'string' && isContentBodyPatternType(patternType)) { found = true; return; }
+    // A label must be VISIBLE TEXT. `actionLabel: "@config.actionLabel"` is an
+    // unresolved forward with no default — `orbital resolve` leaves the sigil
+    // in place and the control never renders, which is the dead affordance
+    // being hunted, not an exit. Counting it made the check silent on a file
+    // that provably carried the defect.
+    const labelled = LABEL_KEYS.some((key) => {
+      const value = record[key];
+      return typeof value === 'string' && value.length > 0 && !value.startsWith('@') && !value.startsWith('?');
+    });
+    if (labelled) {
+      for (const key of ['action', 'event']) {
+        const value = record[key];
+        if (typeof value === 'string' && value.length > 0 && !LIFECYCLE_EVENTS.has(value)) found = true;
+      }
+      if (!found && typeof patternType === 'string') {
+        for (const prop of eventKeyPropsOf(patternType)) {
+          const value = record[prop];
+          if (typeof value === 'string' && value.length > 0 && !LIFECYCLE_EVENTS.has(value)) { found = true; break; }
+        }
+      }
+    }
+    if (found) return;
+    for (const value of Object.values(record)) scan(value);
+  };
+
+  scan(body);
+  return found;
+}
+
 /** Mount-time events the runtime fires internally, once per trait, and
  *  deliberately never delivers from the bus (`useTraitStateMachine`
  *  LIFECYCLE_EVENTS — the qualified self-subscription and the bare-cascade
@@ -435,18 +507,6 @@ function clientBoundTraits(orb: Orbital, adjacency: ReadonlyMap<string, Readonly
   return bound;
 }
 
-/** True when the trait has a content-grade `main` render anywhere in its
- *  transition/tick/initial effects (descends into `if` branches). The
- *  content-grade classification itself lives in `@almadar/core`
- *  (`isContentBodyPattern`) — single owner, no local lists. */
-function isContentMainWriter(trait: Trait): boolean {
-  return (
-    (trait.stateMachine?.transitions ?? []).some((transition) => writesContentMain(transition.effects)) ||
-    (trait.ticks ?? []).some((tick) => writesContentMain(tick.effects)) ||
-    writesContentMain(trait.initialEffects)
-  );
-}
-
 /** True when this one effect list paints a content-grade body into `main`,
  *  including through `if` branches. Shared by the trait-level writer test and
  *  the per-transition steady-state test. */
@@ -471,6 +531,9 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     if (pages.length === 0) continue;
 
     const adjacency = collectTraitEmbedAdjacency(orb);
+    // The content channel — config-slot `@trait.X` edges. Feeds both the
+    // page-content-owner contract (viewer-stranded) and unclaimed-main-writer.
+    const channelAdj = collectTraitConfigRefAdjacency(orb);
     const bound = clientBoundTraits(orb, adjacency);
     const producible = new Map<string, Set<string>>();
     for (const [name, trait] of traits) producible.set(name, producibleEvents(trait));
@@ -636,6 +699,128 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             `give the arm a (persist create|update|delete …), or route it into the arm that already ` +
             `persists. A re-fetch is not a save: it re-reads the row the click was supposed to change`,
         });
+      }
+    }
+
+    // --- viewer-stranded ---------------------------------------------------
+    // The CONTENT OWNER of a page repaints its own region, on a user-triggered
+    // arm, with a body offering no way on. That owner gate is the whole rule:
+    // without it (three calibrations, 832 -> 672 -> 135 findings) a std-filter
+    // arm re-rendering its own filter surface reads as a dead end, and the
+    // FINISHED exemplar std-helpdesk came back dirty. `resolvePageContentOwner`
+    // (`@almadar/core`) supplies the missing fact.
+    //
+    // "User-triggered" is derived, never guessed from the event's name: the
+    // event must be rendered as an affordance somewhere in this orbital, or be
+    // routed from one by a `listens` line. That excludes lifecycle mounts and
+    // every `*Loaded`/`*Failed` async result by construction.
+    // An event a trait PRODUCES, minus the ones a fetch/persist produces as its
+    // own result. Seeding from rendered affordances alone was silently inert:
+    // `notificationClickEvent: EMPLOYEE_NOTIFICATIONS_OPEN` is a config value on
+    // a node whose `type:` is itself a config forward, so `eventKeyPropsOf` can
+    // resolve nothing and the event was never collected — the check found zero
+    // on a file that provably carried the defect. Proven by a positive control:
+    // the pre-fix `std-hr-portal` must report its strand.
+    const asyncResults = new Set<string>();
+    for (const [, trait] of traits) {
+      for (const event of collectEffectEmittedEvents(trait.stateMachine?.transitions ?? [])) {
+        asyncResults.add(event);
+      }
+    }
+    // Everything anything in this orbital can fire, async results included — a
+    // fetch's success event is a perfectly good way out of a loading screen.
+    const allProducible = new Set<string>(asyncResults);
+    for (const [, trait] of traits) {
+      for (const event of producibleEvents(trait)) allProducible.add(event);
+      for (const listen of trait.listens ?? []) {
+        if (typeof listen.triggers === 'string') allProducible.add(listen.triggers);
+      }
+    }
+    const affordanceEvents = new Set<string>();
+    const admit = (event: unknown): void => {
+      if (typeof event !== 'string' || event.length === 0) return;
+      if (asyncResults.has(event) || LIFECYCLE_EVENTS.has(event)) return;
+      affordanceEvents.add(event);
+    };
+    for (const [, trait] of traits) {
+      for (const event of producibleEvents(trait)) admit(event);
+      // A `listens { Source.EVENT -> LOCAL }` route DECLARES that Source
+      // produces EVENT — the one place a chrome event survives resolution. A
+      // renamed layout event (`notificationClickEvent: X_NOTIFICATIONS_OPEN`)
+      // lands in config as `{default: "…", type: "unknown"}`, so `eventKeyPropsOf`
+      // can resolve nothing and the atom's own `emits` comes back empty.
+      for (const listen of trait.listens ?? []) admit(listen.event);
+    }
+    for (let pass = 0; pass < 8; pass++) {
+      const before = affordanceEvents.size;
+      for (const [, trait] of traits) {
+        for (const listen of trait.listens ?? []) {
+          if (typeof listen.event !== 'string' || !affordanceEvents.has(listen.event)) continue;
+          if (typeof listen.triggers === 'string') affordanceEvents.add(listen.triggers);
+        }
+      }
+      if (affordanceEvents.size === before) break;
+    }
+    const owners = new Set<string>();
+    for (const page of pages) {
+      const owner = resolvePageContentOwner(page, traits, channelAdj, adjacency);
+      // `ambiguous` is deliberately NOT an owner: two content bodies on one page
+      // is the `unclaimed-main-writer` class, reported there, and picking one
+      // here is exactly the guess this contract exists to stop.
+      if (owner.kind === 'channel' || owner.kind === 'sole-writer') owners.add(owner.trait);
+    }
+    for (const name of owners) {
+      const trait = traits.get(name);
+      if (trait === undefined) continue;
+      const seen = new Set<string>();
+      for (const arm of trait.stateMachine?.transitions ?? []) {
+        const event = arm.event;
+        if (typeof event !== 'string' || LIFECYCLE_EVENTS.has(event)) continue;
+        if (!affordanceEvents.has(event) || seen.has(event)) continue;
+        // TRANSIENT screens are not strands. Two ways an exit-less body is
+        // legitimately temporary:
+        //   - the arm itself runs a fetch/persist, whose result arm repaints;
+        //   - the arm LEAVES for another state that handles some other event
+        //     something in this orbital actually produces (std-builder's
+        //     "Starting preview runtime…" waits on a sibling's
+        //     `(emit PREVIEW_STARTED)`, not on a fetch).
+        // A SELF-transition gets no such credit: you were already in that
+        // state, so its other arms were reachable before the click too.
+        if ((arm.effects ?? []).some((e) => Array.isArray(e) && (e[0] === 'fetch' || e[0] === 'persist'))) continue;
+        if (arm.from !== arm.to) {
+          const escapes = (trait.stateMachine?.transitions ?? []).some(
+            (other) =>
+              other.from === arm.to &&
+              typeof other.event === 'string' &&
+              other.event !== event &&
+              !LIFECYCLE_EVENTS.has(other.event) &&
+              allProducible.has(other.event),
+          );
+          if (escapes) continue;
+        }
+        for (const effect of arm.effects ?? []) {
+          if (!isMainSlotRenderUi(effect)) continue;
+          const body = effect[2];
+          if (body === null || body === undefined) continue;   // a deliberate clear
+          if (mainWriteOffersAWayOn(body as ScanNode, traits)) continue;
+          seen.add(event);
+          findings.push({
+            check: 'viewer-stranded',
+            severity: 'error',
+            orbital: orb.name,
+            trait: name,
+            message:
+              `${name} owns this page's content region, and '${event}' repaints it with a body that ` +
+              `carries no data surface, no labelled control and no sibling embed — the screen the viewer ` +
+              `came from is gone and there is nothing to click`,
+            suggestion:
+              `render this OVER the page instead of replacing it: move the body into a dedicated overlay ` +
+              `trait writing only 'modal' (a modal-close arm rendered from the trait that owns 'main' is ` +
+              `rejected by CIRCUIT_MODAL_EXIT_INCOMPLETE, which is why it needs its own trait), or give ` +
+              `the arm a labelled control back to the state it came from`,
+          });
+          break;
+        }
       }
     }
 
