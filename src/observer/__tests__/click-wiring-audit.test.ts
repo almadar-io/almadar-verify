@@ -53,7 +53,7 @@ describe('auditListens', () => {
   });
 
   it('wires a declared emit the emitting trait handles itself (self-transition)', () => {
-    const pausedRender: Effect = ['render-ui', 'main', { type: 'text', value: 'paused' }];
+    const pausedRender: Effect = ['render-ui', 'main', { type: 'typography', content: 'paused' }];
     const orbital = schema([
       trait({
         name: 'Timer',
