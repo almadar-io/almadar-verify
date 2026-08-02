@@ -478,6 +478,104 @@ describe('lintWiring — unclaimed-main-writer', () => {
     );
     expect(result.findings).toEqual([]);
   });
+
+  // --- 2026-08-02 recalibration controls -----------------------------------
+  // Proven root cause (std-winning-11, all 10 findings FP): the pre-fix check
+  // computed its "channel" from `collectTraitConfigRefAdjacency` ORBITAL-WIDE
+  // instead of per page, and never applied the CONTAINMENT reduction
+  // `resolvePageContentOwner`/`reduceToOwners` (`@almadar/core`) already use
+  // for `viewer-stranded` above. Both controls below pin the fix: a genuine
+  // channel + an unrelated second writer must still fire (a real defect must
+  // not go silent), and a composing trait that CONTAINS its own channel
+  // (the materialised-JSX shape: `orbital resolve` promotes nested
+  // `<Card>`/`<SimpleGrid>` into synthetic sibling traits chained by
+  // `@trait.X` config forwards, e.g. std-browse's `DataGrid1` /
+  // `DenseTableView` / `MasterListView`) must not be flagged as a rival to
+  // its own descendant (std-winning-11's `AssessmentForm` over
+  // `InlineFormSectionRender31`).
+
+  it('POSITIVE CONTROL: a real authored channel plus a wholly unrelated second writer still reports', () => {
+    // ShellWithChannel -> (contentTrait) -> ChannelBody: an authored,
+    // single-link designation chain — a genuine, unambiguous channel owner.
+    const shellWithChannel = {
+      name: 'ShellWithChannel',
+      config: { contentTrait: '@trait.ChannelBody' },
+      stateMachine: {
+        transitions: [
+          { from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: ['@trait.ChannelBody'] })] },
+        ],
+      },
+    };
+    const channelBody = {
+      name: 'ChannelBody',
+      stateMachine: {
+        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender(contentBody)] }],
+      },
+    };
+    // StrayFeature shares no designation or containment edge with either of
+    // the above — a genuinely independent second body stacked on the page.
+    const strayFeature = {
+      name: 'StrayFeature',
+      stateMachine: {
+        transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender(contentBody)] }],
+      },
+    };
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [shellWithChannel, channelBody, strayFeature],
+        pages: [
+          {
+            name: 'P',
+            path: '/p',
+            traits: [{ ref: 'ShellWithChannel' }, { ref: 'ChannelBody' }, { ref: 'StrayFeature' }],
+          },
+        ],
+      }),
+    );
+    expect(result.errors).toBe(0);
+    expect(result.warnings).toBe(1);
+    expect(result.findings[0]?.check).toBe('unclaimed-main-writer');
+    expect(result.findings[0]?.trait).toBe('StrayFeature');
+  });
+
+  it('NEGATIVE CONTROL: a composing trait that CONTAINS its own materialised channel is not a rival to it', () => {
+    // OuterComposer embeds MiddleWrapper directly in its render-ui (state
+    // machine only, no config forward) — the materialised-JSX shape: an
+    // ordinary `@trait.X` embed, not a designation.
+    const outerComposer = {
+      name: 'OuterComposer',
+      stateMachine: {
+        transitions: [
+          { from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: ['@trait.MiddleWrapper'] })] },
+        ],
+      },
+    };
+    // MiddleWrapper designates InnerBody through config — the synthetic
+    // sibling's own internal channel link (std-browse's DataGrid1 ->
+    // DenseTableView -> MasterListView chain, flattened here to one hop).
+    const middleWrapper = { name: 'MiddleWrapper', config: { body: '@trait.InnerBody' } };
+    const innerBody = {
+      name: 'InnerBody',
+      stateMachine: {
+        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender(contentBody)] }],
+      },
+    };
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [outerComposer, middleWrapper, innerBody],
+        pages: [
+          {
+            name: 'P',
+            path: '/p',
+            traits: [{ ref: 'OuterComposer' }, { ref: 'MiddleWrapper' }, { ref: 'InnerBody' }],
+          },
+        ],
+      }),
+    );
+    expect(result.findings).toEqual([]);
+  });
 });
 
 describe('lintWiring — steady-state-no-init-reentry', () => {

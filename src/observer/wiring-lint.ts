@@ -61,10 +61,18 @@
  *    std-accounting `/entries` two-ledger-UIs class. Warning, not error:
  *    corpus calibration showed statics cannot split that class from the
  *    dedicated-feature convention (a page-mounted feature complementing the
- *    shell's catalog — healthcare `/patients/upload`, ecommerce `/checkout`,
- *    both audited-good). Placeholder-box main-writes (modal cleanup), atomic
- *    chrome, and claimed embeds are excluded. Supersedes the v1-falsified
- *    ">1 boot writers" candidate (see `Almadar_Verification_Gaps.md`
+ *    shell's catalog — healthcare `/patients/upload` and `/appointments/reminder`,
+ *    both audited-good; std-booking-system `/appointments/board` survives as a
+ *    likely-genuine stacked UI, pending arbitration). Placeholder-box
+ *    main-writes (modal cleanup), atomic chrome, and claimed embeds are
+ *    excluded. Owner + rival are both resolved through `@almadar/core`'s
+ *    `resolvePageContentOwner`/`reduceToOwners` — a page-scoped, not
+ *    orbital-wide, channel, with the same designation+containment reduction
+ *    `viewer-stranded` uses (2026-08-02 recalibration: the pre-fix orbital-wide
+ *    scan and missing containment test falsified all 10 std-winning-11
+ *    findings — `ConnectionDetail` borrowing a sibling page's channel and
+ *    `AssessmentForm` flagged as rival to its own materialised descendant).
+ *    Supersedes the v1-falsified ">1 boot writers" candidate (see `Almadar_Verification_Gaps.md`
  *    V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
  *  - `dead-lifecycle-action` — a rendered affordance targeting a lifecycle
  *    event (`INIT`, `LOAD`, `$MOUNT`). The affordance set is registry-derived,
@@ -126,7 +134,7 @@ import type {
   TraitConfigValue,
 } from '@almadar/core';
 import { ownerFieldsFromSchema } from '@almadar/core/mock';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -1222,45 +1230,62 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     // through the content channel (contentTrait/idleContent config slots) and
     // one page-mounted but never embedded. Corpus calibration (2026-07-23):
     // statics cannot split the /entries duplicate-body class from the
-    // dedicated-feature convention (healthcare /patients/upload, ecommerce
-    // /checkout — a page-mounted feature complementing the shell's catalog,
-    // both audited-good), so this check REPORTS (warning) for human/runtime
+    // dedicated-feature convention (a page-mounted feature complementing the
+    // shell's catalog), so this check REPORTS (warning) for human/runtime
     // arbitration — `slot:contention` in the client console + page captures
     // are the arbiters. Modals (placeholder-box main-writes), atomic chrome,
     // and claimed embeds are excluded by construction.
+    //
+    // The owner itself is `resolvePageContentOwner` (`@almadar/core`) — the
+    // SAME fact `viewer-stranded` uses above — not a local recompute. A local
+    // channel scan over `collectTraitConfigRefAdjacency` ORBITAL-WIDE (the
+    // pre-fix shape) borrows a sibling page's channel edge for a page whose
+    // own declared trait paints nothing of the kind (std-winning-11
+    // `ConnectionDetail` on `/connections/:id`: no channel of its own, wrongly
+    // compared against `/connections`'s), and skips the CONTAINMENT reduction
+    // `resolvePageContentOwner` already applies for a channel's own ancestry:
+    // `orbital resolve` materialises nested JSX (`<Card>`, `<SimpleGrid>`,
+    // std-browse's `DataGrid1`/`DenseTableView`/`MasterListView` chain) into
+    // synthetic sibling traits that chain via `@trait.X` CONFIG forwards, and
+    // the composing ancestor that embeds/contains that chain in its own
+    // render-ui (std-winning-11 `AssessmentForm` over `InlineFormSectionRender31`)
+    // is not a rival to its own descendant. `reduceToOwners` (also core, also
+    // shared, not a second copy) is the single test for "related, not rival":
+    // reducing `{owner, candidate}` to one member means one is the other's
+    // ancestor or descendant through EITHER relation (designation OR
+    // containment, either direction) — exactly the two relations the owner
+    // contract itself is built from.
     const claimedByBound = new Set<string>();
     for (const [source, targets] of adjacency) {
       if (!bound.has(source)) continue;
       for (const target of targets) claimedByBound.add(target);
     }
     for (const page of pages) {
-      let channelBody = false;
-      for (const [source, targets] of channelAdj) {
-        if (!bound.has(source)) continue;
-        for (const target of targets) {
-          const targetTrait = traits.get(target);
-          if (targetTrait !== undefined && isContentMainWriter(targetTrait)) {
-            channelBody = true;
-            break;
-          }
-        }
-        if (channelBody) break;
-      }
-      if (!channelBody) continue;
+      const owner = resolvePageContentOwner(page, traits, channelAdj, adjacency);
+      // `none`/`sole-writer` mean there is at most one content body on this
+      // page BY CONSTRUCTION (`resolvePageContentOwner` already reduces every
+      // page-declared writer through the same designation+containment test) —
+      // nothing left that could be a second, unclaimed one.
+      if (owner.kind === 'none' || owner.kind === 'sole-writer') continue;
+      const ownerNames = owner.kind === 'channel' ? [owner.trait] : owner.candidates;
+      const relatedToOwner = (name: string): boolean =>
+        ownerNames.some((ownerName) => reduceToOwners(new Set([ownerName, name]), channelAdj, adjacency).length === 1);
+
       for (const pageTrait of page.traits ?? []) {
         const name = pageTrait.ref;
+        if (ownerNames.includes(name)) continue;
         if (claimedByBound.has(name)) continue;
-        if ((channelAdj.get(name)?.size ?? 0) > 0) continue;
         const trait = traits.get(name);
         if (trait === undefined || !isContentMainWriter(trait)) continue;
+        if (relatedToOwner(name)) continue;
         findings.push({
           check: 'unclaimed-main-writer',
           severity: 'warning',
           orbital: orb.name,
           trait: name,
           message:
-            `page "${page.path}": ${name} renders a content body into slot 'main' while the page's content ` +
-            `channel already supplies one — a second, stacked UI if this is not a deliberate dedicated-feature page`,
+            `page "${page.path}": ${name} renders a content body into slot 'main' while ${ownerNames.join(' / ')} ` +
+            `already owns this page's content — a second, stacked UI if this is not a deliberate dedicated-feature page`,
           suggestion:
             `embed <trait.${name} /> in the composer's render or a config slot (contentTrait/idleContent), ` +
             `or remove ${name} from the page decl if it only hosts dialogs/logic`,
