@@ -312,6 +312,99 @@ function labelledAffordances(trait: Trait): Array<readonly [string, string]> {
 }
 
 /**
+ * Every event an arm's own render puts on screen as a control, label or not.
+ *
+ * This is the confirmation edge. `REQUEST_VOID` renders a confirm dialog whose
+ * button fires `CONFIRM_VOID`, and only `CONFIRM_VOID` persists — so a walk
+ * that follows emits and listens alone declares the Void button dead when the
+ * flow is exactly right. Rendering a control that fires X *is* a way to reach
+ * X; the user is the edge.
+ */
+function renderedAffordanceEvents(effects: ReadonlyArray<Effect> | undefined): Set<string> {
+  const out = new Set<string>();
+  const scan = (node: ScanNode): void => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      for (const child of node) scan(child);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const record = asRecordNode(node);
+    for (const key of ['action', 'event']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.length > 0) out.add(value);
+    }
+    const patternType = record['type'];
+    if (typeof patternType === 'string') {
+      for (const prop of eventKeyPropsOf(patternType)) {
+        const value = record[prop];
+        if (typeof value === 'string' && value.length > 0) out.add(value);
+      }
+    }
+    for (const value of Object.values(record)) scan(value);
+  };
+  for (const effect of effects ?? []) {
+    if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
+  }
+  return out;
+}
+
+/** `@trait.X` names an arm's render embeds — the control usually lives in X. */
+function embeddedTraitRefs(effects: ReadonlyArray<Effect> | undefined): Set<string> {
+  const out = new Set<string>();
+  const scan = (node: ScanNode): void => {
+    if (node === null || node === undefined) return;
+    if (typeof node === 'string') {
+      if (node.startsWith('@trait.')) out.add(node.slice('@trait.'.length));
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) scan(child);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    for (const value of Object.values(asRecordNode(node))) scan(value);
+  };
+  for (const effect of effects ?? []) {
+    if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
+  }
+  return out;
+}
+
+/** Every event a trait can fire from its own config — `events { ACTION: X }`. */
+function configAffordanceEvents(trait: Trait): Set<string> {
+  const out = new Set<string>();
+  const scan = (node: ScanNode): void => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      for (const child of node) scan(child);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const record = asRecordNode(node);
+    for (const key of ['action', 'event']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.length > 0) out.add(value);
+    }
+    const patternType = record['type'];
+    if (typeof patternType === 'string') {
+      for (const prop of eventKeyPropsOf(patternType)) {
+        const value = record[prop];
+        if (typeof value === 'string' && value.length > 0) out.add(value);
+      }
+    }
+    for (const value of Object.values(record)) scan(value);
+  };
+  if (trait.config) scan(trait.config);
+  // `events { ACTION: CONFIRM_VOID_CLICKED }` — the component's event slot is
+  // the key, the app event it fires is the value.
+  for (const value of Object.values(trait.events ?? {})) {
+    if (typeof value === 'string' && value.length > 0) out.add(value);
+  }
+  return out;
+}
+
+/**
  * Does this `main` body still offer the viewer a way on?
  *
  * JSX hoists every inline component into its own `@trait.InlineXRenderN`, so
@@ -663,6 +756,22 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             if (!Array.isArray(effect) || effect[0] !== 'emit') continue;
             const emitted = effect[1];
             if (typeof emitted === 'string' && persisting.has(emitted)) {
+              persisting.add(arm.event);
+              break;
+            }
+          }
+          if (persisting.has(arm.event)) continue;
+          // …and the confirmation edge: this arm RENDERS a control that fires
+          // an event that persists — directly, or through an embedded
+          // `@trait.X` whose own config carries the action. Without it, every
+          // two-step request -> confirm -> write flow reads as a dead control.
+          const reachable = renderedAffordanceEvents(arm.effects);
+          for (const ref of embeddedTraitRefs(arm.effects)) {
+            const embedded = traits.get(ref);
+            if (embedded) for (const e of configAffordanceEvents(embedded)) reachable.add(e);
+          }
+          for (const rendered of reachable) {
+            if (persisting.has(rendered)) {
               persisting.add(arm.event);
               break;
             }
