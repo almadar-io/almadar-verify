@@ -284,6 +284,11 @@ export type {
 } from './driver/types.js';
 export { tick } from './driver/tick.js';
 export {
+  playCircuitStep,
+  type PlayCircuitStepInput,
+  type PlayCircuitStepResult,
+} from './driver/play-step.js';
+export {
   createPlaywrightDriver,
   type PlaywrightDriverContext,
   type PlaywrightBridge,
