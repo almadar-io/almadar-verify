@@ -134,6 +134,51 @@ describe('lintWiring — listens-source-never-emits', () => {
     expect(finding?.suggestion).toContain('BuildButtonCreate.CREATE');
   });
 
+  it('a declared REF-trait source (composed schema, unresolved body) is EXISTENT — no phantom missing-source finding (G-REPAIR-RESET-1 round 3)', () => {
+    // Composed schemas keep call-site ref-traits ({name, ref}) unresolved:
+    // the source exists, its producibility just is not statically decidable.
+    const result = lintWiring(
+      schemaWith({
+        name: 'TaskListOrbital',
+        traits: [
+          { name: 'ListCreate', ref: 'Modal.traits.ModalRecordModal' },
+          {
+            name: 'ListPersistor',
+            stateMachine: { transitions: [{ from: 'ready', event: 'DO_CREATE', to: 'ready', effects: [] }] },
+            listens: [{ event: 'SAVE', triggers: 'DO_CREATE', source: { kind: 'trait', trait: 'ListCreate' } }],
+          },
+        ],
+        pages: [
+          {
+            name: 'ListPage',
+            path: '/list',
+            traits: [{ ref: 'ListCreate' }, { ref: 'ListPersistor' }],
+          },
+        ],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'listens-source-never-emits')).toEqual([]);
+  });
+
+  it('a source that exists NOWHERE (neither inline nor declared ref) still flags missing-source', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'TaskListOrbital',
+        traits: [
+          {
+            name: 'ListPersistor',
+            stateMachine: { transitions: [{ from: 'ready', event: 'DO_CREATE', to: 'ready', effects: [] }] },
+            listens: [{ event: 'SAVE', triggers: 'DO_CREATE', source: { kind: 'trait', trait: 'GhostTrait' } }],
+          },
+        ],
+        pages: [{ name: 'ListPage', path: '/list', traits: [{ ref: 'ListPersistor' }] }],
+      }),
+    );
+    const missing = result.findings.filter((f) => f.check === 'listens-source-never-emits');
+    expect(missing).toHaveLength(1);
+    expect(missing[0]?.message).toContain('GhostTrait does not exist');
+  });
+
   it('credits every production form: emits contract, effect emit option, explicit emit effect, action affordance, itemActions', () => {
     const result = lintWiring(
       schemaWith({
@@ -935,5 +980,82 @@ describe('lintWiring — dead-lifecycle-action reads registry-declared event pro
     expect(
       lifecycleFindings({ type: 'data-grid', itemActions: [{ event: 'INIT', label: 'Refresh' }] }),
     ).toHaveLength(1);
+  });
+});
+
+describe('lintWiring — viewer-stranded credits value-input controls', () => {
+  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
+  const page = { name: 'P', path: '/lab', traits: [{ ref: 'Lab' }] };
+
+  const labWith = (repaintBody: unknown) => ({
+    name: 'Lab',
+    stateMachine: {
+      states: [{ name: 'idle', isInitial: true }],
+      transitions: [
+        {
+          from: 'idle',
+          event: 'INIT',
+          to: 'idle',
+          effects: [mainRender({ type: 'stack', children: [{ type: 'typography', content: 'rows' }, { type: 'range-slider', value: 10, onChange: 'SET_X' }] })],
+        },
+        { from: 'idle', event: 'SET_X', to: 'idle', effects: [['set', '@entity.x', '?value'], mainRender(repaintBody)] },
+      ],
+    },
+  });
+
+  it('a labelless range-slider with a wired onChange is a way on (the learning-lab shape)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [labWith({ type: 'stack', children: [{ type: 'range-slider', value: 10, onChange: 'SET_X' }] })],
+        pages: [page],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'viewer-stranded')).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: a labelless button-only repaint still strands', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [labWith({ type: 'stack', children: [{ type: 'button', action: 'SET_X' }] })],
+        pages: [page],
+      }),
+    );
+    const stranded = result.findings.filter((f) => f.check === 'viewer-stranded');
+    expect(stranded).toHaveLength(1);
+    expect(stranded[0].trait).toBe('Lab');
+  });
+
+  it('an S-expression label the render evaluator resolves to text is a way on (the earth-lab shape)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [
+          labWith({
+            type: 'stack',
+            children: [
+              ['array/map', '@config.boundaries', ['fn', 'bnd', { type: 'button', action: 'SET_X', label: ['object/get', '@bnd', 'label'] }]],
+              { type: 'button', action: 'SET_X', label: ['str/concat', 'Advance ', '@config.stepYears', ' Million Years'] },
+            ],
+          }),
+        ],
+        pages: [page],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'viewer-stranded')).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: an unresolved string-sigil label still strands', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [labWith({ type: 'stack', children: [{ type: 'button', action: 'SET_X', label: '@config.actionLabel' }] })],
+        pages: [page],
+      }),
+    );
+    const stranded = result.findings.filter((f) => f.check === 'viewer-stranded');
+    expect(stranded).toHaveLength(1);
+    expect(stranded[0].trait).toBe('Lab');
   });
 });

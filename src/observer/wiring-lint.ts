@@ -134,7 +134,7 @@ import type {
   TraitConfigValue,
 } from '@almadar/core';
 import { ownerFieldsFromSchema } from '@almadar/core/mock';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -464,10 +464,13 @@ function mainWriteOffersAWayOn(body: ScanNode, traits: ReadonlyMap<string, Trait
     // unresolved forward with no default — `orbital resolve` leaves the sigil
     // in place and the control never renders, which is the dead affordance
     // being hunted, not an exit. Counting it made the check silent on a file
-    // that provably carried the defect.
+    // that provably carried the defect. An ARRAY node is different: it is an
+    // S-expression (`str/concat`, `object/get` over a config roster) the
+    // render evaluator resolves to text, so it counts as visible.
     const labelled = LABEL_KEYS.some((key) => {
       const value = record[key];
-      return typeof value === 'string' && value.length > 0 && !value.startsWith('@') && !value.startsWith('?');
+      if (typeof value === 'string') return value.length > 0 && !value.startsWith('@') && !value.startsWith('?');
+      return Array.isArray(value) && value.length > 0;
     });
     if (labelled) {
       for (const key of ['action', 'event']) {
@@ -479,6 +482,15 @@ function mainWriteOffersAWayOn(body: ScanNode, traits: ReadonlyMap<string, Trait
           const value = record[prop];
           if (typeof value === 'string' && value.length > 0 && !LIFECYCLE_EVENTS.has(value)) { found = true; break; }
         }
+      }
+    }
+    // A value-input pattern (registry: `value` prop + an event outlet) renders
+    // its affordance from `value` alone — a labelless slider is still draggable,
+    // unlike a labelless button. Wired event = a way on.
+    if (!found && typeof patternType === 'string' && isValueInputPattern(patternType)) {
+      for (const prop of eventKeyPropsOf(patternType)) {
+        const value = record[prop];
+        if (typeof value === 'string' && value.length > 0 && !LIFECYCLE_EVENTS.has(value)) { found = true; break; }
       }
     }
     if (found) return;
@@ -632,8 +644,18 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
 
   for (const orb of schema.orbitals) {
     const traits = new Map<string, Trait>();
+    // Call-site REF-traits (`{name, ref}` — composed schemas keep them
+    // unresolved) EXIST as listen-route sources even though their bodies are
+    // not inline. Existence and producibility are separate questions: names
+    // of ALL declared traits feed the existence arm; producibility stays
+    // decidable only for inline bodies (a ref-trait's emits live behind the
+    // unresolved ref).
+    const declaredTraitNames = new Set<string>();
     for (const traitRef of orb.traits ?? []) {
       if (isInlineTrait(traitRef)) traits.set(traitRef.name, traitRef);
+      if (typeof traitRef === 'object' && traitRef !== null && 'name' in traitRef && typeof traitRef.name === 'string') {
+        declaredTraitNames.add(traitRef.name);
+      }
     }
     const pages = inlinePages(orb);
     if (pages.length === 0) continue;
@@ -1161,6 +1183,11 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
         if (typeof sourceName !== 'string') continue;
         const sourceTrait = traits.get(sourceName);
         if (sourceTrait === undefined) {
+          // A declared REF-trait source exists; its producibility is behind
+          // the unresolved ref and not statically decidable here — skip, do
+          // not report a phantom missing-source (composed-schema false
+          // positive class, G-REPAIR-RESET-1 round 3).
+          if (declaredTraitNames.has(sourceName)) continue;
           findings.push({
             check: 'listens-source-never-emits',
             severity: 'error',

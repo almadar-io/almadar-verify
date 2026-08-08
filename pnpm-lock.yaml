@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@almadar/core':
-        specifier: ^10.56.0
-        version: 10.56.0
+        specifier: ^10.57.0
+        version: 10.57.0
       '@almadar/llm':
         specifier: ^2.40.0
-        version: 2.40.0(@almadar/core@10.56.0)(@opentelemetry/api@1.9.1)(ws@8.21.0)
+        version: 2.40.0(@almadar/core@10.57.0)(@opentelemetry/api@1.9.1)(ws@8.21.0)
       '@almadar/logger':
         specifier: ^1.11.0
         version: 1.11.0
@@ -57,8 +57,8 @@ importers:
 
 packages:
 
-  '@almadar/core@10.56.0':
-    resolution: {integrity: sha512-YMI+6eH2OWL5xwWWbQof/OReul8iGO0GxmxvStvkEV+UXhjvjCa2EYWc2iW5RvPHxVjhLz5YyE04I/Fg6Wl/OA==}
+  '@almadar/core@10.57.0':
+    resolution: {integrity: sha512-89AcRdcwEyo5U+gIZwd2qwBGM+vJorKi1exvn0GXJZvd4SC840aZf+Ukgu1MOWmo0xhf3/CMqdATjtG3uWgcFg==}
 
   '@almadar/eslint-plugin@2.15.0':
     resolution: {integrity: sha512-8mQTnuU7eHOSpCgAag5VEywVce9iWFNC2j6cKvrwjOH/cbak+6Akgnp/zjK3bvy6xoVp6k/4H6bIh/WkRhbfSg==}
@@ -2533,7 +2533,7 @@ packages:
 
 snapshots:
 
-  '@almadar/core@10.56.0':
+  '@almadar/core@10.57.0':
     dependencies:
       zod: 3.25.76
 
@@ -2544,12 +2544,12 @@ snapshots:
 
   '@almadar/evaluator@2.40.0':
     dependencies:
-      '@almadar/core': 10.56.0
+      '@almadar/core': 10.57.0
       '@almadar/std': 16.169.0
 
-  '@almadar/llm@2.40.0(@almadar/core@10.56.0)(@opentelemetry/api@1.9.1)(ws@8.21.0)':
+  '@almadar/llm@2.40.0(@almadar/core@10.57.0)(@opentelemetry/api@1.9.1)(ws@8.21.0)':
     dependencies:
-      '@almadar/core': 10.56.0
+      '@almadar/core': 10.57.0
       '@almadar/logger': 1.11.0
       '@anthropic-ai/sdk': 0.52.0
       '@langchain/anthropic': 1.5.1(@langchain/core@1.2.3(@opentelemetry/api@1.9.1)(openai@6.48.0(ws@8.21.0)(zod@3.25.76))(ws@8.21.0))
@@ -2569,11 +2569,11 @@ snapshots:
 
   '@almadar/logger@1.11.0':
     dependencies:
-      '@almadar/core': 10.56.0
+      '@almadar/core': 10.57.0
 
   '@almadar/runtime@6.53.0(express@5.2.1)':
     dependencies:
-      '@almadar/core': 10.56.0
+      '@almadar/core': 10.57.0
       '@almadar/evaluator': 2.40.0
       '@almadar/logger': 1.11.0
       '@almadar/server': 2.34.0(express@5.2.1)
@@ -2589,7 +2589,7 @@ snapshots:
 
   '@almadar/server@2.34.0(express@5.2.1)':
     dependencies:
-      '@almadar/core': 10.56.0
+      '@almadar/core': 10.57.0
       '@almadar/logger': 1.11.0
       '@faker-js/faker': 9.9.0
       cors: 2.8.6
@@ -2607,7 +2607,7 @@ snapshots:
 
   '@almadar/std@16.169.0':
     dependencies:
-      '@almadar/core': 10.56.0
+      '@almadar/core': 10.57.0
 
   '@anthropic-ai/sdk@0.103.0(zod@3.25.76)':
     dependencies:
