@@ -820,7 +820,11 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     // Only labels that PROMISE durability. "Cancel"/"Close"/"Back" abort a flow
     // and are correct with no persist; including them made the first draft of
     // this check flag 10 controls in one file, all of them fine.
-    const MUTATING_LABEL = /^(archive|publish|unpublish|deactivate|retire|void|revoke|issue)\b/i;
+    // approve/reject/submit/promote added 2026-08-16 (dead-persist-action
+    // promotion): std-timesheet shipped all four as no-op refetches and every
+    // gate stayed green — the verbs promise a durable status write exactly as
+    // hard as "publish" does.
+    const MUTATING_LABEL = /^(archive|publish|unpublish|deactivate|retire|void|revoke|issue|approve|reject|submit|promote)\b/i;
     for (const [name, trait] of traits) {
       if (!bound.has(name)) continue;
       const arms = trait.stateMachine?.transitions ?? [];
