@@ -16,6 +16,19 @@
  *    viewer reads every row while the app looks authorization-aware. This is
  *    the ratchet for the persona/authorization campaign: it measures how much
  *    of the corpus is still unscoped without reddening `orb validate`.
+ *  - `app-theme-divergent` (warning) — a page-owning orbital that pins no
+ *    `theme` config (or a different one) while sibling orbitals in the same
+ *    app pin one. Its pages render in the ambient `@currentTheme` default
+ *    instead of the app's declared theme — a whole page off-brand that
+ *    validates 0/0 because each orbital is individually legal (the
+ *    identity-roster class, 2026-08-19: 31 rosters shipped theme-less next to
+ *    theme-pinned siblings). Theme values and pages are declared data — no
+ *    name matching.
+ *  - `identity-roster-unwritable` (warning) — the app declares an
+ *    `[identity]` entity but no transition anywhere reaches a
+ *    `persist create` on it: the roster the app's personas map onto has no
+ *    write path, so users can never be added from inside the app (the
+ *    read-only identity-directory class, 2026-08-19: 46 carriers).
  *  - `client-unbound-state-machine` — a trait owning a state machine that is
  *    in no page decl and not in any page's `@trait.X` embed closure. The
  *    client binds state machines exactly for page-declared traits plus that
@@ -133,7 +146,7 @@ import type {
   Trait,
   TraitConfigValue,
 } from '@almadar/core';
-import { ownerFieldsFromSchema } from '@almadar/core/mock';
+import { identityEntityName, ownerFieldsFromSchema } from '@almadar/core/mock';
 import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
@@ -168,7 +181,9 @@ export interface WiringLintFinding {
     | 'mutation-affordance-never-persists'
     | 'viewer-stranded'
     | 'embedded-sibling-single-referrer'
-    | 'unscoped-owned-entity';
+    | 'unscoped-owned-entity'
+    | 'app-theme-divergent'
+    | 'identity-roster-unwritable';
   severity: WiringLintSeverity;
   orbital: string;
   trait: string;
@@ -1366,6 +1381,151 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             `depends on a DIFFERENT entity (a membership/enrolment join a per-row predicate cannot ` +
             `express), omit @read and state that reason in a comment on the entity, citing ` +
             `R-ENTITY-ACCESS-NO-COLLECTION-AGGREGATE-BINDING`,
+        });
+      }
+    }
+  }
+
+  // --- app-theme-divergent -------------------------------------------------
+  // Theme values are DECLARED trait-config data and page ownership is the
+  // declared page list, so coherence is decidable without name matching. Only
+  // literal pins count — a `@currentTheme`-shaped value is "unpinned", which
+  // keeps apps that uniformly ride the ambient default silent.
+  const themePinOf = (value: unknown): string | undefined => {
+    if (typeof value === 'string') return value.startsWith('@') ? undefined : value;
+    if (typeof value === 'object' && value !== null && 'default' in value) {
+      const d = (value as { default?: unknown }).default;
+      return typeof d === 'string' && !d.startsWith('@') ? d : undefined;
+    }
+    return undefined;
+  };
+  const pinnedByOrbital = new Map<string, Set<string>>();
+  for (const orb of schema.orbitals) {
+    const pinned = new Set<string>();
+    for (const trait of orb.traits ?? []) {
+      // The theme overlay lives on ref-traits (composed app-layout call
+      // sites) as much as inline ones — read `config` off any object trait.
+      if (typeof trait !== 'object' || trait === null || !('config' in trait)) continue;
+      const config = trait.config as Record<string, unknown> | undefined;
+      const pin = themePinOf(config?.theme);
+      if (pin !== undefined) pinned.add(pin);
+    }
+    pinnedByOrbital.set(orb.name, pinned);
+  }
+  // An app-level `theme "<key>"` declaration (schema.theme) is authoritative:
+  // an unpinned orbital INHERITS it through `@currentTheme`, so only pins
+  // that CONTRADICT it are drift. Without one, fall back to the dominant-vote
+  // heuristic over the pins themselves (the pre-app-theme corpus shape).
+  const appThemeKey = ((): string | undefined => {
+    const t = schema.theme as unknown;
+    if (typeof t === 'string' && t.length > 0) return t;
+    if (typeof t === 'object' && t !== null && 'name' in t) {
+      const n = (t as { name?: unknown }).name;
+      return typeof n === 'string' && n.length > 0 ? n : undefined;
+    }
+    return undefined;
+  })();
+  if (appThemeKey !== undefined) {
+    for (const orb of schema.orbitals) {
+      const pinned = pinnedByOrbital.get(orb.name) ?? new Set<string>();
+      const divergent = [...pinned].filter((t) => t !== appThemeKey).sort();
+      if (divergent.length === 0) continue;
+      findings.push({
+        check: 'app-theme-divergent',
+        severity: 'warning',
+        orbital: orb.name,
+        trait: orb.name,
+        message:
+          `${orb.name} pins theme ${divergent.map((t) => `"${t}"`).join(', ')} while the app ` +
+          `declares "${appThemeKey}" at the app level`,
+        suggestion:
+          `remove the config pin so the orbital inherits the app theme via @currentTheme — or, ` +
+          `for a deliberate per-orbital override, declare it as the orbital's own \`theme "<key>"\``,
+      });
+    }
+  } else {
+    const themeVotes = new Map<string, number>();
+    for (const pinned of pinnedByOrbital.values()) {
+      for (const theme of pinned) themeVotes.set(theme, (themeVotes.get(theme) ?? 0) + 1);
+    }
+    if (themeVotes.size > 0 && schema.orbitals.length > 1) {
+      const dominant = [...themeVotes.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]![0];
+      for (const orb of schema.orbitals) {
+        if (inlinePages(orb).length === 0) continue;
+        const pinned = pinnedByOrbital.get(orb.name) ?? new Set<string>();
+        if (pinned.has(dominant)) continue;
+        const divergent = [...pinned].sort();
+        findings.push({
+          check: 'app-theme-divergent',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: orb.name,
+          message:
+            divergent.length === 0
+              ? `${orb.name} owns pages but pins no \`theme\`, so they render in the ambient ` +
+                `default theme while the rest of the app pins "${dominant}"`
+              : `${orb.name} pins theme ${divergent.map((t) => `"${t}"`).join(', ')} while the ` +
+                `rest of the app pins "${dominant}"`,
+          suggestion:
+            `declare the app theme once as a \`theme "${dominant}"\` app-header line (preferred), ` +
+            `or add \`theme: "${dominant}"\` to the orbital's app-layout trait config`,
+        });
+      }
+    }
+  }
+
+  // --- identity-roster-unwritable ------------------------------------------
+  // The `[identity]` entity is the app's persona roster. A roster no
+  // transition can `persist create` into has no write path: users can never
+  // be added from inside the app, even though every read surface looks
+  // complete. Effects are scanned recursively so persists nested in `if`
+  // branches count.
+  const identityName = identityEntityName(schema);
+  if (identityName !== undefined) {
+    const createsIdentity = (node: unknown): boolean => {
+      if (!Array.isArray(node)) return false;
+      if (node[0] === 'persist' && node[1] === 'create' && node[2] === identityName) return true;
+      return node.some(createsIdentity);
+    };
+    let hasCreatePath = false;
+    for (const orb of schema.orbitals) {
+      for (const trait of orb.traits ?? []) {
+        if (!isInlineTrait(trait)) continue;
+        for (const arm of trait.stateMachine?.transitions ?? []) {
+          if ((arm.effects ?? []).some(createsIdentity)) {
+            hasCreatePath = true;
+            break;
+          }
+        }
+        if (hasCreatePath) break;
+      }
+      if (hasCreatePath) break;
+    }
+    if (!hasCreatePath) {
+      const owner =
+        schema.orbitals.find(
+          (orb) =>
+            typeof orb.entity === 'object' &&
+            orb.entity !== null &&
+            'name' in orb.entity &&
+            orb.entity.name === identityName,
+        ) ?? schema.orbitals[0];
+      if (owner !== undefined) {
+        findings.push({
+          check: 'identity-roster-unwritable',
+          severity: 'warning',
+          orbital: owner.name,
+          trait: identityName,
+          entity: identityName,
+          message:
+            `${identityName} is the app's [identity] roster but no transition reaches a ` +
+            `\`persist create ${identityName}\` — the roster is read-only, so users can never ` +
+            `be added from inside the app`,
+          suggestion:
+            `compose the app's create mechanism into the ${identityName} orbital: an Add ` +
+            `affordance emitting CREATE, a \`Modal.traits.ModalRecordModal\` create modal, and a ` +
+            `persistor trait whose DO_CREATE arm runs \`(persist create ${identityName} ?data)\``,
         });
       }
     }

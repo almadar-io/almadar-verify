@@ -1059,3 +1059,197 @@ describe('lintWiring — viewer-stranded credits value-input controls', () => {
     expect(stranded[0].trait).toBe('Lab');
   });
 });
+
+describe('lintWiring — app-theme-divergent', () => {
+  const themedOrbital = (name: string, theme: string, path: string) => ({
+    name,
+    traits: [
+      { name: `${name}Layout`, ref: 'std-app-layout#AppLayout', config: { theme: { default: theme, type: 'unknown' }, contentTrait: '@trait.Content' } },
+      { name: 'Content', stateMachine: { transitions: [] } },
+    ],
+    pages: [{ name: `${name}Page`, path, traits: [{ ref: `${name}Layout` }, { ref: 'Content' }] }],
+  });
+
+  it('flags a page-owning orbital with no pinned theme while siblings pin one', () => {
+    const bare = {
+      name: 'RosterOrbital',
+      traits: [{ name: 'Directory', stateMachine: { transitions: [] } }],
+      pages: [{ name: 'RosterPage', path: '/roster', traits: [{ ref: 'Directory' }] }],
+    };
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'), bare],
+    } as unknown as OrbitalSchema);
+    const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
+    expect(divergent).toHaveLength(1);
+    expect(divergent[0]?.severity).toBe('warning');
+    expect(divergent[0]?.orbital).toBe('RosterOrbital');
+    expect(divergent[0]?.message).toContain('linear-clean-light');
+    expect(result.errors).toBe(0);
+  });
+
+  it('flags an orbital pinning a DIFFERENT theme than the rest of the app', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'),
+        themedOrbital('NoteOrbital', 'linear-clean-light', '/notes'),
+        themedOrbital('OddOrbital', 'terminal-dark', '/odd'),
+      ],
+    } as unknown as OrbitalSchema);
+    const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
+    expect(divergent).toHaveLength(1);
+    expect(divergent[0]?.orbital).toBe('OddOrbital');
+    expect(divergent[0]?.message).toContain('terminal-dark');
+  });
+
+  it('stays silent when every page-owning orbital pins the same theme, and when nothing pins', () => {
+    const coherent = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'),
+        themedOrbital('NoteOrbital', 'linear-clean-light', '/notes'),
+      ],
+    } as unknown as OrbitalSchema);
+    expect(coherent.findings.filter((f) => f.check === 'app-theme-divergent')).toEqual([]);
+    const unthemed = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'TaskOrbital',
+          traits: [{ name: 'Content', stateMachine: { transitions: [] } }],
+          pages: [{ name: 'TaskPage', path: '/tasks', traits: [{ ref: 'Content' }] }],
+        },
+      ],
+    } as unknown as OrbitalSchema);
+    expect(unthemed.findings.filter((f) => f.check === 'app-theme-divergent')).toEqual([]);
+  });
+});
+
+describe('lintWiring — identity-roster-unwritable', () => {
+  const identityEntity = {
+    name: 'Staff',
+    collection: 'staff',
+    persistent: true,
+    identity: true,
+    fields: [
+      { name: 'id', type: 'string', required: true },
+      { name: 'name', type: 'string', required: true },
+    ],
+  };
+
+  it('flags an [identity] entity no transition persist-creates', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'StaffOrbital',
+          entity: identityEntity,
+          traits: [
+            {
+              name: 'Directory',
+              stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [['fetch', 'Staff', {}]] }] },
+            },
+          ],
+          pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Directory' }] }],
+        },
+      ],
+    } as unknown as OrbitalSchema);
+    const unwritable = result.findings.filter((f) => f.check === 'identity-roster-unwritable');
+    expect(unwritable).toHaveLength(1);
+    expect(unwritable[0]?.severity).toBe('warning');
+    expect(unwritable[0]?.entity).toBe('Staff');
+    expect(unwritable[0]?.orbital).toBe('StaffOrbital');
+  });
+
+  it('stays silent once a persistor arm reaches persist create — including nested in an if', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'StaffOrbital',
+          entity: identityEntity,
+          traits: [
+            {
+              name: 'Persistor',
+              stateMachine: {
+                transitions: [
+                  {
+                    from: 'idle',
+                    event: 'DO_CREATE',
+                    to: 'idle',
+                    effects: [['if', ['=', 1, 1], ['persist', 'create', 'Staff', '@payload.data', { emit: { success: 'STAFF_CREATED' } }]]],
+                  },
+                ],
+              },
+            },
+          ],
+          pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Persistor' }] }],
+        },
+      ],
+    } as unknown as OrbitalSchema);
+    expect(result.findings.filter((f) => f.check === 'identity-roster-unwritable')).toEqual([]);
+  });
+
+  it('stays silent for an app with no [identity] entity', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'TaskOrbital',
+          entity: { name: 'Task', collection: 'tasks', fields: [{ name: 'id', type: 'string', required: true }] },
+          traits: [{ name: 'Content', stateMachine: { transitions: [] } }],
+          pages: [{ name: 'TaskPage', path: '/tasks', traits: [{ ref: 'Content' }] }],
+        },
+      ],
+    } as unknown as OrbitalSchema);
+    expect(result.findings.filter((f) => f.check === 'identity-roster-unwritable')).toEqual([]);
+  });
+});
+
+describe('lintWiring — app-theme-divergent with a schema-level theme', () => {
+  const orbital = (name: string, path: string, pin?: string) => ({
+    name,
+    traits: [
+      {
+        name: `${name}Layout`,
+        ref: 'std-app-layout#AppLayout',
+        config: pin !== undefined ? { theme: { default: pin, type: 'unknown' } } : {},
+      },
+      { name: 'Content', stateMachine: { transitions: [] } },
+    ],
+    pages: [{ name: `${name}Page`, path, traits: [{ ref: `${name}Layout` }, { ref: 'Content' }] }],
+  });
+
+  it('treats unpinned orbitals as clean when the app declares a theme', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      theme: 'linear-clean-light',
+      orbitals: [orbital('TaskOrbital', '/tasks', 'linear-clean-light'), orbital('RosterOrbital', '/roster')],
+    } as unknown as OrbitalSchema);
+    expect(result.findings.filter((f) => f.check === 'app-theme-divergent')).toEqual([]);
+  });
+
+  it('flags a config pin contradicting the app theme', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      theme: 'linear-clean-light',
+      orbitals: [orbital('TaskOrbital', '/tasks'), orbital('OddOrbital', '/odd', 'terminal-dark')],
+    } as unknown as OrbitalSchema);
+    const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
+    expect(divergent).toHaveLength(1);
+    expect(divergent[0]?.orbital).toBe('OddOrbital');
+    expect(divergent[0]?.message).toContain('terminal-dark');
+    expect(divergent[0]?.message).toContain('linear-clean-light');
+  });
+
+  it('keeps the dominant-vote behavior when no app theme is declared', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [orbital('TaskOrbital', '/tasks', 'linear-clean-light'), orbital('RosterOrbital', '/roster')],
+    } as unknown as OrbitalSchema);
+    const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
+    expect(divergent).toHaveLength(1);
+    expect(divergent[0]?.orbital).toBe('RosterOrbital');
+  });
+});
