@@ -1253,3 +1253,395 @@ describe('lintWiring — app-theme-divergent with a schema-level theme', () => {
     expect(divergent[0]?.orbital).toBe('RosterOrbital');
   });
 });
+
+describe('lintWiring — navigate-target-undeclared', () => {
+  const navigateTrait = (target: unknown) => ({
+    name: 'Row',
+    stateMachine: {
+      transitions: [{ from: 'idle', event: 'OPEN', to: 'idle', effects: [['navigate', target]] }],
+    },
+  });
+  const navigateWithParams = (target: unknown) => ({
+    name: 'Row',
+    stateMachine: {
+      transitions: [
+        { from: 'idle', event: 'OPEN', to: 'idle', effects: [['navigate', target, { id: '@payload.id' }]] },
+      ],
+    },
+  });
+
+  it('flags a navigate to a path no page in the app declares (the 404 class)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'ContactsOrbital',
+        traits: [navigateTrait('/staff-directory')],
+        pages: [{ name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] }],
+      }),
+    );
+    const found = result.findings.filter((f) => f.check === 'navigate-target-undeclared');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.trait).toBe('Row');
+    expect(found[0]?.message).toContain("'/staff-directory'");
+  });
+
+  it('is clean on an exact literal match', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'ContactsOrbital',
+        traits: [navigateTrait('/contacts')],
+        pages: [{ name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
+  });
+
+  it('matches a concrete path against a declared :param page positionally', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'ContactsOrbital',
+        traits: [navigateWithParams('/contacts/abc123')],
+        pages: [
+          { name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] },
+          { name: 'ContactDetailPage', path: '/contacts/:id', traits: [{ ref: 'Row' }] },
+        ],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
+  });
+
+  it('matches a str/concat-built target by its literal prefix against a :param-stripped page path', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'ContactsOrbital',
+        traits: [navigateWithParams(['str/concat', '/contacts/', '@payload.id'])],
+        pages: [{ name: 'ContactDetailPage', path: '/contacts/:id', traits: [{ ref: 'Row' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
+  });
+
+  it('flags a str/concat-built target whose prefix matches no declared page', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'ContactsOrbital',
+        traits: [navigateWithParams(['str/concat', '/vendors/', '@payload.id'])],
+        pages: [{ name: 'ContactDetailPage', path: '/contacts/:id', traits: [{ ref: 'Row' }] }],
+      }),
+    );
+    const found = result.findings.filter((f) => f.check === 'navigate-target-undeclared');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.message).toContain('/vendors/');
+  });
+
+  it('does not guess at a fully dynamic binding target (no literal information)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'ContactsOrbital',
+        traits: [navigateTrait('@config.redirectUrl')],
+        pages: [{ name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
+  });
+
+  it('resolves against pages declared in a SIBLING orbital (cross-orbital declared-path universe)', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'DashboardOrbital',
+          traits: [navigateTrait('/reports')],
+          pages: [{ name: 'DashboardPage', path: '/dashboard', traits: [{ ref: 'Row' }] }],
+        },
+        {
+          name: 'ReportsOrbital',
+          traits: [{ name: 'Reports', stateMachine: { transitions: [] } }],
+          pages: [{ name: 'ReportsPage', path: '/reports', traits: [{ ref: 'Reports' }] }],
+        },
+      ],
+    } as unknown as OrbitalSchema);
+    expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
+  });
+});
+
+describe('lintWiring — page-absent-from-nav', () => {
+  const layoutWithNavItems = (items: unknown[]) => ({
+    name: 'AppLayout',
+    config: { navItems: items },
+    stateMachine: { transitions: [] },
+  });
+
+  it('flags a declared page reachable by no navItems array in the app (the ATS /staff class)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'StaffOrbital',
+        traits: [layoutWithNavItems([{ href: '/dashboard', label: 'Dashboard' }])],
+        pages: [
+          { name: 'DashboardPage', path: '/dashboard', traits: [{ ref: 'AppLayout' }] },
+          { name: 'StaffPage', path: '/staff', traits: [{ ref: 'AppLayout' }] },
+        ],
+      }),
+    );
+    const found = result.findings.filter((f) => f.check === 'page-absent-from-nav');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.message).toContain("'/staff'");
+  });
+
+  it('is clean once the page has an entry in a navItems array', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'StaffOrbital',
+        traits: [layoutWithNavItems([{ href: '/dashboard', label: 'Dashboard' }, { href: '/staff', label: 'Staff' }])],
+        pages: [
+          { name: 'DashboardPage', path: '/dashboard', traits: [{ ref: 'AppLayout' }] },
+          { name: 'StaffPage', path: '/staff', traits: [{ ref: 'AppLayout' }] },
+        ],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
+  });
+
+  it('does not flag a parameterized detail page (structurally reached by row click, not a nav link)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'StaffOrbital',
+        traits: [layoutWithNavItems([{ href: '/staff', label: 'Staff' }])],
+        pages: [
+          { name: 'StaffPage', path: '/staff', traits: [{ ref: 'AppLayout' }] },
+          { name: 'StaffDetailPage', path: '/staff/:id', traits: [{ ref: 'AppLayout' }] },
+        ],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
+  });
+
+  it('does not flag the app root page', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'StaffOrbital',
+        traits: [layoutWithNavItems([])],
+        pages: [{ name: 'HomePage', path: '/', traits: [{ ref: 'AppLayout' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
+  });
+
+  it('stays silent for an app with no navItems array anywhere (has not opted into the convention)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'StaffOrbital',
+        traits: [{ name: 'Directory', stateMachine: { transitions: [] } }],
+        pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Directory' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
+  });
+});
+
+describe('lintWiring — detail-panel-back-in-actions', () => {
+  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
+
+  it("flags a BACK entry left inside a detail-panel's actions array", () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [
+          {
+            name: 'Detail',
+            stateMachine: {
+              transitions: [
+                {
+                  from: 'viewing',
+                  event: 'INIT',
+                  to: 'viewing',
+                  effects: [
+                    mainRender({
+                      type: 'detail-panel',
+                      fields: [{ key: 'name' }],
+                      actions: [{ event: 'BACK', label: 'Back' }, { event: 'ARCHIVE', label: 'Archive' }],
+                    }),
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Detail' }] }],
+      }),
+    );
+    const found = result.findings.filter((f) => f.check === 'detail-panel-back-in-actions');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.trait).toBe('Detail');
+  });
+
+  it('is clean once BACK moves to the first-class backAction prop (the applied fix)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [
+          {
+            name: 'Detail',
+            stateMachine: {
+              transitions: [
+                {
+                  from: 'viewing',
+                  event: 'INIT',
+                  to: 'viewing',
+                  effects: [
+                    mainRender({
+                      type: 'detail-panel',
+                      fields: [{ key: 'name' }],
+                      backAction: { label: 'Back', event: 'BACK' },
+                      actions: [{ event: 'ARCHIVE', label: 'Archive' }],
+                    }),
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Detail' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'detail-panel-back-in-actions')).toEqual([]);
+  });
+
+  it('leaves a non-detail-panel pattern with a BACK-event actions entry alone (scoped to detail-panel only)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [
+          {
+            name: 'Card',
+            stateMachine: {
+              transitions: [
+                {
+                  from: 'idle',
+                  event: 'INIT',
+                  to: 'idle',
+                  effects: [mainRender({ type: 'entity-table', fields: [], columns: [], itemActions: [{ event: 'BACK', label: 'Back' }] })],
+                },
+              ],
+            },
+          },
+        ],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Card' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'detail-panel-back-in-actions')).toEqual([]);
+  });
+});
+
+describe('lintWiring — relation-field-rendered-raw', () => {
+  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
+  const ticketEntity = {
+    name: 'Ticket',
+    persistence: 'persistent',
+    collection: 'tickets',
+    fields: [
+      { name: 'id', type: 'string' },
+      { name: 'title', type: 'string' },
+      { name: 'assigneeId', type: 'relation', relation: { entity: 'Staff' } },
+    ],
+  };
+  const tableTrait = (columnEntry: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    name: 'TicketTable',
+    linkedEntity: 'Ticket',
+    stateMachine: {
+      transitions: [
+        {
+          from: 'browsing',
+          event: 'INIT',
+          to: 'browsing',
+          effects: [
+            mainRender({
+              type: 'entity-table',
+              entity: '@entity.rows',
+              fields: [{ key: 'title' }, { key: 'assigneeId' }],
+              columns: [{ key: 'title' }, columnEntry],
+              ...extra,
+            }),
+          ],
+        },
+      ],
+    },
+  });
+  const schema = (columnEntry: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    name: 'fixture',
+    orbitals: [
+      {
+        name: 'TicketOrbital',
+        entity: ticketEntity,
+        traits: [tableTrait(columnEntry, extra)],
+        pages: [{ name: 'TicketsPage', path: '/tickets', traits: [{ ref: 'TicketTable' }] }],
+      },
+    ],
+  }) as unknown as OrbitalSchema;
+
+  it('flags a relation-typed column with no type/format override and no relationsData', () => {
+    const result = lintWiring(schema({ key: 'assigneeId', field: 'assigneeId', header: 'Assignee' }));
+    const found = result.findings.filter((f) => f.check === 'relation-field-rendered-raw');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.trait).toBe('TicketTable');
+    expect(found[0]?.message).toContain('assigneeId');
+  });
+
+  it('is silent once the column carries a format override', () => {
+    const result = lintWiring(schema({ key: 'assigneeId', format: 'relation-label' }));
+    expect(result.findings.filter((f) => f.check === 'relation-field-rendered-raw')).toEqual([]);
+  });
+
+  it('is silent once the pattern carries authored relationsData', () => {
+    const result = lintWiring(
+      schema({ key: 'assigneeId' }, { relationsData: { assigneeId: [{ value: 's1', label: 'Jo' }] } }),
+    );
+    expect(result.findings.filter((f) => f.check === 'relation-field-rendered-raw')).toEqual([]);
+  });
+
+  it('is silent on a non-relation column key', () => {
+    const result = lintWiring(schema({ key: 'title' }));
+    expect(result.findings.filter((f) => f.check === 'relation-field-rendered-raw')).toEqual([]);
+  });
+
+  it('never fires on detail-panel/form/form-section — those get server-side relationsData auto-injection', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      orbitals: [
+        {
+          name: 'TicketOrbital',
+          entity: ticketEntity,
+          traits: [
+            {
+              name: 'TicketDetail',
+              linkedEntity: 'Ticket',
+              stateMachine: {
+                transitions: [
+                  {
+                    from: 'viewing',
+                    event: 'INIT',
+                    to: 'viewing',
+                    effects: [
+                      mainRender({
+                        type: 'detail-panel',
+                        fields: [{ key: 'title' }, { key: 'assigneeId' }],
+                        // deliberately also shaped with a columns array, to prove the
+                        // exclusion is by @fieldsContract, not by absence of `columns`
+                        columns: [{ key: 'assigneeId' }],
+                      }),
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+          pages: [{ name: 'TicketPage', path: '/tickets/:id', traits: [{ ref: 'TicketDetail' }] }],
+        },
+      ],
+    } as unknown as OrbitalSchema);
+    expect(result.findings.filter((f) => f.check === 'relation-field-rendered-raw')).toEqual([]);
+  });
+});

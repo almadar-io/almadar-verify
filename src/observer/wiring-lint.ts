@@ -128,6 +128,57 @@
  *    C-SIBLING-PULL-SHARED-ACROSS-REBINDS class: `std-realtime-chat`'s
  *    conversation rail listed chat messages because `ChannelRail` and
  *    `ChatThread` shared one pulled `DenseTableView`.
+ *  - `navigate-target-undeclared` (warning) — a `(navigate <target>)` effect
+ *    whose target matches no declared `page "<path>"` in the app (positional
+ *    `:param` matching both ways; a `str/concat`-built target is matched by
+ *    its literal prefix against declared paths with their trailing `:param`
+ *    segment stripped). `audit_listens` reports this arm `wired: true via
+ *    self-transition` because the emit/listen wiring IS complete — the
+ *    affordance is a live click that lands on a 404, a class no listens-graph
+ *    check can see. Cross-orbital: an app's navigate targets routinely point
+ *    at pages owned by a sibling orbital, so the declared-path universe is
+ *    every page in the schema, not just the navigating trait's own orbital.
+ *  - `page-absent-from-nav` (warning) — a declared page whose path carries no
+ *    `:param` segment (a parameterized detail page is legitimately reached
+ *    only via a row click, never a nav link — structural exclusion, not a
+ *    name guess) and whose path appears as an `href` in NO `navItems`-shaped
+ *    descriptor array anywhere in the app (the ATS `/staff` class: declared,
+ *    live, and reachable by direct URL only — no AppLayout link reaches it).
+ *    `href` extraction reuses the same structural descriptor-array parse
+ *    `configItemActionEvents`/`descriptorEvents` already apply to
+ *    `itemActions` — an object array entry carrying the field counts,
+ *    regardless of which trait or config key it lives under. Only fully
+ *    absent (zero navItems arrays) is reported in this version; a page
+ *    present in some but not all of an app's navItems arrays is a distinct,
+ *    softer class deliberately left unflagged. The app's root page ("/") is
+ *    exempt — it is reached by default, not by a nav link. The check only
+ *    runs once the app demonstrably uses the navItems convention at all (at
+ *    least one page reachable through one) — an app with zero navItems
+ *    arrays anywhere (a registry atom, a chrome-less fixture) has not opted
+ *    into nav-driven reachability, so every page reading "absent" would be
+ *    noise.
+ *  - `detail-panel-back-in-actions` (warning, TEMPORARY migration aid — a
+ *    burndown check retired once the corpus is clean) — a `detail-panel`
+ *    pattern whose `actions` array carries an entry with `event: "BACK"`.
+ *    `detail-panel` gained a first-class `backAction` prop (2026-08-20,
+ *    `Almadar_UX.md` §8.4: back affordances render top-left) specifically so
+ *    Back does not compete with the panel's own close control; a `BACK`
+ *    left inside `actions` still renders top-right, next to the close X — the
+ *    doctrine violation this check burns down.
+ *  - `relation-field-rendered-raw` (warning) — a table-like pattern's
+ *    `columns` entry (`{key|field}`) resolves, through the trait's
+ *    `linkedEntity`, to a relation-typed entity field, carries no per-column
+ *    `type`/`format` override, and the pattern node carries no
+ *    `relationsData`. Since 2026-08-20 the runtime auto-injects
+ *    `relationsData` server-side and the compiled path binds it at codegen —
+ *    but ONLY for the three pattern types the registry tags
+ *    `@fieldsContract` (`form`, `form-section`, `detail-panel`;
+ *    `getPatternFieldsContract`, `@almadar/core`). Table/grid patterns
+ *    (`entity-table`, `data-grid`, `table-view`, …) carry no `relationsData`
+ *    prop in the registry at all and get no auto-injection on either path, so
+ *    this check is scoped to exactly those un-healed surfaces — firing it on
+ *    `detail-panel`/`form`/`form-section` would flag the now-healed common
+ *    case, not a real gap.
  *
  * @packageDocumentation
  */
@@ -147,7 +198,7 @@ import type {
   TraitConfigValue,
 } from '@almadar/core';
 import { identityEntityName, ownerFieldsFromSchema } from '@almadar/core/mock';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, getPatternFieldsContract, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
@@ -183,7 +234,11 @@ export interface WiringLintFinding {
     | 'embedded-sibling-single-referrer'
     | 'unscoped-owned-entity'
     | 'app-theme-divergent'
-    | 'identity-roster-unwritable';
+    | 'identity-roster-unwritable'
+    | 'navigate-target-undeclared'
+    | 'page-absent-from-nav'
+    | 'detail-panel-back-in-actions'
+    | 'relation-field-rendered-raw';
   severity: WiringLintSeverity;
   orbital: string;
   trait: string;
@@ -1193,6 +1248,119 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
       });
     }
 
+    // --- relation-field-rendered-raw ---------------------------------------
+    // Table-like patterns (`columns`) never get the 2026-08-20 relationsData
+    // auto-injection — that lands only on the three `@fieldsContract`-tagged
+    // patterns (`getPatternFieldsContract`). A column keyed to a relation
+    // field, with no per-column type/format override and no authored
+    // relationsData, renders the raw related id.
+    for (const [name, trait] of traits) {
+      const entityName = trait.linkedEntity;
+      if (typeof entityName !== 'string') continue;
+      const entityRefs = [orb.entity, ...(orb.auxiliaryEntities ?? [])];
+      const entity = entityRefs.find(
+        (ref): ref is Extract<typeof ref, { name: string }> =>
+          typeof ref === 'object' && ref !== null && 'fields' in ref && ref.name === entityName,
+      );
+      if (entity === undefined) continue;
+      const relationFields = new Set(
+        (entity.fields ?? []).filter((f) => f.type === 'relation').map((f) => f.name),
+      );
+      if (relationFields.size === 0) continue;
+      const seenColumns = new Set<string>();
+      const scan = (node: ScanNode): void => {
+        if (node === null || node === undefined) return;
+        if (Array.isArray(node)) {
+          for (const child of node) scan(child);
+          return;
+        }
+        if (typeof node !== 'object') return;
+        const record = asRecordNode(node);
+        const patternType = record['type'];
+        const columns = record['columns'];
+        if (
+          typeof patternType === 'string' &&
+          Array.isArray(columns) &&
+          getPatternFieldsContract(patternType) === undefined &&
+          record['relationsData'] === undefined
+        ) {
+          for (const col of columns) {
+            if (col === null || typeof col !== 'object' || Array.isArray(col)) continue;
+            const colRecord = asRecordNode(col as object);
+            if (colRecord['type'] !== undefined || colRecord['format'] !== undefined) continue;
+            const key = colRecord['key'] ?? colRecord['field'];
+            if (typeof key !== 'string' || !relationFields.has(key)) continue;
+            if (seenColumns.has(key)) continue;
+            seenColumns.add(key);
+            findings.push({
+              check: 'relation-field-rendered-raw',
+              severity: 'warning',
+              orbital: orb.name,
+              trait: name,
+              message:
+                `${name}'s ${patternType} shows column '${key}' on ${entityName}, a relation-typed field, with no ` +
+                `type/format override and no relationsData — the column renders the raw related id instead of a label`,
+              suggestion:
+                `add relationsData for '${key}' on this ${patternType} (the server-side auto-injection only ` +
+                `covers form/form-section/detail-panel), or give the column an explicit type/format that resolves ` +
+                `the relation to a label`,
+            });
+          }
+        }
+        for (const value of Object.values(record)) scan(value);
+      };
+      for (const transition of trait.stateMachine?.transitions ?? []) {
+        for (const effect of transition.effects ?? []) {
+          if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
+        }
+      }
+      if (trait.config) scan(trait.config);
+    }
+
+    // --- detail-panel-back-in-actions (TEMPORARY migration aid — retires
+    // once the corpus is clean; see header doc) ----------------------------
+    for (const [name, trait] of traits) {
+      const scan = (node: ScanNode): void => {
+        if (node === null || node === undefined) return;
+        if (Array.isArray(node)) {
+          for (const child of node) scan(child);
+          return;
+        }
+        if (typeof node !== 'object') return;
+        const record = asRecordNode(node);
+        const actions = record['type'] === 'detail-panel' ? record['actions'] : undefined;
+        if (Array.isArray(actions)) {
+          const hasBack = actions.some(
+            (entry) =>
+              entry !== null &&
+              typeof entry === 'object' &&
+              !Array.isArray(entry) &&
+              asRecordNode(entry as object)['event'] === 'BACK',
+          );
+          if (hasBack) {
+            findings.push({
+              check: 'detail-panel-back-in-actions',
+              severity: 'warning',
+              orbital: orb.name,
+              trait: name,
+              message:
+                `${name} renders a detail-panel with a BACK entry inside 'actions' — detail-panel's first-class ` +
+                `'backAction' prop renders top-left (Almadar_UX §8.4); a BACK left in 'actions' renders top-right, ` +
+                `next to the close X`,
+              suggestion: `move the BACK entry out of 'actions' into 'backAction: {label, event: "BACK"}'`,
+            });
+          }
+        }
+        for (const value of Object.values(record)) scan(value);
+      };
+      for (const transition of trait.stateMachine?.transitions ?? []) {
+        for (const effect of transition.effects ?? []) {
+          if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
+        }
+      }
+      if (trait.config) scan(trait.config);
+    }
+
     // --- listens-source-never-emits + payload-starved-route --------------
     for (const [listenerName, listener] of traits) {
       for (const listen of listener.listens ?? []) {
@@ -1526,6 +1694,148 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             `compose the app's create mechanism into the ${identityName} orbital: an Add ` +
             `affordance emitting CREATE, a \`Modal.traits.ModalRecordModal\` create modal, and a ` +
             `persistor trait whose DO_CREATE arm runs \`(persist create ${identityName} ?data)\``,
+        });
+      }
+    }
+  }
+
+  // --- navigate-target-undeclared -------------------------------------------
+  // The declared-path universe is the WHOLE app: a navigate target routinely
+  // points at a page owned by a sibling orbital (an AppLayout's cross-feature
+  // links), so this is cross-orbital, unlike the per-orb checks above.
+  const allPages = schema.orbitals.flatMap((orb) => inlinePages(orb));
+  const pathSegments = (path: string): string[] => path.split('/').filter((segment) => segment.length > 0);
+  // The prefix a `str/concat`-built target can be compared against: a page's
+  // path with its trailing `:param` segment stripped (only a TRAILING param
+  // segment — a mid-path param like "/contacts/:id/edit" has no such prefix).
+  const paramStrippedPrefix = (path: string): string | undefined => {
+    const segments = pathSegments(path);
+    const last = segments[segments.length - 1];
+    if (last === undefined || !last.startsWith(':')) return undefined;
+    return `/${segments.slice(0, -1).join('/')}/`;
+  };
+  const isPathDeclared = (target: string): boolean => {
+    const targetSegments = pathSegments(target);
+    return allPages.some((page) => {
+      const pageSegments = pathSegments(page.path);
+      if (pageSegments.length !== targetSegments.length) return false;
+      return pageSegments.every(
+        (segment, i) =>
+          segment === targetSegments[i] || segment.startsWith(':') || targetSegments[i]!.startsWith(':'),
+      );
+    });
+  };
+  const isPrefixDeclared = (prefix: string): boolean => {
+    const normalized = prefix.endsWith('/') ? prefix : `${prefix}/`;
+    return allPages.some((page) => {
+      const stripped = paramStrippedPrefix(page.path);
+      return (
+        stripped !== undefined &&
+        (normalized === stripped || normalized.startsWith(stripped) || stripped.startsWith(normalized))
+      );
+    });
+  };
+  type NavigateTarget = { kind: 'literal' | 'prefix'; value: string };
+  const collectNavigateTargets = (node: unknown, out: NavigateTarget[]): void => {
+    if (!Array.isArray(node)) return;
+    if (node[0] === 'navigate') {
+      const target = node[1];
+      if (
+        typeof target === 'string' &&
+        target.length > 0 &&
+        !target.startsWith('@') &&
+        !target.startsWith('?') &&
+        !/^https?:\/\//.test(target)
+      ) {
+        out.push({ kind: 'literal', value: target });
+      } else if (
+        Array.isArray(target) &&
+        target[0] === 'str/concat' &&
+        typeof target[1] === 'string' &&
+        target[1].startsWith('/')
+      ) {
+        out.push({ kind: 'prefix', value: target[1] });
+      }
+    }
+    for (const child of node) collectNavigateTargets(child, out);
+  };
+  for (const orb of schema.orbitals) {
+    for (const trait of orb.traits ?? []) {
+      if (!isInlineTrait(trait)) continue;
+      const seen = new Set<string>();
+      for (const arm of trait.stateMachine?.transitions ?? []) {
+        const targets: NavigateTarget[] = [];
+        for (const effect of arm.effects ?? []) collectNavigateTargets(effect, targets);
+        for (const target of targets) {
+          const declared = target.kind === 'literal' ? isPathDeclared(target.value) : isPrefixDeclared(target.value);
+          if (declared) continue;
+          const dedupeKey = `${target.kind}:${target.value}`;
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          findings.push({
+            check: 'navigate-target-undeclared',
+            severity: 'warning',
+            orbital: orb.name,
+            trait: trait.name,
+            message:
+              `${trait.name} navigates to '${target.value}' but no page in this app declares that path (or its ` +
+              `parameterized prefix) — the affordance is structurally wired but lands on a 404`,
+            suggestion: `declare a page at '${target.value}', or point the navigate effect at an existing page path`,
+          });
+        }
+      }
+    }
+  }
+
+  // --- page-absent-from-nav ---------------------------------------------
+  // `href` extraction reuses the same structural descriptor-array parse
+  // `descriptorEvents` already applies to `itemActions`: any array whose
+  // entries are objects carrying the field counts, regardless of which
+  // trait/config key holds it — no hardcoded `navItems` name list.
+  const navHrefs = new Set<string>();
+  const collectHrefs = (node: unknown): void => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      for (const href of descriptorEvents(node, 'href')) navHrefs.add(href);
+      for (const child of node) collectHrefs(child);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    for (const value of Object.values(node as Record<string, unknown>)) collectHrefs(value);
+  };
+  for (const orb of schema.orbitals) {
+    for (const trait of orb.traits ?? []) {
+      if (!isInlineTrait(trait)) continue;
+      if (trait.config) collectHrefs(trait.config);
+      for (const transition of trait.stateMachine?.transitions ?? []) {
+        for (const effect of transition.effects ?? []) {
+          if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) collectHrefs(effect[2]);
+        }
+      }
+    }
+  }
+  // Only meaningful once the app demonstrably USES the navItems convention
+  // (at least one page is reachable through one) — an app with no navItems
+  // array anywhere (a registry atom, a chrome-less test fixture) hasn't opted
+  // into nav-driven reachability at all, so every page reading "absent" would
+  // be noise, not a finding.
+  if (navHrefs.size > 0) {
+    for (const orb of schema.orbitals) {
+      for (const page of inlinePages(orb)) {
+        if (page.path === '/') continue; // the app's default route is reached without a nav link
+        if (pathSegments(page.path).some((segment) => segment.startsWith(':'))) continue; // parameterized detail page
+        if (navHrefs.has(page.path)) continue;
+        findings.push({
+          check: 'page-absent-from-nav',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: page.name,
+          message:
+            `page '${page.path}' is declared but appears in no navItems array in this app — a viewer has no link ` +
+            `that reaches it`,
+          suggestion:
+            `add {href: '${page.path}', label, icon} to the AppLayout navItems, or remove the page if it is ` +
+            `intentionally sub-navigation`,
         });
       }
     }
