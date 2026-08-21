@@ -157,14 +157,6 @@
  *    arrays anywhere (a registry atom, a chrome-less fixture) has not opted
  *    into nav-driven reachability, so every page reading "absent" would be
  *    noise.
- *  - `detail-panel-back-in-actions` (warning, TEMPORARY migration aid — a
- *    burndown check retired once the corpus is clean) — a `detail-panel`
- *    pattern whose `actions` array carries an entry with `event: "BACK"`.
- *    `detail-panel` gained a first-class `backAction` prop (2026-08-20,
- *    `Almadar_UX.md` §8.4: back affordances render top-left) specifically so
- *    Back does not compete with the panel's own close control; a `BACK`
- *    left inside `actions` still renders top-right, next to the close X — the
- *    doctrine violation this check burns down.
  *  - `relation-field-rendered-raw` (warning) — a table-like pattern's
  *    `columns` entry (`{key|field}`) resolves, through the trait's
  *    `linkedEntity`, to a relation-typed entity field, carries no per-column
@@ -237,7 +229,6 @@ export interface WiringLintFinding {
     | 'identity-roster-unwritable'
     | 'navigate-target-undeclared'
     | 'page-absent-from-nav'
-    | 'detail-panel-back-in-actions'
     | 'relation-field-rendered-raw';
   severity: WiringLintSeverity;
   orbital: string;
@@ -1317,49 +1308,8 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
       if (trait.config) scan(trait.config);
     }
 
-    // --- detail-panel-back-in-actions (TEMPORARY migration aid — retires
-    // once the corpus is clean; see header doc) ----------------------------
-    for (const [name, trait] of traits) {
-      const scan = (node: ScanNode): void => {
-        if (node === null || node === undefined) return;
-        if (Array.isArray(node)) {
-          for (const child of node) scan(child);
-          return;
-        }
-        if (typeof node !== 'object') return;
-        const record = asRecordNode(node);
-        const actions = record['type'] === 'detail-panel' ? record['actions'] : undefined;
-        if (Array.isArray(actions)) {
-          const hasBack = actions.some(
-            (entry) =>
-              entry !== null &&
-              typeof entry === 'object' &&
-              !Array.isArray(entry) &&
-              asRecordNode(entry as object)['event'] === 'BACK',
-          );
-          if (hasBack) {
-            findings.push({
-              check: 'detail-panel-back-in-actions',
-              severity: 'warning',
-              orbital: orb.name,
-              trait: name,
-              message:
-                `${name} renders a detail-panel with a BACK entry inside 'actions' — detail-panel's first-class ` +
-                `'backAction' prop renders top-left (Almadar_UX §8.4); a BACK left in 'actions' renders top-right, ` +
-                `next to the close X`,
-              suggestion: `move the BACK entry out of 'actions' into 'backAction: {label, event: "BACK"}'`,
-            });
-          }
-        }
-        for (const value of Object.values(record)) scan(value);
-      };
-      for (const transition of trait.stateMachine?.transitions ?? []) {
-        for (const effect of transition.effects ?? []) {
-          if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
-        }
-      }
-      if (trait.config) scan(trait.config);
-    }
+    // (detail-panel-back-in-actions retired 2026-08-21 — the temporary
+    // migration aid burned down to 0 corpus-wide in the UX campaign.)
 
     // --- listens-source-never-emits + payload-starved-route --------------
     for (const [listenerName, listener] of traits) {
