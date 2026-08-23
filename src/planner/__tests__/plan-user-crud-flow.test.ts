@@ -240,6 +240,41 @@ describe('planUserCrudFlow', () => {
     ]);
   });
 
+  it('I-23: requiresRowContext stamps only steps whose open event declares required payload', () => {
+    // Base fixture: DELETE/EDIT open events declare no payloadSchema → no flag.
+    const bare = planUserCrudFlow(stdListShape);
+    expect(bare.find((s) => s.testKind === 'crud-delete')?.requiresRowContext).toBeUndefined();
+    expect(bare.find((s) => s.testKind === 'crud-edit')?.requiresRowContext).toBeUndefined();
+    expect(bare.find((s) => s.testKind === 'crud-create')?.requiresRowContext).toBeUndefined();
+
+    // std-delete's real shape: DELETE declares a REQUIRED `id` → a bare `{}`
+    // fallback is a guaranteed rejection, so the step must carry the flag.
+    const withDeleteSchema: OrbitalSchema = {
+      ...stdListShape,
+      orbitals: [
+        {
+          ...stdListShape.orbitals[0],
+          traits: (stdListShape.orbitals[0].traits ?? []).map((t) => {
+            if (typeof t === 'string' || 'ref' in t || t.name !== 'ListItemDelete') return t;
+            return {
+              ...t,
+              stateMachine: {
+                ...t.stateMachine!,
+                events: (t.stateMachine?.events ?? []).map((e) =>
+                  e.key === 'DELETE'
+                    ? { ...e, payloadSchema: [{ name: 'id', type: 'string', required: true }] }
+                    : e,
+                ),
+              },
+            };
+          }),
+        },
+      ],
+    };
+    const del = planUserCrudFlow(withDeleteSchema).find((s) => s.testKind === 'crud-delete');
+    expect(del?.requiresRowContext).toBe(true);
+  });
+
   it('produces no steps when the orbital has no persistor', () => {
     const noPersistor: OrbitalSchema = {
       ...stdListShape,

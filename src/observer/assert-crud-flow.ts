@@ -82,6 +82,18 @@ export function assertCrudFlow(
       continue;
     }
 
+    // I-23: the kernel deliberately skipped this step (no DOM affordance +
+    // required payload a bare dispatch cannot supply). Informational, never
+    // a FAIL — the skip reason is in the detail so it can't hide.
+    if (frame.cause.bareDispatchSkipped !== undefined) {
+      verdicts.push({
+        passed: true,
+        detail: `${testKind}: ${frame.cause.expectedRowDelta?.entityName ?? ''} ${frame.cause.event} — skipped: ${frame.cause.bareDispatchSkipped}`,
+        evidence: { frameIndices: [frame.index] },
+      });
+      continue;
+    }
+
     const expected = frame.cause.expectedRowDelta;
     const successEvent = frame.cause.expectedSuccessEvent;
     if (expected === undefined || successEvent === undefined) {

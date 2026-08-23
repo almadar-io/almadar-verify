@@ -100,6 +100,7 @@ export async function tick<Ctx extends DriverContext>(
 
   let serverResponse = null;
   let domFellBackToBus = false;
+  let bareDispatchSkip: string | undefined;
   // `dispatchSent` tracks whether the driver actually dispatched the
   // event. The DOM-trigger path that finds an affordance and clicks it
   // counts as sent; otherwise it falls through to `sendEvent` and we
@@ -119,6 +120,14 @@ export async function tick<Ctx extends DriverContext>(
   } else if (step.triggerKind === 'dom') {
     const triggered = await driver.triggerDOM(ctx, step, traitScope);
     if (triggered) {
+      dispatchSent = true;
+    } else if (step.requiresRowContext === true) {
+      // I-23: the open event declares required payload fields a bare `{}`
+      // dispatch cannot supply — the fallback would be rejected by payload
+      // validation every time and read as a false FAIL. Skip honestly:
+      // no dispatch, frame marked informational (observers demote, never
+      // silently credit).
+      bareDispatchSkip = `bare dispatch would omit required payload field(s) of '${step.event}' — no DOM affordance found`;
       dispatchSent = true;
     } else {
       // No affordance was visible/clickable in this context — the frame
@@ -145,14 +154,22 @@ export async function tick<Ctx extends DriverContext>(
   const snap = await driver.snapshot(ctx, step);
 
   const effectiveServerResponse = serverResponse ?? snap.serverResponse;
-  const errors = collectDispatchErrors(step, stateAfter, dispatchSent, allowStateless === true);
-  const accepted = errors.length === 0 && decideAccepted(step, stateBefore, stateAfter, effectiveServerResponse);
+  const errors = bareDispatchSkip !== undefined
+    ? []
+    : collectDispatchErrors(step, stateAfter, dispatchSent, allowStateless === true);
+  const accepted = bareDispatchSkip !== undefined
+    ? true
+    : errors.length === 0 && decideAccepted(step, stateBefore, stateAfter, effectiveServerResponse);
 
   return makeWalkFrame({
     ...(errors.length > 0 && { errors }),
     index,
     timestamp,
-    cause: domFellBackToBus ? { ...cause, triggerKind: 'bus' } : cause,
+    cause: domFellBackToBus
+      ? { ...cause, triggerKind: 'bus' }
+      : bareDispatchSkip !== undefined
+        ? { ...cause, bareDispatchSkipped: bareDispatchSkip }
+        : cause,
     stateBefore,
     stateAfter,
     payload: asEventPayload(step.payload),

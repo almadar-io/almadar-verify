@@ -94,6 +94,14 @@ export interface FrameCause {
    */
   testKind?: TestKind;
   /**
+   * I-23: set when the kernel deliberately SKIPPED the bare bus fallback
+   * because the step's open event requires payload fields a `{}` dispatch
+   * cannot supply (`ExtendedWalkStep.requiresRowContext`). Carries the
+   * human-readable reason; observers report the frame as an informational
+   * skip, never a FAIL and never a silent pass-through.
+   */
+  bareDispatchSkipped?: string;
+  /**
    * v3.0.0: per-entity row-count delta the originating step expects
    * the observer to see in `frame.entityChanges` after settle.
    * Carried from `ExtendedWalkStep.expectedRowDelta`.

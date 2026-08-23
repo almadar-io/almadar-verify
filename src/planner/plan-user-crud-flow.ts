@@ -45,7 +45,7 @@ import type {
 } from '@almadar/core';
 import type { ExtendedWalkStep, TestKind } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
-import { collectEntityFields } from './internal/payload-synth.js';
+import { collectEntityFields, hasRequiredPayloadFields } from './internal/payload-synth.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
 
 export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
@@ -290,6 +290,17 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
   // receiver's transition event.
   if (openAffordanceEvent !== openEvent) {
     step.openAffordanceEvent = openAffordanceEvent;
+  }
+
+  // I-23: when the OPEN event declares required payload fields, a bare `{}`
+  // bus fallback is a guaranteed payload-validation rejection — mark the
+  // step so the kernel skips honestly instead of dispatching it. Edit and
+  // delete need row context; create's affordance is a toolbar button.
+  if (kind === 'edit' || kind === 'delete') {
+    const openEventSchema = extractPayloadSchema(sourceTrait, openEvent);
+    if (hasRequiredPayloadFields(openEventSchema)) {
+      step.requiresRowContext = true;
+    }
   }
 
   if (kind === 'create' || kind === 'edit') {

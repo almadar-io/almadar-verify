@@ -63,6 +63,13 @@ const DEFAULT_TIMEOUT_MS = 2000;
 const DEFAULT_FORM_MOUNT_MS = 3000;
 const DEFAULT_FORM_SELECTOR = '[data-pattern="form-section"]';
 
+// Entity-row presence, across every browse surface shape (the
+// `entity-data-check` selector union). Used by the browse-loaded gate.
+const BROWSE_ROW_SELECTOR =
+  '[data-entity-row], [data-entity-id], [data-pattern="data-grid"] tbody tr, [data-pattern="data-list"] > *';
+const BROWSE_LOADED_TIMEOUT_MS = 5000;
+const BROWSE_LOADED_POLL_MS = 250;
+
 /**
  * Build a selector matching an action button's `data-testid`. The compiled UI
  * (`@almadar/ui` `Button` + `DataGrid` itemActions) stamps it as
@@ -108,12 +115,39 @@ export function createDefaultDomTrigger(
     // `action-<step.event>`. The step.event remains the receiver's
     // transition event for coverage labelling.
     const affordanceEvent = step.openAffordanceEvent ?? step.event;
+    const needsRow = isCrudFlow && (step.testKind === 'crud-edit' || step.testKind === 'crud-delete');
     const rowSuffix = (isCrudFlow && step.targetRowId !== undefined)
       ? `[data-row-id="${step.targetRowId}"]`
-      : (isCrudFlow && (step.testKind === 'crud-edit' || step.testKind === 'crud-delete'))
+      : needsRow
         ? `[data-row-id]`
         : '';
     const selector = actionSelector(affordanceEvent, rowSuffix);
+
+    // I-23 race fix: a row-action probe fired at reset-for-nav raced the
+    // browse's async fetch — the click probe read an empty DOM (and the
+    // delete fallback an empty runtime snapshot) while a later frame showed
+    // the rows. Gate row-needing probes on the browse actually having
+    // rendered rows; a bounded wait that PROCEEDS on timeout, so a
+    // legitimately empty entity still flows to the honest no-rows paths.
+    if (needsRow) {
+      const gateStart = Date.now();
+      let rowsPresent = false;
+      try {
+        await page.waitForFunction(
+          (rowSelector: string) => document.querySelector(rowSelector) !== null,
+          BROWSE_ROW_SELECTOR,
+          { timeout: BROWSE_LOADED_TIMEOUT_MS, polling: BROWSE_LOADED_POLL_MS },
+        );
+        rowsPresent = true;
+      } catch {
+        rowsPresent = false;
+      }
+      domLog.debug('dom:browse-loaded-gate', {
+        step: step.coverageKey,
+        rowsPresent,
+        waitedMs: Date.now() - gateStart,
+      });
+    }
 
     const locator = page.locator(selector).first();
     let clicked = false;
@@ -162,6 +196,46 @@ export function createDefaultDomTrigger(
           step: step.coverageKey,
           selector: fallbackSelector,
           visibleProbe: false,
+          clicked: false,
+          clickError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // I-23 overflow fix: when `maxInlineActions` collapses row actions into
+    // the "…" menu, the action button does not exist in the DOM until the
+    // trigger is clicked — and menu items carry NO `data-row-id` (row
+    // identity comes from which row's overflow was opened), so the scoped
+    // selectors above can never match. Open the row's overflow, then click
+    // the action testid inside the portalled menu.
+    if (!clicked && needsRow) {
+      const rowScope = step.targetRowId !== undefined
+        ? `[data-entity-row][data-entity-id="${step.targetRowId}"]`
+        : '[data-entity-row]';
+      const overflow = page.locator(`${rowScope} [data-testid="action-overflow"]`).first();
+      try {
+        if (await overflow.isVisible({ timeout: 250 })) {
+          await overflow.click({ timeout: clickTimeoutMs });
+          const menu = page.locator('[role="menu"]').last();
+          await menu.waitFor({ state: 'visible', timeout: 2000 });
+          const item = menu.locator(actionSelector(affordanceEvent)).first();
+          const itemVisible = await item.isVisible({ timeout: 500 });
+          if (itemVisible) {
+            await item.click({ timeout: clickTimeoutMs });
+            clicked = true;
+          } else {
+            // Close the menu so a stray open panel can't shadow later steps.
+            await page.keyboard.press('Escape').catch(() => undefined);
+          }
+          domLog.debug('dom:fill:trigger-click-overflow', {
+            step: step.coverageKey,
+            itemVisible,
+            clicked,
+          });
+        }
+      } catch (err) {
+        domLog.debug('dom:fill:trigger-click-overflow', {
+          step: step.coverageKey,
           clicked: false,
           clickError: err instanceof Error ? err.message : String(err),
         });

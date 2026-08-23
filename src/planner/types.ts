@@ -202,6 +202,15 @@ export interface ExtendedWalkStep extends WalkStep {
   payloadRowShape?: ReadonlyArray<{ name: string; wholeRow: boolean }>;
 
   /**
+   * I-23: the step's open event declares REQUIRED payload fields, so the
+   * kernel's bare `{}` bus fallback would be rejected by payload
+   * validation every time. When the DOM trigger finds no affordance, the
+   * kernel SKIPS the dispatch (honest informational skip) instead of
+   * bare-dispatching a guaranteed rejection.
+   */
+  requiresRowContext?: boolean;
+
+  /**
    * v3.7.0: for `crud-delete`, the affordance event the driver clicks
    * AFTER the initial open click to actually fire the persist. This is
    * the confirmation modal's CONFIRM affordance (e.g. `CONFIRM_DELETE`).
