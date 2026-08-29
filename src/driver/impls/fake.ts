@@ -126,24 +126,33 @@ export class FakeRuntime {
       };
     }
 
-    const transition = trait.transitions.find(
+    // Arm selection mirrors StateMachineCore.processEvent: candidates in
+    // declaration order, first unguarded arm or first passing guard wins —
+    // the standard guarded-arm → unguarded-fallback pattern must advance,
+    // not report a false block.
+    const candidates = trait.transitions.filter(
       (t) => t.from === current && t.event === event,
     );
-    if (transition === undefined) {
+    if (candidates.length === 0) {
       // Bus dispatch with no matching transition is recorded as a
       // cascade event but doesn't advance the state machine.
       this.eventLog.push({ type: event, payload, timestamp: Date.now() });
       return { to: null, serverResponse: null };
     }
 
-    if (transition.hasGuard && transition.guard !== undefined && this.options.evaluateGuard) {
-      const guardPassed = this.options.evaluateGuard(transition.guard, { traitName, event, payload });
-      if (!guardPassed) {
-        // Guard-fail: record the dispatch attempt, do not advance — mirrors
-        // the "no matching transition" branch above (same observable shape).
-        this.eventLog.push({ type: event, payload, timestamp: Date.now() });
-        return { to: null, serverResponse: null };
+    let transition: (typeof candidates)[0] | undefined;
+    for (const arm of candidates) {
+      if (arm.hasGuard && arm.guard !== undefined && this.options.evaluateGuard) {
+        if (!this.options.evaluateGuard(arm.guard, { traitName, event, payload })) continue;
       }
+      transition = arm;
+      break;
+    }
+    if (transition === undefined) {
+      // Every arm's guard failed: record the dispatch attempt, do not
+      // advance — mirrors the "no matching transition" branch above.
+      this.eventLog.push({ type: event, payload, timestamp: Date.now() });
+      return { to: null, serverResponse: null };
     }
 
     this.states.set(traitName, transition.to);

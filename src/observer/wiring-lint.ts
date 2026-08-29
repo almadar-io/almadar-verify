@@ -491,9 +491,19 @@ function configAffordanceEvents(trait: Trait): Set<string> {
  *   2. a LABELLED control — an event paired with visible text. Labelless does
  *      not count: `EmptyState.ACTION` with no `actionLabel` declares an event
  *      and renders no button, which is the dead affordance being hunted.
- *   3. a NON-INLINE sibling embed, which brings its own surface.
+ *   3. a NON-INLINE sibling embed, which brings its own surface. This
+ *      includes a DECLARED ref trait the inline-only `traits` map cannot
+ *      hold: an unresolved ref means content-unknown, never content-empty,
+ *      so the check may not assert "no data surface" over it
+ *      (SCAN-LINT-UNRESOLVED-REF-1 — a composed `ref:
+ *      RecordDetail.traits.RecordItemDetail` embed false-positived a
+ *      factory-clean std-notes).
  */
-function mainWriteOffersAWayOn(body: ScanNode, traits: ReadonlyMap<string, Trait>): boolean {
+function mainWriteOffersAWayOn(
+  body: ScanNode,
+  traits: ReadonlyMap<string, Trait>,
+  declaredTraitNames: ReadonlySet<string>,
+): boolean {
   const visited = new Set<string>();
   const LABEL_KEYS = ['label', 'actionLabel', 'submitLabel', 'cancelLabel'] as const;
   let found = false;
@@ -504,7 +514,10 @@ function mainWriteOffersAWayOn(body: ScanNode, traits: ReadonlyMap<string, Trait
       if (!node.startsWith('@trait.')) return;
       const name = node.slice('@trait.'.length);
       const embedded = traits.get(name);
-      if (embedded === undefined) return;
+      if (embedded === undefined) {
+        if (declaredTraitNames.has(name)) found = true;
+        return;
+      }
       if (!isInlineTrait(embedded)) { found = true; return; }
       if (visited.has(name)) return;
       visited.add(name);
@@ -1013,7 +1026,7 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
           if (!isMainSlotRenderUi(effect)) continue;
           const body = effect[2];
           if (body === null || body === undefined) continue;   // a deliberate clear
-          if (mainWriteOffersAWayOn(body as ScanNode, traits)) continue;
+          if (mainWriteOffersAWayOn(body as ScanNode, traits, declaredTraitNames)) continue;
           seen.add(event);
           findings.push({
             check: 'viewer-stranded',

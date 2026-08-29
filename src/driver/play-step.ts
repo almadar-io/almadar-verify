@@ -56,26 +56,47 @@ export async function playCircuitStep(
   target: TraitWalkConfig,
   input: PlayCircuitStepInput,
 ): Promise<PlayCircuitStepResult> {
-  const transition = target.transitions.find((t) => t.from === input.from && t.event === input.event);
-  if (!transition) {
+  const arms = target.transitions.filter((t) => t.from === input.from && t.event === input.event);
+  if (arms.length === 0) {
     throw new Error(`Trait "${target.traitName}" has no transition ${input.from} --${input.event}-->.`);
   }
 
-  const to = input.expectTo ?? transition.to;
   const payload = input.payload ?? {};
 
-  // Boxed: a bare `let` gets over-narrowed by TS control-flow analysis
-  // across the `tick()` await (it can't see the closure runs during that
-  // await, so it treats the post-await read as still `none`).
-  const guardBox: { verdict: 'pass' | 'fail' | 'none' } = { verdict: 'none' };
+  // Arm selection mirrors StateMachineCore.processEvent: candidates in
+  // declaration order, first unguarded arm or first passing guard wins, a
+  // guard error counts as a fail and falls through. Playing only arms[0]
+  // (the old behavior) reported a false "blocked" for the standard
+  // guarded-arm → unguarded-fallback pattern.
+  let transition = arms[arms.length - 1];
+  let selection: 'pass' | 'fail' | 'none' = 'fail';
+  for (const arm of arms) {
+    if (arm.guard === undefined || arm.guard === null) {
+      transition = arm;
+      selection = 'none';
+      break;
+    }
+    let passed = true;
+    if (input.evaluateGuard) {
+      try {
+        passed = input.evaluateGuard(arm.guard, { traitName: target.traitName, event: input.event, payload });
+      } catch {
+        passed = false;
+      }
+    }
+    if (passed) {
+      transition = arm;
+      selection = input.evaluateGuard ? 'pass' : 'none';
+      break;
+    }
+  }
+
+  const to = input.expectTo ?? transition.to;
+
   const { driver, runtime } = createFakeDriver([target], {
     ...(input.evaluateGuard
       ? {
-          evaluateGuard: (guard, ctx) => {
-            const passed = input.evaluateGuard?.(guard, ctx) ?? true;
-            guardBox.verdict = passed ? 'pass' : 'fail';
-            return passed;
-          },
+          evaluateGuard: (guard, ctx) => input.evaluateGuard?.(guard, ctx) ?? true,
         }
       : {}),
   });
@@ -95,11 +116,16 @@ export async function playCircuitStep(
   const ctx: FakeDriverContext = { outputDir: '', trait: target, runtime };
   const frame = await tick(driver, ctx, null, step);
 
+  // `selection` (the pre-pass verdict for the CHOSEN arm) is authoritative:
+  // guardBox records the LAST hook call during the tick, which for a
+  // guarded-arm → unguarded-fallback dispatch is the FAILED first arm even
+  // though the fallback fired. Without a chosen arm (all guards failed),
+  // nothing fires regardless of what the driver accepted.
   return {
     trait: target.traitName,
     event: input.event,
-    transitionFired: guardBox.verdict === 'fail' ? false : frame.accepted,
-    guard: guardBox.verdict,
+    transitionFired: selection === 'fail' ? false : frame.accepted,
+    guard: selection,
     state: { before: frame.stateBefore, after: frame.stateAfter },
     effects: frame.effectResults,
     emitted: frame.eventLogDelta.added,

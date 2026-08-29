@@ -1058,6 +1058,38 @@ describe('lintWiring — viewer-stranded credits value-input controls', () => {
     expect(stranded).toHaveLength(1);
     expect(stranded[0].trait).toBe('Lab');
   });
+
+  // SCAN-LINT-UNRESOLVED-REF-1: a composed schema stores call-site traits as
+  // unresolved refs. An embed of a DECLARED ref trait is content-unknown,
+  // never content-empty — the check may not assert "no data surface" over it
+  // (std-notes NoteDocPage false-positived on `@trait.NoteDoc` →
+  // `ref: RecordDetail.traits.RecordItemDetail`).
+  it('an embed of a declared ref trait is a way on, not a strand (the composed std-notes shape)', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [
+          labWith({ type: 'stack', children: ['@trait.DocSurface'] }),
+          { name: 'DocSurface', ref: 'RecordDetail.traits.RecordItemDetail', refId: 'trt_x', config: {} },
+        ],
+        pages: [page],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'viewer-stranded')).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: an embed naming an UNDECLARED trait still strands', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'O',
+        traits: [labWith({ type: 'stack', children: ['@trait.Ghost'] })],
+        pages: [page],
+      }),
+    );
+    const stranded = result.findings.filter((f) => f.check === 'viewer-stranded');
+    expect(stranded).toHaveLength(1);
+    expect(stranded[0].trait).toBe('Lab');
+  });
 });
 
 describe('lintWiring — app-theme-divergent', () => {
