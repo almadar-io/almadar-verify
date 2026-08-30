@@ -321,8 +321,9 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
     const patternType = record['type'];
     if (typeof patternType === 'string') {
       for (const prop of eventKeyPropsOf(patternType)) {
-        const value = record[prop];
-        if (typeof value === 'string' && value.length > 0) out.add(value);
+        for (const leaf of conditionalLeafValues(record[prop])) {
+          if (typeof leaf === 'string' && leaf.length > 0) out.add(leaf);
+        }
       }
     }
     for (const value of Object.values(record)) scan(value);
@@ -593,6 +594,12 @@ const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set(['INIT', 'LOAD', '$MOUNT']
  */
 function descriptorEvents(value: unknown, eventField: string): string[] {
   if (!Array.isArray(value)) return [];
+  // A conditional (`(if cond A B)`) list contributes the UNION of its
+  // branches — only one renders at a time, but either is a live emitter
+  // (mirrors the compiler's conditional_leaf_values, 2026-08-30).
+  if (isConditionalNode(value)) {
+    return [...descriptorEvents(value[2], eventField), ...descriptorEvents(value[3], eventField)];
+  }
   const out: string[] = [];
   for (const entry of value) {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
@@ -600,6 +607,19 @@ function descriptorEvents(value: unknown, eventField: string): string[] {
     if (typeof event === 'string' && event.length > 0) out.push(event);
   }
   return out;
+}
+
+/** `["if", cond, then, else?]` — the lowered shape of a `(if …)` config value. */
+function isConditionalNode(value: unknown[]): boolean {
+  return value[0] === 'if' && value.length >= 3 && value.length <= 4;
+}
+
+/** The value itself, or — for a conditional — every branch leaf, recursively. */
+function conditionalLeafValues(value: unknown): unknown[] {
+  if (Array.isArray(value) && isConditionalNode(value)) {
+    return [...conditionalLeafValues(value[2]), ...(value.length === 4 ? conditionalLeafValues(value[3]) : [])];
+  }
+  return [value];
 }
 
 /** Events declared in `itemActions`-shaped config arrays anywhere in the

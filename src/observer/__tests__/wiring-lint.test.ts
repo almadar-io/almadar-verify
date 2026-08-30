@@ -229,6 +229,43 @@ describe('lintWiring — listens-source-never-emits', () => {
     expect(result.findings).toEqual([]);
   });
 
+  it('credits BOTH branches of a conditional (if-wrapped) action list — role-conditional lists are live emitters', () => {
+    const result = lintWiring(
+      schemaWith({
+        name: 'CondOrbital',
+        traits: [
+          {
+            name: 'Grid',
+            stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] },
+            config: {
+              itemActions: [
+                'if',
+                ['=', '@user.role', 'reader'],
+                [{ event: 'VIEW', label: 'Open' }],
+                [{ event: 'VIEW', label: 'Open' }, { event: 'EDIT', label: 'Edit' }],
+              ],
+            },
+          },
+          {
+            name: 'Sink',
+            stateMachine: {
+              transitions: [
+                { from: 'a', event: 'X', to: 'a', effects: [] },
+                { from: 'a', event: 'Y', to: 'a', effects: [] },
+              ],
+            },
+            listens: [
+              { event: 'VIEW', triggers: 'X', source: { kind: 'trait', trait: 'Grid' } },
+              { event: 'EDIT', triggers: 'Y', source: { kind: 'trait', trait: 'Grid' } },
+            ],
+          },
+        ],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Grid' }, { ref: 'Sink' }] }],
+      }),
+    );
+    expect(result.findings.filter((f) => f.check === 'listens-source-never-emits')).toEqual([]);
+  });
+
   it('flags a route whose source trait does not exist', () => {
     const result = lintWiring(
       schemaWith({
