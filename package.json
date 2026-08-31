@@ -1,6 +1,6 @@
 {
   "name": "@almadar-io/verify",
-  "version": "4.36.0",
+  "version": "4.37.0",
   "description": "Shared Playwright verification utilities for Almadar runtime and compiled projects",
   "type": "module",
   "main": "./dist/index.js",
@@ -33,17 +33,17 @@
     "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "@almadar/core": "^10.75.0",
-    "@almadar/llm": "^2.46.0",
-    "@almadar/logger": "^1.11.0",
-    "@almadar/runtime": "^6.64.0",
+    "@almadar/core": "^10.76.0",
+    "@almadar/llm": "^2.47.0",
+    "@almadar/logger": "^1.12.0",
+    "@almadar/runtime": "^6.66.0",
     "zod": "^3.22.0"
   },
   "peerDependencies": {
     "playwright": ">=1.40.0"
   },
   "devDependencies": {
-    "@almadar/eslint-plugin": "^2.16.0",
+    "@almadar/eslint-plugin": "^2.17.0",
     "@types/node": "^22.0.0",
     "@typescript-eslint/parser": "8.65.0",
     "eslint": "10.0.0",
