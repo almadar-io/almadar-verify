@@ -14,11 +14,12 @@
  * @packageDocumentation
  */
 
-import type { Effect, FieldValue, OrbitalSchema, SExpr, Trait } from '@almadar/core';
+import type { FieldValue, OrbitalSchema, Trait } from '@almadar/core';
 import { isEntityReference, isEntityCall, constTruth } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
 import { collectEffectEmittedEvents } from './internal/effect-emits.js';
+import { findPersistKind } from './internal/persist-binding.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
 
 export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[] {
@@ -92,46 +93,6 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
 }
 
 // ── internal ─────────────────────────────────────────────────────────
-
-interface PersistEffectInfo {
-  kind: 'create' | 'update' | 'delete';
-  entity: string;
-  /** v3.2.0: the success-emit event key declared on the persist's
-   *  `{ emit: { success: "X" } }` options block. Required by canonical-
-   *  operators.json's `requiresEmitSuccess: true` on persist; the
-   *  validator catches missing values upstream so the planner can
-   *  trust this is populated when present in the schema. Falls back
-   *  to undefined for hand-written .orb that hasn't been migrated yet —
-   *  observer skips the emit-success path in that case. */
-  successEvent?: string;
-}
-
-function findPersistKind(effects: ReadonlyArray<Effect>): PersistEffectInfo | null {
-  for (const effect of effects) {
-    if (!Array.isArray(effect)) continue;
-    if (effect[0] !== 'persist') continue;
-    const kind = effect[1];
-    if (kind !== 'create' && kind !== 'update' && kind !== 'delete') continue;
-    if (typeof effect[2] !== 'string') continue;     // malformed schema — skip
-
-    // Walk args [3..] for the trailing options object's `emit.success`.
-    let successEvent: string | undefined;
-    for (let i = 3; i < effect.length; i++) {
-      const arg = effect[i];
-      if (arg === null || typeof arg !== 'object' || Array.isArray(arg)) continue;
-      const emit = (arg as Readonly<Record<string, SExpr>>)['emit'];
-      if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
-      const success = (emit as Readonly<Record<string, SExpr>>)['success'];
-      if (typeof success === 'string' && success.length > 0) {
-        successEvent = success;
-        break;
-      }
-    }
-
-    return { kind, entity: effect[2], ...(successEvent !== undefined && { successEvent }) };
-  }
-  return null;
-}
 
 function deltaFor(kind: 'create' | 'update' | 'delete'): number {
   if (kind === 'create') return 1;

@@ -19,6 +19,7 @@
 
 // node:fs is loaded dynamically below so browser bundles don't pull it in.
 import { collectEmbeddedTraitReferrers } from '@almadar/core';
+import type { EntityRow, EventPayload } from '@almadar/core';
 import type { Frame } from '../frame/types.js';
 import { tick } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
@@ -35,6 +36,12 @@ import { planUserCrudFlow } from '../planner/plan-user-crud-flow.js';
 import { planReplayTo } from '../planner/plan-replay-to.js';
 import { planTickTests } from '../planner/plan-tick-tests.js';
 import { planEmitSweep } from '../planner/plan-emit-sweep.js';
+import {
+  collectEntityIdBindingTransitions,
+  collectPersistWriteTransitions,
+  traitHasEntityIdBinding,
+  type EntityIdBindingSource,
+} from '../planner/internal/persist-binding.js';
 import type { EmitDeclaration } from '../browser/catalog-probes.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import type { TraitWalkConfig } from '../engine/types.js';
@@ -127,6 +134,28 @@ export async function runVerification<Ctx extends DriverContext>(
   // for `success`-variant payload synthesis. Built once here so each
   // planWalk call doesn't re-walk the orbital.
   const entityFieldsByName = collectEntityFields(input.orbital);
+
+  // R-PERSIST-NO-ROW-KEY-SILENT-SUCCESS remedy (docs/Almadar_Runtime_Gaps.md
+  // §R-PERSIST-NO-ROW-KEY-SILENT-SUCCESS): the hermetic walk resets the page
+  // before every step, so a `persist update|delete` step can fire before
+  // the id-binding transition that establishes `@entity.id` ever ran for
+  // real — the write then resolves against an empty row key and silently
+  // no-ops. Traits that legitimately establish their own row identity
+  // (`traitHasEntityIdBinding` — the same condition the Rust static
+  // validator checks before emitting `ORB_BINDING_PERSIST_ROW_ID_NEVER_SET`)
+  // get that binding transition's dispatch corrected below to carry a REAL
+  // seeded row's id instead of synthesized fake data. A trait with NO such
+  // transition anywhere never gets touched — that IS the one real corpus
+  // defect, and it must keep failing rather than being masked.
+  const persistWriteByKey = collectPersistWriteTransitions(input.orbital);
+  const entityIdBindingByTrait = new Map<string, ReadonlyMap<string, EntityIdBindingSource>>();
+  const linkedEntityByTrait = new Map<string, string>();
+  for (const { trait } of eachInlineTrait(input.orbital)) {
+    if (trait.linkedEntity !== undefined) linkedEntityByTrait.set(trait.name, trait.linkedEntity);
+    if (traitHasEntityIdBinding(trait)) {
+      entityIdBindingByTrait.set(trait.name, collectEntityIdBindingTransitions(trait));
+    }
+  }
 
   // Gap #13: trait-name → owning-orbital-name map. Threaded into `tick`
   // so the verifier dispatch bridge can construct the qualified
@@ -257,6 +286,30 @@ export async function runVerification<Ctx extends DriverContext>(
     }
     await input.driver.reset(ctx);
 
+    // Fetch a real seeded row for the id-binding seed (see the block
+    // above `entityFieldsByName`): once per trait, right after the reset
+    // every subsequent step's own hermetic reset also runs — the mock
+    // store's seed is deterministic, so this row is the same one every
+    // later reset in this trait's walk reproduces. Only fetched when the
+    // plan actually contains a write that needs a pre-existing row
+    // (`update`/`delete`, never `create`) AND the trait can legitimately
+    // bind one; otherwise this is a wasted round-trip.
+    const idBindings = entityIdBindingByTrait.get(trait.traitName);
+    const traitLinkedEntity = linkedEntityByTrait.get(trait.traitName);
+    let idSeedRow: EntityRow | null = null;
+    if (
+      idBindings !== undefined &&
+      traitLinkedEntity !== undefined &&
+      plan.some((s) => {
+        const persist = persistWriteByKey.get(`${trait.traitName}:${s.from}+${s.event}->${s.to}`);
+        return persist !== undefined && persist.kind !== 'create';
+      })
+    ) {
+      const seedSnap = await input.driver.snapshot(ctx, null);
+      const rows = seedSnap.entityData[traitLinkedEntity];
+      idSeedRow = rows !== undefined && rows.length > 0 && rows[0].id !== undefined ? rows[0] : null;
+    }
+
     log(
       `[runVerification] ${trait.traitName}: ${plan.length} steps (${baseSteps.length} base + ${extensionSteps.length} extension)${importedSource !== undefined ? ` — frontier: topology from ${importedSource} skipped` : ''}`,
     );
@@ -316,11 +369,15 @@ export async function runVerification<Ctx extends DriverContext>(
           }
           for (const replayStep of replayPath ?? []) {
             if (frames.length >= maxFrames) break;
-            const reconcileStep: ExtendedWalkStep = {
-              ...replayStep,
-              triggerKind: 'reconcile',
-              coverageKey: `${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[reconcile]`,
-            };
+            const reconcileStep: ExtendedWalkStep = seedEntityIdIfBinding(
+              {
+                ...replayStep,
+                triggerKind: 'reconcile',
+                coverageKey: `${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[reconcile]`,
+              },
+              idBindings,
+              idSeedRow,
+            );
             const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait, allowStateless);
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
@@ -399,7 +456,13 @@ export async function runVerification<Ctx extends DriverContext>(
         continue;
       }
 
-      const frame: Frame = await tick(input.driver, ctx, prev, step, orbitalsByTrait, allowStateless);
+      // Covers the case where the persist-write step's OWN transition is
+      // also the id-binding one (e.g. a self-contained "delete this row"
+      // event that both `(set @entity.id @payload.id)` and persists in
+      // one dispatch) — the reconcile-hop seeding above only reaches
+      // binding transitions that are earlier hops on the replay path.
+      const seededStep = seedEntityIdIfBinding(step, idBindings, idSeedRow);
+      const frame: Frame = await tick(input.driver, ctx, prev, seededStep, orbitalsByTrait, allowStateless);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';
       log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
@@ -666,6 +729,48 @@ function emitSweepDeclarations(trait: TraitWalkConfig): EmitDeclaration[] {
     out.push({ success: contract.event });
   }
   return out;
+}
+
+/**
+ * R-PERSIST-NO-ROW-KEY-SILENT-SUCCESS remedy: if `step` IS the trait's
+ * own id-binding transition (`(from,event,to)` matches an entry
+ * `collectEntityIdBindingTransitions` found for this trait), replace the
+ * payload field its `(set @entity.id @payload.<path>)` reads from with a
+ * REAL seeded row's id — dispatching it then binds `@entity.id` to a row
+ * that genuinely exists in the store, exactly as if a real user had
+ * selected it. A no-op for every other step (`bindings`/`seedRow`
+ * undefined, or the step's transition isn't a binding one).
+ */
+function seedEntityIdIfBinding(
+  step: ExtendedWalkStep,
+  bindings: ReadonlyMap<string, EntityIdBindingSource> | undefined,
+  seedRow: EntityRow | null,
+): ExtendedWalkStep {
+  if (bindings === undefined || seedRow === null || seedRow.id === undefined) return step;
+  const binding = bindings.get(`${step.from}+${step.event}->${step.to}`);
+  if (binding === undefined) return step;
+  return { ...step, payload: setPayloadPath(step.payload, binding.payloadPath, seedRow.id) };
+}
+
+/** Set a dotted payload path (`"row.id"` → `{row: {id: value}}`) without disturbing sibling keys. */
+function setPayloadPath(payload: EventPayload, path: string, value: string): EventPayload {
+  const dot = path.indexOf('.');
+  if (dot === -1) return { ...payload, [path]: value };
+  const head = path.slice(0, dot);
+  const rest = path.slice(dot + 1);
+  const existing = payload[head];
+  const nested: EventPayload = isPlainPayloadObject(existing) ? existing : {};
+  return { ...payload, [head]: setPayloadPath(nested, rest, value) };
+}
+
+function isPlainPayloadObject(value: EventPayload[string] | undefined): value is EventPayload {
+  return (
+    value !== null &&
+    value !== undefined &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    !(value instanceof Date)
+  );
 }
 
 function combineVerdicts(verdicts: ReadonlyArray<Verdict>, label: string): Verdict {
