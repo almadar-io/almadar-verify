@@ -39,6 +39,11 @@ export interface ReportInput {
    * Forwarded verbatim onto `ReportShape.frontier`.
    */
   frontier?: ReportShape['frontier'];
+  /**
+   * Per-trait budget-exceeded accounting. Forwarded verbatim onto
+   * `ReportShape.walkBudget`.
+   */
+  walkBudget?: ReportShape['walkBudget'];
 }
 
 export function report(input: ReportInput): ReportShape {
@@ -65,6 +70,7 @@ export function report(input: ReportInput): ReportShape {
     errors,
     warnings,
     ...(input.frontier !== undefined && { frontier: input.frontier }),
+    ...(input.walkBudget !== undefined && input.walkBudget.length > 0 && { walkBudget: input.walkBudget }),
   };
 }
 

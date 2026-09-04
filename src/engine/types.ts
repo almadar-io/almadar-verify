@@ -16,7 +16,7 @@
  * @packageDocumentation
  */
 
-import type { EdgeWalkTransition, Event, TraitEventContract, TraitTick, WalkStep } from '@almadar/core';
+import type { EdgeWalkTransition, Effect, Event, TraitEventContract, TraitTick, WalkStep } from '@almadar/core';
 
 /**
  * `EdgeWalkTransition` + kernel-side flags derived from the transition's
@@ -29,6 +29,15 @@ export interface WalkTransition extends EdgeWalkTransition {
    * legitimately return `null` (see `collectDispatchErrors`).
    */
   navigates?: boolean;
+  /**
+   * The transition's declared effects (S-expression tuples), carried
+   * through unchanged from the schema. `navigates` above is DERIVED from
+   * this same array — kept alongside it (not just consumed and dropped)
+   * so a driver that wants to actually RUN the effects (e.g. the fake
+   * driver's `executeEffects` hook, see `play-transition` MCP tool) has
+   * something to run. Absent/empty when the transition declares none.
+   */
+  effects?: Effect[];
 }
 
 /** Configuration for a single trait's walk. */

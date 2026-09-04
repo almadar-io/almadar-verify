@@ -13,7 +13,7 @@
  * {@link createFakeDriver}'s default.
  */
 
-import type { EffectTrace, EventLogEntry, EventPayload, SExpr } from '@almadar/core';
+import type { Effect, EffectTrace, EventLogEntry, EventPayload, SExpr } from '@almadar/core';
 import type { TraitWalkConfig } from '../engine/types.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import { createFakeDriver, type FakeDriverContext } from './impls/fake.js';
@@ -30,6 +30,16 @@ export interface PlayCircuitStepInput {
   payload?: EventPayload;
   /** Guard evaluator hook, forwarded to {@link createFakeDriver}. */
   evaluateGuard?: (guard: SExpr, ctx: { traitName: string; event: string; payload: EventPayload }) => boolean;
+  /**
+   * Effect executor hook, forwarded to {@link createFakeDriver}. When the
+   * fired arm declares effects, this runs them and reports what happened
+   * — omit it to play the state machine only (effects/emitted then carry
+   * just the input event echo, the pre-existing behavior).
+   */
+  executeEffects?: (
+    effects: Effect[],
+    ctx: { traitName: string; event: string; payload: EventPayload },
+  ) => { effects: EffectTrace[]; emitted: Array<{ event: string; payload?: EventPayload }> };
 }
 
 export interface PlayCircuitStepResult {
@@ -99,6 +109,7 @@ export async function playCircuitStep(
           evaluateGuard: (guard, ctx) => input.evaluateGuard?.(guard, ctx) ?? true,
         }
       : {}),
+    ...(input.executeEffects ? { executeEffects: input.executeEffects } : {}),
   });
   runtime.setState(target.traitName, input.from);
 

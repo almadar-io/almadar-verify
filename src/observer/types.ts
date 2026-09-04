@@ -240,6 +240,35 @@ export interface ReportShape {
    * already scoped to the walked traits when this block is present.
    */
   frontier?: FrontierSummary;
+  /**
+   * Present only when one or more traits' walk stopped early because a
+   * budget (`maxWalkMs`/`maxFrames`) was exceeded, NOT because the plan
+   * ran out of steps. Distinguishes "truncated run" from "authoring bug":
+   * `coverage.uncovered` reports the same transitions as bare
+   * `uncovered transition: …` warnings either way, but this field is the
+   * only place that says WHY — a budget-exceeded truncation the caller
+   * should widen the budget for, vs. a genuinely unreachable/dead
+   * transition worth fixing in the schema.
+   */
+  walkBudget?: ReadonlyArray<WalkBudgetEntry>;
+}
+
+/** One trait's walk truncated by a budget, attached to `ReportShape.walkBudget`. */
+export interface WalkBudgetEntry {
+  traitName: string;
+  /** Which budget stopped the walk. */
+  reason: 'maxWalkMs' | 'maxFrames';
+  /** Plan steps actually executed before the budget stopped the walk. */
+  stepsCompleted: number;
+  /** Total steps the plan would have executed had the budget not stopped it. */
+  totalSteps: number;
+  /** Wall-clock time spent on this trait's walk when the budget fired. */
+  elapsedMs: number;
+  /** The configured `maxWalkMs` in effect for this run. */
+  maxWalkMs: number;
+  /** Plan steps left un-executed — an upper bound on transitions this
+   *  truncation could account for (some may be covered by other steps). */
+  stepsUnreached: number;
 }
 
 /** Frontier-scope accounting attached to `ReportShape.frontier`. */

@@ -58,7 +58,7 @@ import { assertPortalPerStep } from '../observer/assert-portal-per-step.js';
 import { assertInteractionPattern } from '../observer/assert-interaction-pattern.js';
 import { assertClickNoListener } from '../observer/assert-click-no-listener.js';
 import { report } from '../observer/report.js';
-import type { ReportShape, Verdict } from '../observer/types.js';
+import type { ReportShape, Verdict, WalkBudgetEntry } from '../observer/types.js';
 import type { RunVerificationInput, RunVerificationOutput } from './types.js';
 
 // GAP 3 (coverage accounting): the closure-BFS reachability fix
@@ -74,7 +74,18 @@ import type { RunVerificationInput, RunVerificationOutput } from './types.js';
 // old 60s ceiling silently truncated the walk mid-plan, which read as
 // "uncovered" rather than "ran out of time" — raising the ceiling lets
 // genuinely-reachable work finish instead of masking it as a skip.
-const DEFAULT_MAX_WALK_MS = 180_000;
+//
+// 180s (2026-09-03, DEFECT 2): still too tight — measured std-service-
+// docker's ServiceDockerDocker trait (28 authored transitions, a 7-arm
+// `match @entity.op`) hitting the ceiling at 49/84 plan steps / 182s, ~3.7s
+// per step average, so its full plan needs ~310s and its many-armed match's
+// emit-sweep extension steps (appended AFTER the base topology walk, same
+// budget — see DEFECT 3) never got a turn. Raised to match the
+// already-established "standard" tier budget this repo uses for a node
+// verify engine elsewhere (`orb verify`'s unified CLI: 600s standard / 1800s
+// deep, `Almadar_Verification.md`'s Unified CLI section) rather than invent
+// a new number — 600s clears docker's measured ~310s with ~2x headroom.
+const DEFAULT_MAX_WALK_MS = 600_000;
 const DEFAULT_MAX_FRAMES = 5_000;
 
 export async function runVerification<Ctx extends DriverContext>(
@@ -246,6 +257,14 @@ export async function runVerification<Ctx extends DriverContext>(
   // skip) instead of flagging a divergence the planner has no control over.
   const preconditionSkips: string[] = [];
 
+  // WALK-BUDGET-EXCEEDED: a trait whose plan didn't finish because
+  // `maxWalkMs`/`maxFrames` fired mid-plan, not because every step ran.
+  // Recorded structurally (not just logged — `log` is a no-op in some
+  // callers) so a truncated run is distinguishable from an authoring bug:
+  // both leave the same transitions in `coverage.uncovered`, but only this
+  // says WHY.
+  const walkBudgetEntries: WalkBudgetEntry[] = [];
+
   for (const trait of traits) {
     const importedSource = frontier ? importedTopology.get(trait.traitName) : undefined;
     if (importedSource !== undefined) {
@@ -337,10 +356,28 @@ export async function runVerification<Ctx extends DriverContext>(
     for (const step of plan) {
       if (frames.length >= maxFrames) {
         log(`[runVerification] ${trait.traitName}: maxFrames (${maxFrames}) reached`);
+        walkBudgetEntries.push({
+          traitName: trait.traitName,
+          reason: 'maxFrames',
+          stepsCompleted: stepIdx,
+          totalSteps: plan.length,
+          elapsedMs: Date.now() - traitStart,
+          maxWalkMs,
+          stepsUnreached: plan.length - stepIdx,
+        });
         break;
       }
       if (Date.now() - traitStart > maxWalkMs) {
         log(`[runVerification] ${trait.traitName}: maxWalkMs (${maxWalkMs}) exceeded at step ${stepIdx}/${plan.length}`);
+        walkBudgetEntries.push({
+          traitName: trait.traitName,
+          reason: 'maxWalkMs',
+          stepsCompleted: stepIdx,
+          totalSteps: plan.length,
+          elapsedMs: Date.now() - traitStart,
+          maxWalkMs,
+          stepsUnreached: plan.length - stepIdx,
+        });
         break;
       }
 
@@ -706,6 +743,7 @@ export async function runVerification<Ctx extends DriverContext>(
     schemaTransitions,
     schemaTransitionKeys,
     ...(frontierSummary !== undefined && { frontier: frontierSummary }),
+    ...(walkBudgetEntries.length > 0 && { walkBudget: walkBudgetEntries }),
   });
 }
 

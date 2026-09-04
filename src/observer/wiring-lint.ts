@@ -171,6 +171,13 @@
  *    this check is scoped to exactly those un-healed surfaces — firing it on
  *    `detail-panel`/`form`/`form-section` would flag the now-healed common
  *    case, not a real gap.
+ *  - `plugin-emit-no-host-listener`, `plugin-emit-payload-mismatch`,
+ *    `plugin-listen-source-not-host` — CROSS-REGISTRY siblings of
+ *    `listens-source-never-emits`/`payload-starved-route` above, emitted by
+ *    `lintPluginWiring` in `plugin-wiring-lint.ts` (a separate export, not a
+ *    case in `lintWiring`: this schema is single-orbital, that one is
+ *    plugin-schema-vs-N-target-schemas). See that file's header doc for the
+ *    full contract.
  *
  * @packageDocumentation
  */
@@ -229,7 +236,10 @@ export interface WiringLintFinding {
     | 'identity-roster-unwritable'
     | 'navigate-target-undeclared'
     | 'page-absent-from-nav'
-    | 'relation-field-rendered-raw';
+    | 'relation-field-rendered-raw'
+    | 'plugin-emit-no-host-listener'
+    | 'plugin-emit-payload-mismatch'
+    | 'plugin-listen-source-not-host';
   severity: WiringLintSeverity;
   orbital: string;
   trait: string;
@@ -253,8 +263,12 @@ export interface WiringLintResult {
 /** Payload field names the source trait can supply for `event`, from every
  *  declared production site: its emits contract's payloadSchema, explicit
  *  `['emit', event, {…}]` effects, and `itemActions` entries (which deliver
- *  the native `{id, row}` payload per the DataGrid/browse contract). */
-function suppliedPayloadFields(trait: Trait, event: string): Set<string> | 'runtime-forwarded' {
+ *  the native `{id, row}` payload per the DataGrid/browse contract).
+ *
+ *  Exported for `plugin-wiring-lint.ts` (`lintPluginWiring`), which reuses
+ *  it unchanged to compute what a plugin's emit site actually supplies
+ *  toward a cross-registry host/capability listener — no second copy. */
+export function suppliedPayloadFields(trait: Trait, event: string): Set<string> | 'runtime-forwarded' {
   const supplied = new Set<string>();
   let declaredAnywhere = false;
 

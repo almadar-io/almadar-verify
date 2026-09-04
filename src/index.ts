@@ -254,6 +254,7 @@ export type {
   Verdict,
   ReportShape,
   FrontierSummary,
+  WalkBudgetEntry,
 } from './observer/types.js';
 export { coverage } from './observer/coverage.js';
 export { assertMutation } from './observer/assert-mutation.js';
@@ -269,7 +270,8 @@ export { assertCrudFlow } from './observer/assert-crud-flow.js';
 export { assertPortalPerStep } from './observer/assert-portal-per-step.js';
 export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { auditListens, type ListensAuditResult } from './observer/click-wiring-audit.js';
-export { lintWiring, type WiringLintFinding, type WiringLintResult, type WiringLintSeverity } from './observer/wiring-lint.js';
+export { lintWiring, suppliedPayloadFields, type WiringLintFinding, type WiringLintResult, type WiringLintSeverity } from './observer/wiring-lint.js';
+export { lintPluginWiring, type PluginWiringTarget } from './observer/plugin-wiring-lint.js';
 export { serviceManifest, type ServiceManifestEntry, type ServiceManifestResult, type ServiceManifestCredential } from './observer/service-manifest.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
 export { verdictToChecks, type VerdictCheck } from './observer/verdict-checks.js';

@@ -85,6 +85,13 @@ export function toEdgeWalkTransition(t: Transition): WalkTransition {
   if ((t.effects ?? []).some((e) => Array.isArray(e) && e[0] === 'navigate')) {
     out.navigates = true;
   }
+  // Carry the declared effects through (not just derive `navigates` and
+  // drop them) — a driver that actually EXECUTES effects (the fake
+  // driver's `executeEffects` hook) needs the arm's own effect list, not
+  // just this pass's yes/no navigate flag.
+  if (t.effects !== undefined && t.effects.length > 0) {
+    out.effects = t.effects;
+  }
   // Pass through the guard regardless of whether it's an array (S-expr
   // call like `["or", ...]`, `["=", ...]`) or a string atom (bare-
   // binding existence check like `"@payload.row"` declared by

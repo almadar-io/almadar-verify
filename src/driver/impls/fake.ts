@@ -16,6 +16,7 @@
  */
 
 import type {
+  Effect,
   EffectTrace,
   EntityData,
   EntityRow,
@@ -48,6 +49,24 @@ export interface FakeDriverOptions {
    * pre-existing behavior every current caller relies on).
    */
   evaluateGuard?: (guard: SExpr, ctx: { traitName: string; event: string; payload: EventPayload }) => boolean;
+
+  /**
+   * Effect executor hook. When the matched transition declares effects
+   * (`WalkTransition.effects`), `FakeRuntime.dispatch` calls this with
+   * the arm's effect list and the current dispatch's
+   * `{traitName, event, payload}` — the caller runs them for real
+   * (typically via `@almadar/evaluator`'s `executeEffect` fed a
+   * `mutateEntity`/`emit`-backed context) and returns the resulting
+   * `EffectTrace[]` plus any bus events the effects emitted. Absent hook,
+   * or a transition with no declared effects, leaves `effectResults()`
+   * empty — the pre-existing behavior every current caller relies on
+   * (mirrors `evaluateGuard`'s opt-in shape: omit it, dispatch runs
+   * unconditionally / effect-free).
+   */
+  executeEffects?: (
+    effects: Effect[],
+    ctx: { traitName: string; event: string; payload: EventPayload },
+  ) => { effects: EffectTrace[]; emitted: Array<{ event: string; payload?: EventPayload }> };
 }
 
 /** In-process state machine + entity store + event log. */
@@ -158,7 +177,24 @@ export class FakeRuntime {
     this.states.set(traitName, transition.to);
     this.eventLog.push({ type: event, payload, timestamp: Date.now() });
     this.lastDispatched.set(traitName, { event, payload, timestamp: Date.now() });
-    this.lastEffectResults = [];
+
+    // Run the arm's declared effects for real (when both the arm declares
+    // some and the caller supplied a hook to run them) — a `set` mutates
+    // whatever entity store the hook closes over, an `emit` lands in the
+    // event log right after the input event, matching the real runtime's
+    // bus (`eventBus.onAny` logs every emission, dispatched or effect-
+    // fired, in firing order — see `verificationRegistry.ts`). No hook,
+    // or no declared effects: stays empty, the pre-existing behavior.
+    const declaredEffects = transition.effects ?? [];
+    if (this.options.executeEffects && declaredEffects.length > 0) {
+      const result = this.options.executeEffects(declaredEffects, { traitName, event, payload });
+      this.lastEffectResults = result.effects;
+      for (const emitted of result.emitted) {
+        this.eventLog.push({ type: emitted.event, payload: emitted.payload, timestamp: Date.now() });
+      }
+    } else {
+      this.lastEffectResults = [];
+    }
 
     return { to: transition.to, serverResponse: null };
   }
