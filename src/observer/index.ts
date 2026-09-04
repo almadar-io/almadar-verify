@@ -36,3 +36,9 @@ export { assertPortalPerStep } from './assert-portal-per-step.js';
 export { assertInteractionPattern } from './assert-interaction-pattern.js';
 export { assertClickNoListener } from './assert-click-no-listener.js';
 export { report, type ReportInput } from './report.js';
+export {
+  probeListenCascades,
+  type CascadeProbeCheck,
+  type CascadeProbeFinding,
+  type CascadeProbeResult,
+} from './probe-listen-cascades.js';

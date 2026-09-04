@@ -275,6 +275,12 @@ export { lintPluginWiring, type PluginWiringTarget } from './observer/plugin-wir
 export { serviceManifest, type ServiceManifestEntry, type ServiceManifestResult, type ServiceManifestCredential } from './observer/service-manifest.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
 export { verdictToChecks, type VerdictCheck } from './observer/verdict-checks.js';
+export {
+  probeListenCascades,
+  type CascadeProbeCheck,
+  type CascadeProbeFinding,
+  type CascadeProbeResult,
+} from './observer/probe-listen-cascades.js';
 
 // Driver — the I/O boundary. `Driver<Ctx>` is generic over context;
 // impls live under `driver/impls/<transport>.ts` and are the only files
