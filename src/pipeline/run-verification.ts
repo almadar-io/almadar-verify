@@ -20,6 +20,7 @@
 // node:fs is loaded dynamically below so browser bundles don't pull it in.
 import { collectEmbeddedTraitReferrers } from '@almadar/core';
 import type { EntityRow, EventPayload } from '@almadar/core';
+import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
 import type { Frame } from '../frame/types.js';
 import { tick } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
@@ -44,7 +45,7 @@ import {
 } from '../planner/internal/persist-binding.js';
 import type { EmitDeclaration } from '../browser/catalog-probes.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
-import type { TraitWalkConfig } from '../engine/types.js';
+import type { TraitWalkConfig, WalkTransition } from '../engine/types.js';
 import { assertGuardParity } from '../observer/assert-guard-parity.js';
 import { assertPortalSlots } from '../observer/assert-portal.js';
 import { assertRefTraitInvariantOverFrames } from '../observer/assert-ref-trait-invariant.js';
@@ -415,6 +416,9 @@ export async function runVerification<Ctx extends DriverContext>(
               idBindings,
               idSeedRow,
             );
+            // Captured before `prev` is reassigned below — the entity/state
+            // the dispatch actually saw, for `siblingGuardSatisfiable`.
+            const beforeReconcileFrame = prev;
             const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait, allowStateless);
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
@@ -444,17 +448,41 @@ export async function runVerification<Ctx extends DriverContext>(
               // can't establish this precondition, which the skip below
               // already reports. Only a state NO transition declares for
               // this `(from, event)` is a genuine divergence.
-              const declaredTargets = trait.transitions
-                .filter((t) => t.from === reconcileStep.from && t.event === reconcileStep.event)
-                .map((t) => t.to);
-              const tookSiblingBranch =
-                declaredTargets.length > 1 && declaredTargets.includes(reconcileFrame.stateAfter);
+              //
+              // RECONCILE-SIBLING-CREDIT: a landing state matching some
+              // OTHER declared target is necessary but not sufficient —
+              // that sibling's own guard must actually admit the payload
+              // dispatched, or "guard selected a declared sibling" is
+              // crediting a branch no arm could have taken (masking "no
+              // arm fired for synthesized payload" as legitimate
+              // branching). `siblingGuardSatisfiable` re-evaluates each
+              // candidate sibling's guard with the same evaluator the
+              // runtime uses.
+              const siblingArms = trait.transitions.filter(
+                (t) => t.from === reconcileStep.from && t.event === reconcileStep.event,
+              );
+              const declaredTargets = siblingArms.map((t) => t.to);
+              const firingSibling = siblingArms.find(
+                (t) =>
+                  t.to === reconcileFrame.stateAfter &&
+                  siblingGuardSatisfiable(
+                    t,
+                    trait.traitName,
+                    trait.linkedEntity,
+                    reconcileStep.payload,
+                    reconcileStep.from,
+                    beforeReconcileFrame,
+                  ),
+              );
+              const tookSiblingBranch = declaredTargets.length > 1 && firingSibling !== undefined;
               if (!tookSiblingBranch) {
-                replayDivergences.push(
-                  `${trait.traitName}: reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`,
-                );
+                const divergenceDetail =
+                  declaredTargets.length > 1 && declaredTargets.includes(reconcileFrame.stateAfter)
+                    ? `no arm fired for synthesized payload — reconcile ${reconcileStep.from} --${reconcileStep.event}--> landed on declared sibling ${reconcileFrame.stateAfter}, but no candidate arm's guard admits the dispatched payload`
+                    : `reconcile ${reconcileStep.from} --${reconcileStep.event}--> expected ${reconcileStep.to}, runtime reached ${reconcileFrame.stateAfter}`;
+                replayDivergences.push(`${trait.traitName}: ${divergenceDetail}`);
                 replayDivergeFrames.push(reconcileFrame.index);
-                log(`  [${stepIdx + 1}/${plan.length}] replay diverged at ${reconcileStep.event}: expected ${reconcileStep.to}, got ${reconcileFrame.stateAfter} — aborting preamble`);
+                log(`  [${stepIdx + 1}/${plan.length}] replay diverged at ${reconcileStep.event}: ${divergenceDetail} — aborting preamble`);
               } else {
                 log(`  [${stepIdx + 1}/${plan.length}] guard branch at ${reconcileStep.event}: planned ${reconcileStep.to}, guard selected ${reconcileFrame.stateAfter} (also declared) — aborting preamble`);
               }
@@ -809,6 +837,54 @@ function isPlainPayloadObject(value: EventPayload[string] | undefined): value is
     !Array.isArray(value) &&
     !(value instanceof Date)
   );
+}
+
+/**
+ * The linked entity's first row as of `frame` — the entity binding a
+ * guard's `@entity.*` references would have resolved against had the
+ * runtime evaluated it at that moment. `null`/no rows for that entity
+ * yields `{}` (no `@entity.field` guard can be satisfied against it,
+ * which is the correct answer, not a crash).
+ */
+function entityRowForTrait(frame: Frame | null, traitName: string, linkedEntity: string | undefined): EntityRow {
+  if (frame === null || linkedEntity === undefined) return {};
+  const traitSnapshot = frame.runtimeSnapshot.traits.find((t) => t.traitName === traitName);
+  const rows = traitSnapshot?.data[linkedEntity];
+  return rows !== undefined && rows.length > 0 ? rows[0] : {};
+}
+
+/**
+ * RECONCILE-SIBLING-CREDIT: whether `sibling`'s guard actually admits the
+ * payload the kernel dispatched for this reconcile hop — using
+ * `@almadar/evaluator`'s `evaluateGuard`, the same evaluator the real
+ * runtime uses to decide guard truth. Before this check, the
+ * reconcile-divergence assertion credited "guard selected a declared
+ * sibling" whenever the runtime's landing state matched ANY OTHER arm's
+ * declared `to`, with no check that arm's guard could plausibly have
+ * fired for the payload sent — so "no arm fired at all" (a real
+ * divergence, e.g. the `object/has` gap rejecting every candidate) was
+ * indistinguishable from a legitimate guard branch. An unguarded sibling
+ * is trivially satisfiable (nothing to fail); a guarded one is evaluated
+ * against the entity/payload/state the dispatch actually used. A guard
+ * evaluation error counts as unsatisfiable, mirroring
+ * `playCircuitStep`'s "a guard error counts as a fail" contract.
+ */
+function siblingGuardSatisfiable(
+  sibling: WalkTransition,
+  traitName: string,
+  linkedEntity: string | undefined,
+  payload: EventPayload,
+  fromState: string,
+  beforeFrame: Frame | null,
+): boolean {
+  if (sibling.guard === undefined || sibling.guard === null) return true;
+  const entity = entityRowForTrait(beforeFrame, traitName, linkedEntity);
+  const ctx = createMinimalContext(entity, payload, fromState);
+  try {
+    return evaluateGuard(sibling.guard, ctx);
+  } catch {
+    return false;
+  }
 }
 
 function combineVerdicts(verdicts: ReadonlyArray<Verdict>, label: string): Verdict {
