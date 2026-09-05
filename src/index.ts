@@ -297,6 +297,7 @@ export {
   type PlayCircuitStepInput,
   type PlayCircuitStepResult,
 } from './driver/play-step.js';
+export { declaredEntityRow } from './driver/declared-entity-row.js';
 export {
   createPlaywrightDriver,
   type PlaywrightDriverContext,
