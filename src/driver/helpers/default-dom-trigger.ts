@@ -36,6 +36,7 @@
 import type { Page } from 'playwright';
 import { isEventPayloadValue, type EventPayload } from '@almadar/core';
 import type { ExtendedWalkStep } from '../../planner/types.js';
+import type { DomTriggerResult } from '../types.js';
 import { fillFormFieldsFromMap } from '../../browser/interaction.js';
 import { dispatchInBrowser } from './browser-send-event.js';
 import { createLogger } from '@almadar/logger';
@@ -89,7 +90,7 @@ function actionSelector(event: string, suffix = ''): string {
 
 export function createDefaultDomTrigger(
   options: DefaultDomTriggerOptions = {},
-): (page: Page, step: ExtendedWalkStep, traitScope?: string) => Promise<boolean> {
+): (page: Page, step: ExtendedWalkStep, traitScope?: string) => Promise<DomTriggerResult> {
   const {
     clickTimeoutMs = DEFAULT_TIMEOUT_MS,
     formMountTimeoutMs = DEFAULT_FORM_MOUNT_MS,
@@ -171,34 +172,45 @@ export function createDefaultDomTrigger(
     });
 
     // Row-scoped miss on crud-edit/delete: retry with the unscoped
-    // first-match selector. Row actions rendered by the generic pattern
-    // engine (e.g. std-board's per-card `action: OPEN_CARD` button)
-    // carry the action testid but no `data-row-id` — unlike DataGrid row
-    // actions, which stamp it. The button's actionPayload already binds
-    // the row, so the first-match click is deterministic and complete.
-    if (!clicked && rowSuffix !== '' && step.targetRowId === undefined) {
-      const fallbackSelector = actionSelector(affordanceEvent);
-      const fallback = page.locator(fallbackSelector).first();
-      try {
-        const fallbackVisible = await fallback.isVisible({ timeout: 250 });
-        if (fallbackVisible) {
-          await fallback.click({ timeout: clickTimeoutMs });
-          clicked = true;
+    // first-match selector — but ONLY when this action is rendered
+    // WITHOUT `data-row-id` tagging at all (e.g. std-board's per-card
+    // `action: OPEN_CARD` button, which carries the action testid but no
+    // `data-row-id` — unlike DataGrid row actions, which stamp it). When
+    // tagging exists but only OUR resolved `targetRowId` failed to match
+    // (C1-V11: `tick()` may have deliberately picked a row OTHER than the
+    // structurally-first one — to avoid a self-relation restrict-rejection,
+    // or to match the persona it switched to), falling back to whichever
+    // row's button renders first would silently substitute a DIFFERENT
+    // row than the one that was picked for a reason — defeat the purpose.
+    // Absent any row tagging, the button's actionPayload already binds
+    // the row it belongs to, so the first-match click is deterministic
+    // and complete regardless of which id was resolved.
+    if (!clicked && rowSuffix !== '') {
+      const anyRowTagged = await page.locator(actionSelector(affordanceEvent, '[data-row-id]')).count() > 0;
+      if (!anyRowTagged) {
+        const fallbackSelector = actionSelector(affordanceEvent);
+        const fallback = page.locator(fallbackSelector).first();
+        try {
+          const fallbackVisible = await fallback.isVisible({ timeout: 250 });
+          if (fallbackVisible) {
+            await fallback.click({ timeout: clickTimeoutMs });
+            clicked = true;
+          }
+          domLog.debug('dom:fill:trigger-click-unscoped-fallback', {
+            step: step.coverageKey,
+            selector: fallbackSelector,
+            visibleProbe: fallbackVisible,
+            clicked,
+          });
+        } catch (err) {
+          domLog.debug('dom:fill:trigger-click-unscoped-fallback', {
+            step: step.coverageKey,
+            selector: fallbackSelector,
+            visibleProbe: false,
+            clicked: false,
+            clickError: err instanceof Error ? err.message : String(err),
+          });
         }
-        domLog.debug('dom:fill:trigger-click-unscoped-fallback', {
-          step: step.coverageKey,
-          selector: fallbackSelector,
-          visibleProbe: fallbackVisible,
-          clicked,
-        });
-      } catch (err) {
-        domLog.debug('dom:fill:trigger-click-unscoped-fallback', {
-          step: step.coverageKey,
-          selector: fallbackSelector,
-          visibleProbe: false,
-          clicked: false,
-          clickError: err instanceof Error ? err.message : String(err),
-        });
       }
     }
 
@@ -251,25 +263,33 @@ export function createDefaultDomTrigger(
       // never opens. Dispatch the event here with a real row read from
       // the entity snapshot, filled per the planner's payloadRowShape
       // (entity-typed fields take the whole row, the rest `row[name]`;
-      // no shape → `{id}`). The row pick is deterministic (lowest id,
-      // same "first row" contract as the unscoped first-match click).
+      // no shape → `{id}`). C1-V11: prefer `step.targetRowId` — the SAME
+      // row `tick()` already resolved (self-relation-aware for a
+      // self-referential entity, and the one the viewer switch above
+      // matched) — over an independent lowest-id pick, so this recovery
+      // path never substitutes a DIFFERENT row than the one that was
+      // deliberately chosen. Falls back to the pre-existing lowest-id
+      // "first row" contract only when no target was resolved.
       const entityName = step.expectedRowDelta.entityName;
-      const row = await page.evaluate((name: string) => {
+      const row = await page.evaluate((args: { name: string; targetId: string | null }) => {
         const w = window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI };
         const snap = w.__orbitalVerification?.getSnapshot?.();
         const rows: Array<{ id: string } & import('@almadar/core').EntityRow> = [];
         const seen = new Set<string>();
         for (const trait of snap?.traits ?? []) {
-          for (const r of trait.data?.[name] ?? []) {
+          for (const r of trait.data?.[args.name] ?? []) {
             if (typeof r.id === 'string' && !seen.has(r.id)) {
               seen.add(r.id);
               rows.push(r as { id: string } & import('@almadar/core').EntityRow);
             }
           }
         }
+        if (args.targetId !== null) {
+          return rows.find((r) => r.id === args.targetId) ?? null;
+        }
         rows.sort((a, b) => a.id.localeCompare(b.id));
         return rows[0] ?? null;
-      }, entityName);
+      }, { name: entityName, targetId: step.targetRowId ?? null });
       if (row !== null) {
         const payload: EventPayload = {};
         if (step.payloadRowShape !== undefined) {
@@ -300,7 +320,30 @@ export function createDefaultDomTrigger(
       }
     }
 
-    if (!clicked) return false;
+    if (!clicked) {
+      // I-24: the row-scoped click, the unscoped first-match fallback, and
+      // (for crud-delete) the overflow-menu / synthetic-dispatch recovery
+      // above all missed. For crud-edit/crud-delete this NORMALLY means no
+      // DOM affordance exposes the row action at all (e.g. an `itemActions`
+      // override narrowed to VIEW-only) — report that distinctly so the
+      // kernel records a real finding instead of a silent bus-fallback
+      // dispatch that would misreport this as a click.
+      //
+      // C1-V9 item C: `isRowAction === false` means `planUserCrudFlow`
+      // positively determined this affordance is a plain single button —
+      // declared nowhere in an `itemActions`/`browseItemActions`-shaped
+      // config array — not a genuine row action at all (e.g. a detail
+      // page's own action button, reached here via a cross-trait
+      // listener the same way a real row action is). The search above is
+      // UNCHANGED for it (still tries row-scoped, unscoped, overflow —
+      // some genuine row actions, like std-board's per-card buttons,
+      // carry no `data-row-id` either and rely on that same search), but
+      // a total miss on a KNOWN non-row affordance is not a missing-row-
+      // affordance defect — fall back like any ordinary step instead of
+      // reporting a false `crud-affordance-absent`. `undefined` (unknown)
+      // keeps today's behavior.
+      return (needsRow && step.isRowAction !== false) ? 'no-row-affordance' : false;
+    }
 
     // Form data present → wait for the form to actually mount, then fill.
     // Pre-fix this used a fixed `waitForTimeout(formMountTimeoutMs)` (default

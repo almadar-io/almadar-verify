@@ -127,8 +127,10 @@ export function createDefaultSnapshot(
       transitionCount,
     });
 
-    // Effect results from the most recent transition for the named trait.
-    const effectResults = lastEffectResultsFor(runtimeSnapshot, traitName);
+    // Effect results from the most recent transition for the named trait,
+    // merged with the synthetic `server:<orbital>` entry for the same
+    // event (see `lastEffectResultsFor`).
+    const effectResults = lastEffectResultsFor(runtimeSnapshot, traitName, step?.event);
     // Server response: try the trait-named transition first, then fall
     // back to the synthetic `server:<orbital>` transition the runtime path
     // records via recordServerResponse for the same event. Without the
@@ -276,39 +278,71 @@ function rowCounts(data: EntityData): { [name: string]: number } {
   return out;
 }
 
-function lastEffectResultsFor(snap: VerificationSnapshot, traitName: string): EffectTrace[] {
-  const recent = [...snap.transitions].reverse().find((t) => t.traitName === traitName);
-  return recent?.effects ?? [];
+/**
+ * Effect results for the named trait's most recent transition, merged with
+ * the synthetic `server:<orbital>` entry for the same event.
+ *
+ * A server-bridge'd persist executes for real only on the server —
+ * `useTraitStateMachine`'s per-trait entry reconstructs its `effects` from
+ * the DECLARED effect literal (a client-side `persist` handler there is a
+ * no-op stub in bridge mode), so it can never carry the actual outcome. The
+ * synthetic entry `recordServerResponse` writes carries the real
+ * `EffectResult` (action/entity/resultId/denied) from the round trip —
+ * mirrors `lastServerResponseFor`'s established two-tier fallback so a
+ * denied/failed write doesn't read as a bare 'executed' local effect.
+ */
+export function lastEffectResultsFor(
+  snap: VerificationSnapshot,
+  traitName: string,
+  event?: string,
+): EffectTrace[] {
+  const reversed = [...snap.transitions].reverse();
+  const traitEffects = reversed.find((t) => t.traitName === traitName)?.effects ?? [];
+  if (event === undefined) return traitEffects;
+  const serverEffects = reversed.find(
+    (t) => t.traitName.startsWith('server:') && t.event === event,
+  )?.effects ?? [];
+  return [...traitEffects, ...serverEffects];
 }
 
-function lastServerResponseFor(
+export function lastServerResponseFor(
   snap: VerificationSnapshot,
   traitName: string,
   event?: string,
 ): ServerResponseTrace | null {
+  const reversed = [...snap.transitions].reverse();
   // 1) Per-trait transition (client-side capture of the trait's own emits,
   //    e.g. from useTraitStateMachine's wrapped handlers.emit).
-  const reversed = [...snap.transitions].reverse();
   const traitMatch = reversed.find(
     (t) => t.traitName === traitName && t.serverResponse !== undefined,
-  );
-  if (traitMatch?.serverResponse) return traitMatch.serverResponse;
-
+  )?.serverResponse ?? null;
   // 2) Server-bridge synthetic transition (recordServerResponse writes
   //    `traitName: "server:<orbital>"` and the response carries the
   //    cross-trait emit cascade). Match by event so concurrent server
   //    responses for different events don't collide.
-  if (event !== undefined) {
-    const serverMatch = reversed.find(
-      (t) =>
-        t.traitName.startsWith('server:') &&
-        t.event === event &&
-        t.serverResponse !== undefined,
-    );
-    if (serverMatch?.serverResponse) return serverMatch.serverResponse;
+  const serverMatch = event === undefined
+    ? null
+    : reversed.find(
+        (t) =>
+          t.traitName.startsWith('server:') &&
+          t.event === event &&
+          t.serverResponse !== undefined,
+      )?.serverResponse ?? null;
+  // Both present: ONE trace. The client capture only sees the trait's own
+  // synchronous emits; a persist effect's `emit.success` fires server-side
+  // after the store returns and reaches the frame only through the bridge
+  // entry — returning the client capture alone made `assertDataMutation`
+  // read a cascade of `[ArticleViewed]` while the server had emitted
+  // `HelpArticleViewCounted` (std-helpdesk `OPEN_ARTICLE`, 2026-09-07).
+  if (traitMatch !== null && serverMatch !== null) {
+    return {
+      ...serverMatch,
+      success: traitMatch.success && serverMatch.success,
+      emittedEvents: [...new Set([...traitMatch.emittedEvents, ...serverMatch.emittedEvents])],
+      ...(traitMatch.error !== undefined && serverMatch.error === undefined && { error: traitMatch.error }),
+    };
   }
-
-  return null;
+  return traitMatch ?? serverMatch;
 }
 
 /**

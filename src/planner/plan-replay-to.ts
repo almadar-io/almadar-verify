@@ -14,24 +14,27 @@
  * @packageDocumentation
  */
 
-import { buildGuardPayloads, type EdgeWalkTransition, type EventPayload } from '@almadar/core';
+import { buildGuardPayloads, type EventPayload } from '@almadar/core';
 import type { EntityFieldDef } from '../browser/interaction.js';
+import type { WalkTransition } from '../engine/types.js';
 import type { ExtendedWalkStep, PlanReplayInput } from './types.js';
 import { synthesizeSuccessPayload } from './internal/payload-synth.js';
 import { transientClosure } from './internal/transient-closure.js';
 
 /**
- * One hop in a replay path. Carries the originating `EdgeWalkTransition`
- * so the step mapper can read its guard metadata — a hop reachable only
+ * One hop in a replay path. Carries the originating `WalkTransition`
+ * (`EdgeWalkTransition` + the kernel-side `navigates`/`effects` flags) so
+ * the step mapper can read its guard metadata — a hop reachable only
  * through a guarded edge needs the guard's `pass` payload merged in, or
  * the replay dispatch is rejected and the `from`-state precondition for
- * the real step is never reached.
+ * the real step is never reached — and its `navigates` flag, to stamp the
+ * produced step the same way.
  */
 interface ReplayHop {
   from: string;
   event: string;
   to: string;
-  edge: EdgeWalkTransition;
+  edge: WalkTransition;
 }
 
 interface QueueNode {
@@ -119,6 +122,15 @@ export function planReplayTo(
       triggerKind: 'replay',
       coverageKey: `${trait.traitName}:${step.from}+${step.event}->${step.to}[replay]`,
       ...(acceptStates.length > 1 && { acceptStates }),
+      // `step.edge` is a `WalkTransition` (`TraitWalkConfig.transitions[]`,
+      // already generalized by `extractTraitWalkConfigs` via
+      // `dispatchNavigates` — the dispatched trait's own effects OR a
+      // listener's triggered arm). A reconcile hop over a navigating edge
+      // unmounts the page just like a direct step does; without this the
+      // hop's post-dispatch null state read misreported as a stateless
+      // dispatch instead of the navigation it actually was. Same spread
+      // `plan-walk.ts`'s `makeStep` uses.
+      ...(step.edge.navigates === true && { navigates: true }),
     };
   });
 }
@@ -149,7 +161,7 @@ function bfsShortestPath(
   const excludeEvents = trait.effectEmittedEvents;
 
   // Build adjacency list from filtered transitions.
-  const adjacency = new Map<string, ReadonlyArray<EdgeWalkTransition>>();
+  const adjacency = new Map<string, ReadonlyArray<WalkTransition>>();
   for (const t of trait.transitions) {
     if (t.from === '*') continue;
     if (t.event === 'INIT' && t.from === source) continue;

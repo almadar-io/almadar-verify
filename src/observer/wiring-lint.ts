@@ -24,6 +24,17 @@
  *    identity-roster class, 2026-08-19: 31 rosters shipped theme-less next to
  *    theme-pinned siblings). Theme values and pages are declared data — no
  *    name matching.
+ *  - `orbital-config-knob-unforwarded` (warning) — an orbital- or app-level
+ *    DECLARED config knob (`Orbital.config` / `OrbitalSchema.config`, §4.5 of
+ *    `Almadar_Orbital_Import.md`) that no trait forwards. A knob is published
+ *    only when some trait's own `config[<key>].default` is the literal
+ *    string `@config.<knob>` — the same forwarding contract atoms already
+ *    use (`traitDeclaresConfigForward`), no dotted tail. A knob nothing
+ *    forwards is a live wire terminating in nothing: an importer can set it
+ *    on the `uses` line or the orbital's own reference-form `config {}`, and
+ *    no trait ever reads the value. `ORB_O_CONFIG_DEAD_KNOB` is the
+ *    compiled-path twin (hard error there — the compiler has no warning
+ *    severity); this is the runtime-side mirror.
  *  - `identity-roster-unwritable` (warning) — the app declares an
  *    `[identity]` entity but no transition anywhere reaches a
  *    `persist create` on it: the roster the app's personas map onto has no
@@ -63,6 +74,15 @@
  *    source trait exists but never produces EVENT (not in its emits
  *    contract, no effect `emit:` option, no `action:`/`itemActions`
  *    affordance) — the std-cicd wrong-source-listener class.
+ *  - `listener-affordance-removed-by-config` (warning) — a `listens { A.EVENT
+ *    -> X }` route whose source trait's own `emits[]` contract DOES declare
+ *    EVENT (so `listens-source-never-emits` stays silent — the route is
+ *    structurally legal), but no LIVE mechanism at this call site — effect
+ *    `emit:`, rendered affordance, config-driven item action, or an embedded
+ *    child's own producer up the embed-host chain — actually fires it: a
+ *    config override (e.g. `itemActions` narrowed to VIEW-only) silenced the
+ *    contract's only producer. The listener is reachable in principle but
+ *    dead in practice at this configuration.
  *  - `payload-starved-route` — a route delivering EVENT to a listener whose
  *    own contract for the triggered event requires payload fields the
  *    source's declared emit sites cannot supply (std-lms header
@@ -157,6 +177,18 @@
  *    arrays anywhere (a registry atom, a chrome-less fixture) has not opted
  *    into nav-driven reachability, so every page reading "absent" would be
  *    noise.
+ *  - `page-path-duplicate` (warning) — two declared page paths collide once
+ *    every `:name` param segment is collapsed to a bare `:` (`/x/:id` and
+ *    `/x/:slug` both normalize to `/x/:`) — a router can't dispatch on the
+ *    param's name, so the two routes are indistinguishable regardless of
+ *    which was authored first. JS twin of the compiler's page-path
+ *    uniqueness owner (`orbital-compiler/src/phases/validation/page.rs`
+ *    `normalize_page_path` + `validate_page_path_uniqueness`,
+ *    `ORB_P_DUPLICATE_PATH`) — cross-orbital like `navigate-target-undeclared`,
+ *    since sibling orbitals' pages share one app router. The compiler owns
+ *    this as a hard error; lintWiring is a linter, so it is reported here as
+ *    a warning, once per colliding path group, naming both original paths
+ *    and both orbital/page sites.
  *  - `relation-field-rendered-raw` (warning) — a table-like pattern's
  *    `columns` entry (`{key|field}`) resolves, through the trait's
  *    `linkedEntity`, to a relation-typed entity field, carries no per-column
@@ -195,10 +227,13 @@ import type {
   SExpr,
   Trait,
   TraitConfigValue,
+  Transition,
 } from '@almadar/core';
 import { identityEntityName, ownerFieldsFromSchema } from '@almadar/core/mock';
 import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, getPatternFieldsContract, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
 import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
+import { embedHostsOf } from './click-wiring-audit.js';
+import { traitOrEmbedHostProduces } from './probe-listen-cascades.js';
 
 /** Every IR value shape the lint's tree walkers traverse: S-expressions
  *  (state machines), call-site config values, render-ui pattern payloads,
@@ -223,6 +258,7 @@ export interface WiringLintFinding {
     | 'async-result-deaf-target'
     | 'groupby-enum-column-gap'
     | 'listens-source-never-emits'
+    | 'listener-affordance-removed-by-config'
     | 'payload-starved-route'
     | 'unclaimed-main-writer'
     | 'dead-lifecycle-action'
@@ -233,9 +269,11 @@ export interface WiringLintFinding {
     | 'embedded-sibling-single-referrer'
     | 'unscoped-owned-entity'
     | 'app-theme-divergent'
+    | 'orbital-config-knob-unforwarded'
     | 'identity-roster-unwritable'
     | 'navigate-target-undeclared'
     | 'page-absent-from-nav'
+    | 'page-path-duplicate'
     | 'relation-field-rendered-raw'
     | 'plugin-emit-no-host-listener'
     | 'plugin-emit-payload-mismatch'
@@ -320,34 +358,47 @@ function asRecordNode(node: object): Readonly<Record<string, ScanNode>> {
  *    (`eventKeyPropsOf` — `cancelEvent`, `retryEvent`, `onRetry`, …), resolved
  *    against `type:` so the prop's meaning comes from the registry rather than
  *    from its name. */
-function collectRenderActionEvents(trait: Trait): Set<string> {
-  const out = new Set<string>();
-  const scan = (node: ScanNode): void => {
-    if (node === null || node === undefined) return;
-    if (Array.isArray(node)) {
-      for (const child of node) scan(child);
-      return;
-    }
-    if (typeof node !== 'object') return;
-    const record = asRecordNode(node);
-    const action = record['action'];
-    if (typeof action === 'string' && action.length > 0) out.add(action);
-    const patternType = record['type'];
-    if (typeof patternType === 'string') {
-      for (const prop of eventKeyPropsOf(patternType)) {
-        for (const leaf of conditionalLeafValues(record[prop])) {
-          if (typeof leaf === 'string' && leaf.length > 0) out.add(leaf);
-        }
+function scanRenderActionEvents(node: ScanNode, out: Set<string>): void {
+  if (node === null || node === undefined) return;
+  if (Array.isArray(node)) {
+    for (const child of node) scanRenderActionEvents(child, out);
+    return;
+  }
+  if (typeof node !== 'object') return;
+  const record = asRecordNode(node);
+  const action = record['action'];
+  if (typeof action === 'string' && action.length > 0) out.add(action);
+  const patternType = record['type'];
+  if (typeof patternType === 'string') {
+    for (const prop of eventKeyPropsOf(patternType)) {
+      for (const leaf of conditionalLeafValues(record[prop])) {
+        if (typeof leaf === 'string' && leaf.length > 0) out.add(leaf);
       }
     }
-    for (const value of Object.values(record)) scan(value);
-  };
-  for (const transition of trait.stateMachine?.transitions ?? []) {
-    for (const effect of transition.effects ?? []) {
-      if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
+  }
+  for (const value of Object.values(record)) scanRenderActionEvents(value, out);
+}
+
+/** Same contract as {@link collectRenderActionEvents}, scoped to ONE
+ *  transition's own `render-ui` effects — the per-transition slice
+ *  `probeListenCascades` needs to pick a dispatchable arm, rather than the
+ *  whole-trait union every OTHER caller here wants. */
+export function renderActionEventsOf(transition: Transition): Set<string> {
+  const out = new Set<string>();
+  for (const effect of transition.effects ?? []) {
+    if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) {
+      scanRenderActionEvents(effect[2], out);
     }
   }
-  if (trait.config) scan(trait.config);
+  return out;
+}
+
+function collectRenderActionEvents(trait: Trait): Set<string> {
+  const out = new Set<string>();
+  for (const transition of trait.stateMachine?.transitions ?? []) {
+    for (const event of renderActionEventsOf(transition)) out.add(event);
+  }
+  if (trait.config) scanRenderActionEvents(trait.config, out);
   return out;
 }
 
@@ -636,9 +687,18 @@ function conditionalLeafValues(value: unknown): unknown[] {
   return [value];
 }
 
-/** Events declared in `itemActions`-shaped config arrays anywhere in the
- *  trait's config tree (`[{ event, label, … }]`). */
-function configItemActionEvents(trait: Trait): Set<string> {
+/**
+ * Events declared in `itemActions`-shaped config arrays anywhere in the
+ * trait's config tree (`[{ event, label, … }]`) — the deterministic
+ * "is this a ROW action" detector: an event here is rendered once per row
+ * (a data-grid/list `itemActions`/`browseItemActions` knob), never a plain
+ * single button elsewhere on the page. Exported so `plan-user-crud-flow.ts`
+ * (C1-V9 item C) can classify a `crud-edit`/`crud-delete` step's DOM
+ * affordance the same deterministic way this observer already does,
+ * instead of a second hand-rolled check — one owner, per the project's
+ * no-duplicates rule.
+ */
+export function configItemActionEvents(trait: Trait): Set<string> {
   const out = new Set<string>();
   const scan = (node: ScanNode): void => {
     if (node === null || node === undefined) return;
@@ -671,18 +731,51 @@ function configItemActionEvents(trait: Trait): Set<string> {
   return out;
 }
 
-/** Every event the trait can produce, by any declared mechanism. */
-function producibleEvents(trait: Trait): Set<string> {
+/** Every event a LIVE mechanism on the trait currently produces — effects,
+ *  rendered affordances, and config-driven item actions. Deliberately
+ *  EXCLUDES the trait's own `emits[]` contract: that array declares what the
+ *  trait is PERMITTED to emit under some configuration, not what a specific
+ *  resolved call site actually wires up. Split out of {@link producibleEvents}
+ *  as the building block `listener-affordance-removed-by-config` needs — a
+ *  contract entry with no live producer behind it. */
+/** Literal `['emit', eventName, payload?]` effect tuples — the form
+ *  `collectEffectEmittedEvents` doesn't cover (it only reads the
+ *  `{emit: {success, failure}}` fetch/persist options-object shape). Shared
+ *  by both scan sites below so a transition's and a tick's explicit emits
+ *  are read by the one walk, not two copies that could drift. */
+function explicitEmitEvents(effects: ReadonlyArray<Effect> | undefined): Set<string> {
   const out = new Set<string>();
-  for (const emit of trait.emits ?? []) out.add(emit.event);
-  for (const event of collectEffectEmittedEvents(trait.stateMachine?.transitions ?? [])) out.add(event);
-  for (const transition of trait.stateMachine?.transitions ?? []) {
-    for (const effect of transition.effects ?? []) {
-      if (Array.isArray(effect) && effect[0] === 'emit' && typeof effect[1] === 'string') out.add(effect[1]);
-    }
+  for (const effect of effects ?? []) {
+    if (Array.isArray(effect) && effect[0] === 'emit' && typeof effect[1] === 'string') out.add(effect[1]);
+  }
+  return out;
+}
+
+function liveProducibleEvents(trait: Trait): Set<string> {
+  const out = new Set<string>();
+  // `TraitTick.effects` fires on a scheduler, not a state-machine transition
+  // (`std-*` clock/timer generics), but is the same `{effects?: Effect[]}`
+  // shape — scanned alongside transitions, not as a separate walk.
+  const effectSources: ReadonlyArray<{ effects?: ReadonlyArray<Effect> }> = [
+    ...(trait.stateMachine?.transitions ?? []),
+    ...(trait.ticks ?? []),
+  ];
+  for (const event of collectEffectEmittedEvents(effectSources)) out.add(event);
+  for (const source of effectSources) {
+    for (const event of explicitEmitEvents(source.effects)) out.add(event);
   }
   for (const event of collectRenderActionEvents(trait)) out.add(event);
   for (const event of configItemActionEvents(trait)) out.add(event);
+  return out;
+}
+
+/** Every event the trait can produce, by any declared mechanism — exported
+ *  for `probe-listen-cascades.ts`'s "can the source produce it at all" check,
+ *  the same oracle this lint's own `listens-source-never-emits` static check
+ *  uses, so a probed vs. a statically-linted source never disagree. */
+export function producibleEvents(trait: Trait): Set<string> {
+  const out = liveProducibleEvents(trait);
+  for (const emit of trait.emits ?? []) out.add(emit.event);
   return out;
 }
 
@@ -749,6 +842,11 @@ function writesContentMain(effects: ReadonlyArray<Effect> | undefined): boolean 
 
 export function lintWiring(schema: OrbitalSchema): WiringLintResult {
   const findings: WiringLintFinding[] = [];
+  // Whole-schema embed-host map — `listener-affordance-removed-by-config`
+  // credits an embedded child's own live producer up its embed-host chain,
+  // the same contract `probe-listen-cascades.ts` and `click-wiring-audit.ts`
+  // already share.
+  const embedHosts = embedHostsOf(schema);
 
   for (const orb of schema.orbitals) {
     const traits = new Map<string, Trait>();
@@ -1403,6 +1501,33 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
           continue;
         }
 
+        // --- listener-affordance-removed-by-config ------------------------
+        // sourceEvents.has(listen.event) is true here (the block above
+        // already continued on the miss), so the CONTRACT permits sourceName
+        // to produce listen.event. `sourceEvents` is `producibleEvents`,
+        // which folds the contract's `emits[]` in unconditionally — check
+        // separately whether any LIVE mechanism (effect emit, rendered
+        // affordance, config item action, or an embedded child's own
+        // producer) still backs it at this call site.
+        const emitsContractHasEvent = (sourceTrait.emits ?? []).some((emit) => emit.event === listen.event);
+        if (
+          emitsContractHasEvent &&
+          !traitOrEmbedHostProduces(sourceTrait, sourceName, listen.event, embedHosts, traits, liveProducibleEvents)
+        ) {
+          findings.push({
+            check: 'listener-affordance-removed-by-config',
+            severity: 'warning',
+            orbital: orb.name,
+            trait: listenerName,
+            message:
+              `listens route ${sourceName}.${listen.event} -> ${listen.triggers}: ${sourceName}'s emits contract ` +
+              `declares ${listen.event}, but no live effect, rendered affordance, or config item action at this ` +
+              `call site produces it — a config override (e.g. itemActions/browseItemActions narrowed) likely ` +
+              `removed the only producer`,
+            suggestion: `restore ${listen.event} to ${sourceName}'s active affordance config, or drop the ${listenerName} route if the removal is intentional`,
+          });
+        }
+
         const required = requiredContractFields(listener, listen.triggers);
         if (required.size === 0) continue;
         const supplied = suppliedPayloadFields(sourceTrait, listen.event);
@@ -1640,6 +1765,84 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     }
   }
 
+  // --- orbital-config-knob-unforwarded --------------------------------------
+  // §4.5's declared config surface: an orbital-level `Orbital.config` or
+  // app-level `OrbitalSchema.config` knob is PUBLISHED only when some trait
+  // forwards it — a `config[<key>].default` equal to the literal string
+  // `@config.<knob>` (no dotted tail; a `@config.<knob>.<path>` default reads
+  // a sibling's own forward, not a declaration of THIS knob — the same
+  // `CONFIG_FORWARD_RE` grammar `traitDeclaresConfigForward`
+  // (`@almadar/core`) already tests). A declared knob nothing forwards is a
+  // live wire terminating in nothing: an importer can set it
+  // (`uses … { config { … } }` / the orbital's own `config { … }` override)
+  // and no trait ever reads the value. `ORB_O_CONFIG_DEAD_KNOB` is this
+  // rule's compiled-path twin — a hard error there, since the compiler has
+  // no warning severity; this is the runtime-side mirror. Forwarders are
+  // collected across the WHOLE schema, not just the declaring orbital — a
+  // knob can be forwarded by a trait pulled in from another orbital, matching
+  // the compiler's post-flatten walk.
+  //
+  // The L2 inline phase (and the runtime resolver) COLLAPSE a forward down to
+  // its resolved value before this lint ever sees the schema, so on an
+  // already-resolved schema the literal `@config.<knob>` token is gone from
+  // `default` — only the field's `forwardedFrom` provenance still names the
+  // knob it came from. `forwardsKnob` tests both shapes so this check reports
+  // the same result pre- and post-resolve.
+  const CONFIG_KNOB_FORWARD_TOKEN = (knob: string): string => `@config.${knob}`;
+  function forwardsKnob(field: unknown, knob: string): boolean {
+    if (typeof field !== 'object' || field === null) return false;
+    const token = CONFIG_KNOB_FORWARD_TOKEN(knob);
+    const { default: defaultValue, forwardedFrom } = field as {
+      default?: unknown;
+      forwardedFrom?: unknown;
+    };
+    if (typeof forwardedFrom === 'string' && forwardedFrom === token) return true;
+    return typeof defaultValue === 'string' && defaultValue === token;
+  }
+  const traitConfigFields: unknown[] = [];
+  for (const orb of schema.orbitals) {
+    for (const trait of orb.traits ?? []) {
+      if (!isInlineTrait(trait)) continue;
+      const config = trait.config as Record<string, unknown> | undefined;
+      if (!config) continue;
+      traitConfigFields.push(...Object.values(config));
+    }
+  }
+  const isKnobForwarded = (knob: string): boolean =>
+    traitConfigFields.some((field) => forwardsKnob(field, knob));
+  for (const orb of schema.orbitals) {
+    for (const knob of Object.keys(orb.config ?? {})) {
+      if (isKnobForwarded(knob)) continue;
+      findings.push({
+        check: 'orbital-config-knob-unforwarded',
+        severity: 'warning',
+        orbital: orb.name,
+        trait: orb.name,
+        message:
+          `Orbital "${orb.name}" declares config knob "${knob}" but no trait forwards ` +
+          `@config.${knob} — the knob is dead (an importer can set it, nothing reads it)`,
+        suggestion:
+          `forward it from the trait that should publish it (config { ${knob}: @config.${knob} }) ` +
+          `or delete the declaration`,
+      });
+    }
+  }
+  for (const knob of Object.keys(schema.config ?? {})) {
+    if (isKnobForwarded(knob)) continue;
+    findings.push({
+      check: 'orbital-config-knob-unforwarded',
+      severity: 'warning',
+      orbital: schema.name,
+      trait: schema.name,
+      message:
+        `App "${schema.name}" declares config knob "${knob}" but no trait forwards ` +
+        `@config.${knob} — the knob is dead (an importer can set it, nothing reads it)`,
+      suggestion:
+        `forward it from the trait that should publish it (config { ${knob}: @config.${knob} }) ` +
+        `or delete the declaration`,
+    });
+  }
+
   // --- identity-roster-unwritable ------------------------------------------
   // The `[identity]` entity is the app's persona roster. A roster no
   // transition can `persist create` into has no write path: users can never
@@ -1836,6 +2039,47 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
         });
       }
     }
+  }
+
+  // --- page-path-duplicate ------------------------------------------------
+  // JS twin of the compiler's page-path uniqueness owner
+  // (`orbital-compiler/src/phases/validation/page.rs::normalize_page_path` +
+  // `validate_page_path_uniqueness`, wired via `ctx.merge` in
+  // `validate_all_pages`, code `ORB_P_DUPLICATE_PATH`): collapse every
+  // `:name` segment to a bare `:` so `/x/:id` and `/x/:slug` collide at
+  // dispatch regardless of the param's name — a router can't tell them
+  // apart. Cross-orbital, like `navigate-target-undeclared`/`allPages`
+  // above: two orbitals' pages share one app router. The compiler owns this
+  // as an ERROR; lintWiring is a linter, so this fires as a warning.
+  const normalizePagePath = (path: string): string =>
+    path
+      .split('/')
+      .map((segment) => (segment.startsWith(':') ? ':' : segment))
+      .join('/');
+  const pagesByNormalizedPath = new Map<string, { orbital: string; page: string; path: string }[]>();
+  for (const orb of schema.orbitals) {
+    for (const page of inlinePages(orb)) {
+      const key = normalizePagePath(page.path);
+      const bucket = pagesByNormalizedPath.get(key) ?? [];
+      bucket.push({ orbital: orb.name, page: page.name, path: page.path });
+      pagesByNormalizedPath.set(key, bucket);
+    }
+  }
+  for (const [normalized, entries] of pagesByNormalizedPath) {
+    if (entries.length < 2) continue;
+    const first = entries[0]!;
+    const originals = entries.map((entry) => `'${entry.path}'`).join(' and ');
+    const sites = entries.map((entry) => `${entry.orbital}.${entry.page}`).join(' and ');
+    findings.push({
+      check: 'page-path-duplicate',
+      severity: 'warning',
+      orbital: first.orbital,
+      trait: first.page,
+      message:
+        `page paths ${originals} (declared on ${sites}) normalize to the same dispatch shape '${normalized}' — ` +
+        `two routes that only differ by a param NAME still collide at dispatch`,
+      suggestion: 'give each page a distinct path shape, or merge the pages if they are meant to be one route',
+    });
   }
 
   const errors = findings.filter((finding) => finding.severity === 'error').length;

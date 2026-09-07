@@ -23,9 +23,11 @@
  *      entity diff (one row removed) + DOM list -1.
  *
  * The chain is ordered so EDIT/DELETE always have at least one row to
- * target — CREATE establishes the row first. The driver picks the
- * first `[data-row-id]` deterministically (structural position), so
- * `targetRowId` is left undefined on EDIT/DELETE.
+ * target — CREATE establishes the row first. `targetRowId` is left
+ * undefined on EDIT/DELETE by this planner; `tick()` resolves the actual
+ * target row at dispatch time (C1-V11) — the structurally-first row by
+ * default, or (DELETE on a self-referential entity) the first row no
+ * other row references via `avoidReferencedVia`.
  *
  * Pure. No Page, no DOM. Reuses
  * `extractPayloadSchema` / `buildFormData` patterns from
@@ -45,8 +47,14 @@ import type {
 } from '@almadar/core';
 import type { ExtendedWalkStep, TestKind } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
+import { findPersistKind, isWholeRowField } from './internal/persist-binding.js';
+import { planGuardPreconditionPreamble } from './internal/guard-precondition.js';
+import { findAffordanceDisabledExpr } from './internal/affordance-disabled.js';
 import { collectEntityFields, hasRequiredPayloadFields } from './internal/payload-synth.js';
-import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
+import { buildMinimalPayload, declaredValuesOf, type EntityFieldDef } from '../browser/interaction.js';
+import { configItemActionEvents } from '../observer/wiring-lint.js';
+import { deriveViewerRequirement } from './internal/viewer-requirement.js';
+import { selfRelationFieldNames } from './internal/self-relation-fields.js';
 
 export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
   const result: ExtendedWalkStep[] = [];
@@ -63,10 +71,14 @@ export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
 
     for (const transition of persistor.stateMachine.transitions) {
       if (transition.event === 'INIT') continue;
-      const persist = findPersistInfo(transition);
-      if (persist === null) continue;
+      const persist = findPersistKind(transition.effects ?? []);
+      // A persist with no discoverable `emit.success` can't drive a CRUD
+      // step's `expectedSuccessEvent` — same skip `findPersistInfo` used to
+      // apply itself (C1-J4, item B: converged onto `findPersistKind`, the
+      // ONE effect-shape detector `persist-binding.ts` already owns).
+      if (persist === null || persist.successEvent === undefined) continue;
       const bucket = persistsByEntity.get(persist.entity) ?? new Map();
-      bucket.set(persist.kind, { ...persist, transition });
+      bucket.set(persist.kind, { kind: persist.kind, entity: persist.entity, successEvent: persist.successEvent, transition });
       persistsByEntity.set(persist.entity, bucket);
     }
 
@@ -83,6 +95,7 @@ export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
           persistor,
           traitsByName,
           entityFieldsByName,
+          orbital,
         });
         if (step !== null) result.push(step);
       }
@@ -95,6 +108,7 @@ export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
           persistor,
           traitsByName,
           entityFieldsByName,
+          orbital,
         });
         if (step !== null) result.push(step);
       }
@@ -107,8 +121,31 @@ export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
           persistor,
           traitsByName,
           entityFieldsByName,
+          orbital,
         });
-        if (step !== null) result.push(step);
+        if (step !== null) {
+          // C1-V15 item C: only entities with a restrict-rule self-relation
+          // can legitimately run OUT of unreferenced rows on a real seed
+          // (std-time-tracking's `Employee.seedRow`) — an entity with none
+          // never needs this fallback, and attaching it anyway would just
+          // dispatch a needless extra create on every OTHER entity's delete
+          // step. Needs the entity's OWN declared `create` too — nothing to
+          // fall back to without one.
+          if (create !== undefined && selfRelationFieldNames(orbital, entityName).length > 0) {
+            const createPayloadSchema = extractPayloadSchema(persistor, create.transition.event);
+            const createPayload = createPayloadSchema.length > 0
+              ? (buildMinimalPayload(createPayloadSchema, entityFieldsByName[entityName] ?? []) as Record<string, FieldValue>)
+              : {};
+            const createViewerRequirement = deriveViewerRequirement(orbital, entityName, 'create');
+            step.deleteEstablishFallback = {
+              event: create.transition.event,
+              payload: createPayload,
+              traitName: persistor.name,
+              ...(createViewerRequirement !== undefined && { viewerRequirement: createViewerRequirement }),
+            };
+          }
+          result.push(step);
+        }
       }
     }
   }
@@ -122,10 +159,6 @@ interface PersistInfo {
   kind: 'create' | 'update' | 'delete';
   entity: string;
   successEvent: string;
-  /** The persistor's listens-block event that triggers this persist
-   *  transition (e.g. `LIST_ITEM_CREATED`). The user-flow's submit
-   *  click fires THIS event from the modal. */
-  listenEvent: string | undefined;
   transition: Transition;
 }
 
@@ -136,10 +169,14 @@ interface BuildStepInput {
   persistor: Trait;
   traitsByName: Map<string, Trait>;
   entityFieldsByName: Record<string, EntityFieldDef[]>;
+  /** C1-V10 item 1: the owning schema, needed to derive this step's
+   *  {@link deriveViewerRequirement} the SAME way `planDataMutationTests`
+   *  does — one shared helper, never a second copy. */
+  orbital: OrbitalSchema;
 }
 
 function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
-  const { kind, entityName, persist, persistor, traitsByName, entityFieldsByName } = input;
+  const { kind, entityName, persist, persistor, traitsByName, entityFieldsByName, orbital } = input;
 
   // Find the persistor's listener whose `triggers` matches this
   // persist transition's event (e.g. listener `triggers: 'DO_CREATE'`
@@ -147,8 +184,7 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
   // The listener's `event` is the user-fired event that propagates via
   // the bus (e.g. 'LIST_ITEM_CREATED'), and `source.trait` names the
   // modal/confirm trait that emits it.
-  const triggerEvent = persist.listenEvent;
-  if (triggerEvent === undefined) return null;
+  const triggerEvent = persist.transition.event;
 
   const listener = (persistor.listens ?? []).find((l) => l.triggers === triggerEvent);
   if (listener === undefined) return null;
@@ -207,6 +243,23 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
   );
   const openAffordanceEvent = inboundListener?.event ?? openEvent;
 
+  // C1-V9 item C: is `openAffordanceEvent` a genuine ROW action, or a
+  // plain single button (e.g. a detail page's own action button, reached
+  // here via a cross-trait listener the same way a row action is)? A row
+  // action is rendered once per row by an `itemActions`/
+  // `browseItemActions`-shaped config array on whichever trait ACTUALLY
+  // renders the button — the inbound listener's source trait when the
+  // open event is rebroadcast cross-trait (a data-grid's itemActions on a
+  // Browse trait), else `sourceTrait` itself. Anything else is a DOM
+  // click on the page, never row-scoped — `default-dom-trigger.ts` must
+  // not require `[data-row-id]` on it, and a miss must not be reported as
+  // a missing row affordance.
+  const inboundListenerSourceTraitName = inboundListener !== undefined ? sourceTraitOf(inboundListener) : null;
+  const renderingTrait =
+    (inboundListenerSourceTraitName !== null ? traitsByName.get(inboundListenerSourceTraitName) : undefined)
+    ?? sourceTrait;
+  const isRowAction = configItemActionEvents(renderingTrait).has(openAffordanceEvent);
+
   // Synthesize the form payload for create/edit. Edit overwrites the
   // pre-filled row, so its content is distinct from create's.
   const payloadSchema = extractPayloadSchema(sourceTrait, listenEvent);
@@ -222,7 +275,9 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
     const synthSchema = nestedForm !== null && nestedForm.fields.length > 0
       ? nestedForm.fields.map((n) => ({ name: n, type: 'string' as const }))
       : entityFields
-          .filter((f) => f.name !== 'id' && f.name !== 'createdAt' && f.name !== 'updatedAt')
+          .filter((f): f is typeof f & { name: string } =>
+            f.name !== undefined && f.name !== 'id' && f.name !== 'createdAt' && f.name !== 'updatedAt',
+          )
           .map((f) => ({ name: f.name, type: f.type }));
 
     if (synthSchema.length > 0) {
@@ -255,7 +310,7 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
         // row WAS created with valid data, just don't assert the enum field's
         // specific value. Mirrors the crud-edit enum skip below.
         const enumFieldNames = new Set(
-          entityFields.filter((f) => f.values !== undefined && f.values.length > 0).map((f) => f.name),
+          entityFields.filter((f): f is typeof f & { name: string } => f.name !== undefined && declaredValuesOf(f) !== undefined).map((f) => f.name),
         );
         expectedRowContent = Object.fromEntries(
           Object.entries(flat).filter(([k]) => !enumFieldNames.has(k)),
@@ -284,12 +339,65 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
     expectedSuccessEvent: persist.successEvent,
   };
 
+  // C1-V10 item 1: the viewer this step's own persist action needs to run
+  // as, derived from the target entity's declared access policy — EXACTLY
+  // `planDataMutationTests`'s own call (`persist.kind` is already
+  // 'create'|'update'|'delete', the same vocabulary
+  // `deriveViewerRequirement` expects). `tick()` already resolves this
+  // generically for every planner (switch persona before dispatch, stamp
+  // create's owner field into `step.payload`, restore after) — no new
+  // driver/tick logic needed. For edit/delete the owner lookup reads
+  // whichever row `tick()`'s own C1-V11 row resolution picked (the SAME
+  // row `avoidReferencedVia` steers `pickBindableRow` toward, or the
+  // structurally-first row when unset) — one picked row drives the DOM
+  // click, the viewer switch, AND the persist payload, so they never
+  // disagree.
+  const viewerRequirement = deriveViewerRequirement(orbital, entityName, persist.kind);
+  if (viewerRequirement !== undefined) {
+    step.viewerRequirement = viewerRequirement;
+  }
+
+  // C1-V15 item A: this step dispatches the OPEN affordance on `sourceTrait`
+  // (the modal/confirmation), never the persistor directly — the guarded
+  // `persist.transition` (on `persistor`) only fires as a CASCADE from this
+  // step's submit/confirm click. A guard precondition a sibling trait
+  // establishes is exactly as unreachable here as it is for
+  // `planDataMutationTests`'s own direct-dispatch steps — same detector,
+  // attached to THIS step (`sourceTrait`'s own open/submit chain) instead,
+  // since that's the actual dispatch this planner drives.
+  if (persist.transition.guard !== undefined) {
+    const guardPlan = planGuardPreconditionPreamble(
+      orbital, persistor, persist.transition, persist.transition.from, entityFieldsByName,
+    );
+    if (guardPlan.establishesRow !== undefined) {
+      step.establishesRow = guardPlan.establishesRow;
+    } else if (guardPlan.guardPreconditionUnreachable !== undefined) {
+      step.unreachableRowReason = guardPlan.guardPreconditionUnreachable;
+    }
+  }
+
   // Only set the affordance override when it actually differs — keeps
   // step.event-only paths working unchanged for cases like
   // Browse.CREATE → Create.CREATE where the listener.event matches the
   // receiver's transition event.
   if (openAffordanceEvent !== openEvent) {
     step.openAffordanceEvent = openAffordanceEvent;
+  }
+
+  // C1-V9 item C: only edit/delete are ever row-scoped in the first
+  // place (`default-dom-trigger.ts`'s `needsRow` never considers create).
+  if (kind === 'edit' || kind === 'delete') {
+    step.isRowAction = isRowAction;
+
+    // C1-V15 item B: the SAME `renderingTrait` C1-V9 item C already
+    // resolved ("whichever trait actually paints the button") is where the
+    // affordance's OWN `disabled` expression lives too — read once here so
+    // `tick()`'s row resolution can exclude a candidate row the affordance
+    // would silently ignore (a structural no-op click, DOM ✓ / cascade ✗).
+    const disabled = findAffordanceDisabledExpr(orbital, renderingTrait, openAffordanceEvent);
+    if (disabled !== undefined) {
+      step.affordanceDisabledExpr = disabled;
+    }
   }
 
   // I-23: when the OPEN event declares required payload fields, a bare `{}`
@@ -317,7 +425,7 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
       // `fieldsChanged`. The row WAS still edited (other fields changed), so
       // dropping this exclusion would introduce a deterministic false negative.
       const enumFieldNames = new Set(
-        entityFields.filter((f) => f.values !== undefined && f.values.length > 0).map((f) => f.name),
+        entityFields.filter((f): f is typeof f & { name: string } => f.name !== undefined && declaredValuesOf(f) !== undefined).map((f) => f.name),
       );
       const changed = expectedRowContent !== undefined
         ? Object.keys(expectedRowContent).filter((k) => !enumFieldNames.has(k))
@@ -333,51 +441,39 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
     // event itself and needs a real row to fill those fields — give it
     // the schema-derived shape (entity-typed fields take the whole row,
     // the rest take `row[name]`). Empty schema → trigger's `{id}` base.
+    //
+    // `wholeRow` reads the lowering-stamped `entity` marker via
+    // {@link isWholeRowField} (persist-binding.ts's ONE owner for this
+    // question, C1-J3 item B), not `type` (`type` is `"object"`/`"[object]"`
+    // for ANY flattened entity OR anonymous struct field — comparing it to
+    // `entityName` was coincidentally right only when the field happened to
+    // be typed exactly `entityName` as a bare string, which flattening
+    // never produces). A registry `.orb` emitted BEFORE the marker existed
+    // carries no `entity` field, so `wholeRow` is deterministically
+    // `false` for it — not a fallback, the honest absence of data.
     const openSchema = extractPayloadSchema(sourceTrait, openEvent);
     if (openSchema.length > 0) {
       step.payloadRowShape = openSchema.map((f) => ({
         name: f.name,
-        wholeRow: f.type === entityName,
+        wholeRow: isWholeRowField(f, entityName),
       }));
+    }
+
+    // C1-V11: `targetRowId` is left undefined (the driver picks the
+    // structurally-first row by default) — for a self-referential entity
+    // the mock seeder's tree shape makes that default row a root with
+    // children EVERY time, which an `onDelete: restrict` rule rejects
+    // regardless of viewer. Attach the fields to avoid so `tick()` can
+    // pick a genuinely deletable row instead. Undefined (not an empty
+    // array) when the entity declares no restrict-rule self-relation —
+    // `tick()` treats that the same as "no avoidance needed".
+    const avoidReferencedVia = selfRelationFieldNames(orbital, entityName);
+    if (avoidReferencedVia.length > 0) {
+      step.avoidReferencedVia = avoidReferencedVia;
     }
   }
 
   return step;
-}
-
-function findPersistInfo(transition: Transition): { kind: 'create' | 'update' | 'delete'; entity: string; successEvent: string; listenEvent: string | undefined } | null {
-  for (const effect of transition.effects ?? []) {
-    if (!Array.isArray(effect)) continue;
-    if (effect[0] !== 'persist') continue;
-    const kind = effect[1];
-    if (kind !== 'create' && kind !== 'update' && kind !== 'delete') continue;
-    if (typeof effect[2] !== 'string') continue;
-
-    let successEvent: string | undefined;
-    for (let i = 3; i < effect.length; i++) {
-      const arg = effect[i];
-      if (arg === null || typeof arg !== 'object' || Array.isArray(arg)) continue;
-      const emit = (arg as Readonly<Record<string, SExpr>>)['emit'];
-      if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
-      const success = (emit as Readonly<Record<string, SExpr>>)['success'];
-      if (typeof success === 'string' && success.length > 0) {
-        successEvent = success;
-        break;
-      }
-    }
-    if (successEvent === undefined) return null;
-
-    return {
-      kind,
-      entity: effect[2],
-      successEvent,
-      // The listen event that triggered this persist's transition is
-      // `transition.event` itself — the listener block's `triggers`
-      // points to that event key on the persistor.
-      listenEvent: transition.event,
-    };
-  }
-  return null;
 }
 
 function deltaFor(kind: 'create' | 'edit' | 'delete'): number {
@@ -406,13 +502,14 @@ function indexTraitsByName(orbital: OrbitalSchema): Map<string, Trait> {
 function extractPayloadSchema(
   trait: Trait,
   eventKey: string,
-): Array<{ name: string; type: string; required?: boolean }> {
+): Array<{ name: string; type: string; required?: boolean; entity?: string }> {
   const event = trait.stateMachine?.events.find((e) => e.key === eventKey);
   if (event === undefined || event.payloadSchema === undefined) return [];
   return event.payloadSchema.map((f) => ({
     name: f.name,
     type: f.type,
     required: f.required,
+    entity: f.entity,
   }));
 }
 

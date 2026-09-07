@@ -477,7 +477,7 @@ describe('assertCrudFlow', () => {
     });
     const prev = buildFrame({
       index: 0,
-      cause: { ...cause, testKind: undefined } as unknown as FrameCause,
+      cause: { ...cause, testKind: undefined },
       entityChanges: [],
       domCount: 1,
       emitted: [],
@@ -511,7 +511,7 @@ describe('assertCrudFlow', () => {
     });
     const prev = buildFrame({
       index: 0,
-      cause: { ...cause, testKind: undefined } as unknown as FrameCause,
+      cause: { ...cause, testKind: undefined },
       entityChanges: [],
       domCount: 1,
       emitted: [],
@@ -651,7 +651,7 @@ describe('assertCrudFlow', () => {
     });
     const baselinePrev = buildFrame({
       index: 0,
-      cause: { ...editCause, testKind: undefined } as unknown as FrameCause,
+      cause: { ...editCause, testKind: undefined },
       entityChanges: [],
       domCount: 1,
       emitted: [],
@@ -703,7 +703,7 @@ describe('assertCrudFlow', () => {
     });
     const baselinePrev = buildFrame({
       index: 0,
-      cause: { ...deleteCause, testKind: undefined } as unknown as FrameCause,
+      cause: { ...deleteCause, testKind: undefined },
       entityChanges: [],
       domCount: 1,
       emitted: [],
@@ -755,7 +755,7 @@ describe('assertCrudFlow', () => {
     });
     const baseline = buildFrame({
       index: 0,
-      cause: { ...createA, testKind: undefined } as unknown as FrameCause,
+      cause: { ...createA, testKind: undefined },
       entityChanges: [],
       domCount: 0,
       emitted: [],
@@ -799,7 +799,7 @@ describe('assertCrudFlow', () => {
     });
     const baseline = buildFrame({
       index: 0,
-      cause: { ...createCause, testKind: undefined } as unknown as FrameCause,
+      cause: { ...createCause, testKind: undefined },
       entityChanges: [],
       domCount: 0,
       emitted: [],
@@ -845,7 +845,7 @@ describe('assertCrudFlow', () => {
     });
     const baseline = buildFrame({
       index: 0,
-      cause: { ...createCause, testKind: undefined } as unknown as FrameCause,
+      cause: { ...createCause, testKind: undefined },
       entityChanges: [],
       domCount: 0,
       emitted: [],

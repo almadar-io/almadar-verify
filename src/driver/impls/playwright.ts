@@ -17,11 +17,13 @@
 
 import type { Page } from 'playwright';
 import type {
+  EntityRow,
   EventPayload,
+  RawUserClaims,
   ServerResponseTrace,
 } from '@almadar/core';
 import type { ConsoleCollector } from '../../browser/console.js';
-import type { Driver, DriverContext, SendResult, SnapshotResult } from '../types.js';
+import type { Driver, DomTriggerResult, DriverContext, SendResult, SnapshotResult } from '../types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import { createDefaultSnapshot } from '../helpers/default-snapshot.js';
 import { createDefaultDomTrigger } from '../helpers/default-dom-trigger.js';
@@ -73,6 +75,29 @@ export interface PlaywrightBridge {
    * Settle hook between sendEvent and snapshot. Default: 800ms wait.
    */
   settle?(page: Page): Promise<void>;
+  /**
+   * C1-V9 item A: read the app's currently-bound persona. No generic
+   * default — a page has no standard "who am I" query, only whatever
+   * HTTP endpoint the consuming tool's runtime exposes (e.g. the
+   * playground's `GET /api/orbitals/persona`). Absent = the driver
+   * doesn't expose `getPersona` at all, and `tick()`'s `viewerRequirement`
+   * steps fail closed instead of switching blind.
+   */
+  getPersona?(page: Page): Promise<RawUserClaims | null>;
+  /**
+   * C1-V9 item A: switch the app's bound persona for every subsequent
+   * dispatch. No generic default, same reasoning as `getPersona`.
+   */
+  setPersona?(page: Page, persona: RawUserClaims | null): Promise<void>;
+  /**
+   * C1-V12: the FULL row set for `entityName` in the runtime's
+   * server-truth mock store — no generic default (a page has no standard
+   * "list this entity" query, only whatever HTTP endpoint the consuming
+   * tool's runtime exposes, e.g. the playground's
+   * `GET /api/orbitals/:orbital/entities/:entityType`). Absent =
+   * `tick()` falls back to the browser-snapshot-only row picker.
+   */
+  listEntityRows?(page: Page, entityName: string): Promise<EntityRow[]>;
 }
 
 export interface CreatePlaywrightDriverOptions {
@@ -95,7 +120,7 @@ export function createPlaywrightDriver(
   });
   const domTriggerImpl = createDefaultDomTrigger();
 
-  return {
+  const driver: Driver<PlaywrightDriverContext> = {
     async sendEvent(ctx, event, payload, traitScope): Promise<SendResult> {
       if (bridge.sendEvent !== undefined) {
         return bridge.sendEvent(ctx.page, event, payload, traitScope);
@@ -121,7 +146,7 @@ export function createPlaywrightDriver(
       );
     },
 
-    async triggerDOM(ctx, step: ExtendedWalkStep, traitScope?: string): Promise<boolean> {
+    async triggerDOM(ctx, step: ExtendedWalkStep, traitScope?: string): Promise<DomTriggerResult> {
       return domTriggerImpl(ctx.page, step, traitScope);
     },
 
@@ -157,4 +182,20 @@ export function createPlaywrightDriver(
       // No default — tool decides routing.
     },
   };
+
+  // C1-V9 item A: only present on the returned Driver when the consumer
+  // actually wired a bridge — `tick()` treats an absent `setPersona` as
+  // "this driver can't switch personas" and fails `viewerRequirement`
+  // steps closed instead of silently no-op-ing under the wrong viewer.
+  if (bridge.getPersona !== undefined) {
+    driver.getPersona = async (ctx) => bridge.getPersona!(ctx.page);
+  }
+  if (bridge.setPersona !== undefined) {
+    driver.setPersona = async (ctx, persona) => bridge.setPersona!(ctx.page, persona);
+  }
+  if (bridge.listEntityRows !== undefined) {
+    driver.listEntityRows = async (ctx, entityName) => bridge.listEntityRows!(ctx.page, entityName);
+  }
+
+  return driver;
 }

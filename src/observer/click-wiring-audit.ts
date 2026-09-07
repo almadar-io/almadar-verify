@@ -121,7 +121,15 @@ export function buildDeclaredListeners(orbital: OrbitalSchema): Map<string, Set<
  * `assertClickNoListener` has always credited it, and this audit not doing so
  * was `T-AUDIT-LISTENS-INLINE-CHILD-FALSE-POSITIVE`.
  */
-function embedHostChain(trait: string, hosts: ReadonlyMap<string, string>): string[] {
+/** Embedded-trait host map for `orbital` — a locally-named wrapper around
+ *  `@almadar/core`'s `collectEmbeddedTraitReferrers`, exported so callers
+ *  outside this file (`probe-listen-cascades.ts`) build the exact map
+ *  `embedHostChain` expects without reaching into core themselves. */
+export function embedHostsOf(orbital: OrbitalSchema): ReadonlyMap<string, string> {
+  return collectEmbeddedTraitReferrers(orbital);
+}
+
+export function embedHostChain(trait: string, hosts: ReadonlyMap<string, string>): string[] {
   const chain: string[] = [];
   const seen = new Set<string>([trait]);
   for (let host = hosts.get(trait); host !== undefined && !seen.has(host); host = hosts.get(host)) {

@@ -1,9 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import type { OrbitalSchema, TraitStateSnapshot, VerificationSnapshot } from '@almadar/core';
+import type { Orbital, OrbitalSchema, Trait, TraitStateSnapshot, VerificationSnapshot } from '@almadar/core';
 import { assertClickNoListener } from '../assert-click-no-listener.js';
 import type { Frame, FrameCause } from '../../frame/types.js';
 
 const emptyDom = { url: '', rowsByEntity: {}, portals: [], visibleTextSample: '' };
+
+// ── Fixture builders — every field the real types require is supplied, so
+// no `as unknown as X` boundary cast is needed (mirrors the convention in
+// the sibling `plugin-wiring-lint.test.ts`). ──────────────────────────────
+
+function fixtureTrait(partial: Partial<Trait> & { name: string }): Trait {
+  return { scope: 'instance', listens: [], ...partial };
+}
+
+function fixtureOrbital(partial: Partial<Orbital> & { name: string; traits: Trait[] }): Orbital {
+  return {
+    entity: { name: `${partial.name}Item`, fields: [{ name: 'id', type: 'string' }] },
+    pages: [],
+    ...partial,
+  };
+}
+
+function fixtureSchema(orbitals: Orbital[]): OrbitalSchema {
+  return { name: 'TestApp', orbitals };
+}
 
 function snapshot(traits: ReadonlyArray<{ name: string; state: string }>): VerificationSnapshot {
   const traitSnapshots: TraitStateSnapshot[] = traits.map((t) => ({
@@ -58,24 +78,22 @@ const domCause = (traitName: string, event: string): FrameCause => ({
 });
 
 // Browse emits ADD_ITEM (no self-transition on it); Modal listens for it from Browse.
-const orbital = {
-  orbitals: [
-    {
-      traits: [
-        {
-          name: 'Browse',
-          stateMachine: { transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing' }] },
-          listens: [],
-        },
-        {
-          name: 'Modal',
-          stateMachine: { transitions: [{ from: 'closed', event: 'ADD_ITEM', to: 'open' }] },
-          listens: [{ event: 'ADD_ITEM', triggers: 'ADD_ITEM', source: { kind: 'trait', trait: 'Browse' } }],
-        },
-      ],
-    },
-  ],
-} as unknown as OrbitalSchema;
+const orbital = fixtureSchema([
+  fixtureOrbital({
+    name: 'BrowseModal',
+    traits: [
+      fixtureTrait({
+        name: 'Browse',
+        stateMachine: { states: [], events: [], transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing' }] },
+      }),
+      fixtureTrait({
+        name: 'Modal',
+        stateMachine: { states: [], events: [], transitions: [{ from: 'closed', event: 'ADD_ITEM', to: 'open' }] },
+        listens: [{ event: 'ADD_ITEM', triggers: 'ADD_ITEM', source: { kind: 'trait', trait: 'Browse' } }],
+      }),
+    ],
+  }),
+]);
 
 describe('assertClickNoListener', () => {
   it('credits a declared cross-trait listener even when cascadeReceived is empty (compiled path)', () => {
@@ -102,18 +120,25 @@ describe('assertClickNoListener', () => {
     // CLOSE emit is delivered under View's scope by the runtime's embed
     // routing — View's own transition is the wiring, no bus subscription on
     // CloseBtn's key ever exists.
-    const embedOrbital = {
-      orbitals: [{
+    const embedOrbital = fixtureSchema([
+      fixtureOrbital({
+        name: 'ViewClose',
         traits: [
-          {
+          fixtureTrait({
             name: 'View',
-            stateMachine: { transitions: [{ from: 'open', event: 'CLOSE', to: 'closed', effects: [['render-ui', 'main', { children: '@trait.CloseBtn' }]] }] },
-            listens: [],
-          },
-          { name: 'CloseBtn', stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle' }] }, listens: [] },
+            stateMachine: {
+              states: [],
+              events: [],
+              transitions: [{ from: 'open', event: 'CLOSE', to: 'closed', effects: [['render-ui', 'main', { type: 'stack', children: '@trait.CloseBtn' }]] }],
+            },
+          }),
+          fixtureTrait({
+            name: 'CloseBtn',
+            stateMachine: { states: [], events: [], transitions: [{ from: 'idle', event: 'INIT', to: 'idle' }] },
+          }),
         ],
-      }],
-    } as unknown as OrbitalSchema;
+      }),
+    ]);
     const frames: Frame[] = [
       frame(0, domCause('View', 'INIT'), [{ name: 'View', state: 'open' }, { name: 'CloseBtn', state: 'idle' }]),
       frame(1, domCause('CloseBtn', 'CLOSE'), [{ name: 'View', state: 'open' }, { name: 'CloseBtn', state: 'idle' }]),
@@ -122,18 +147,25 @@ describe('assertClickNoListener', () => {
   });
 
   it('still flags embedded chrome whose whole embed chain has no handler', () => {
-    const embedOrbital = {
-      orbitals: [{
+    const embedOrbital = fixtureSchema([
+      fixtureOrbital({
+        name: 'ViewDead',
         traits: [
-          {
+          fixtureTrait({
             name: 'View',
-            stateMachine: { transitions: [{ from: 'open', event: 'INIT', to: 'open', effects: [['render-ui', 'main', { children: '@trait.DeadBtn' }]] }] },
-            listens: [],
-          },
-          { name: 'DeadBtn', stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle' }] }, listens: [] },
+            stateMachine: {
+              states: [],
+              events: [],
+              transitions: [{ from: 'open', event: 'INIT', to: 'open', effects: [['render-ui', 'main', { type: 'stack', children: '@trait.DeadBtn' }]] }],
+            },
+          }),
+          fixtureTrait({
+            name: 'DeadBtn',
+            stateMachine: { states: [], events: [], transitions: [{ from: 'idle', event: 'INIT', to: 'idle' }] },
+          }),
         ],
-      }],
-    } as unknown as OrbitalSchema;
+      }),
+    ]);
     const frames: Frame[] = [
       frame(0, domCause('View', 'INIT'), [{ name: 'View', state: 'open' }, { name: 'DeadBtn', state: 'idle' }]),
       frame(1, domCause('DeadBtn', 'NOPE'), [{ name: 'View', state: 'open' }, { name: 'DeadBtn', state: 'idle' }]),
@@ -144,9 +176,17 @@ describe('assertClickNoListener', () => {
   });
 
   it('credits self-targeting (the emitting trait handles the event itself)', () => {
-    const selfOrbital = {
-      orbitals: [{ traits: [{ name: 'Browse', stateMachine: { transitions: [{ from: 'browsing', event: 'GO', to: 'browsing' }] }, listens: [] }] }],
-    } as unknown as OrbitalSchema;
+    const selfOrbital = fixtureSchema([
+      fixtureOrbital({
+        name: 'BrowseSelf',
+        traits: [
+          fixtureTrait({
+            name: 'Browse',
+            stateMachine: { states: [], events: [], transitions: [{ from: 'browsing', event: 'GO', to: 'browsing' }] },
+          }),
+        ],
+      }),
+    ]);
     const frames: Frame[] = [
       frame(0, domCause('Browse', 'INIT'), [{ name: 'Browse', state: 'browsing' }]),
       frame(1, domCause('Browse', 'GO'), [{ name: 'Browse', state: 'browsing' }]),

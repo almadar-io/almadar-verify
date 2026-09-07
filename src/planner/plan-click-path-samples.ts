@@ -18,7 +18,7 @@
 import type { Effect, OrbitalSchema, SExpr } from '@almadar/core';
 import { isInlineTrait } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
-import { findInitialState } from './internal/orbital-walk.js';
+import { dispatchNavigates, findInitialState } from './internal/orbital-walk.js';
 
 export function planClickPathSamples(orbital: OrbitalSchema): ExtendedWalkStep[] {
   const result: ExtendedWalkStep[] = [];
@@ -56,6 +56,7 @@ export function planClickPathSamples(orbital: OrbitalSchema): ExtendedWalkStep[]
           triggerKind: 'dom',
           coverageKey: `${trait.name}:${site.state}+${site.event}->${target}[click-path:${site.slot}]`,
           testKind: 'click-path',
+          ...(dispatchNavigates(orbital, orb, trait.name, site.event) ? { navigates: true } : {}),
         });
       }
     }

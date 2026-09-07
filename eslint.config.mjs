@@ -22,6 +22,7 @@ export default [
     },
     rules: {
       "almadar/no-as-any": "error",
+      "almadar/no-as-unknown-as": "error",
     },
   },
 ];

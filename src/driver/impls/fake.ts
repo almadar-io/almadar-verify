@@ -22,6 +22,7 @@ import type {
   EntityRow,
   EventLogEntry,
   EventPayload,
+  RawUserClaims,
   SExpr,
   ServerResponseTrace,
   TraitStateSnapshot,
@@ -54,18 +55,22 @@ export interface FakeDriverOptions {
    * Effect executor hook. When the matched transition declares effects
    * (`WalkTransition.effects`), `FakeRuntime.dispatch` calls this with
    * the arm's effect list and the current dispatch's
-   * `{traitName, event, payload}` — the caller runs them for real
+   * `{traitName, event, payload, persona}` — the caller runs them for real
    * (typically via `@almadar/evaluator`'s `executeEffect` fed a
    * `mutateEntity`/`emit`-backed context) and returns the resulting
-   * `EffectTrace[]` plus any bus events the effects emitted. Absent hook,
-   * or a transition with no declared effects, leaves `effectResults()`
-   * empty — the pre-existing behavior every current caller relies on
-   * (mirrors `evaluateGuard`'s opt-in shape: omit it, dispatch runs
-   * unconditionally / effect-free).
+   * `EffectTrace[]` plus any bus events the effects emitted. `ctx.persona`
+   * (C1-V9 item A) is `FakeRuntime`'s CURRENT persona at dispatch time —
+   * whatever `setPersona`/`FakeDriver.setPersona` last set — so a fixture
+   * can simulate a real access-policy denial (`outcome: 'denied'`) the
+   * same way `checkMutationAccess` would. Absent hook, or a transition
+   * with no declared effects, leaves `effectResults()` empty — the
+   * pre-existing behavior every current caller relies on (mirrors
+   * `evaluateGuard`'s opt-in shape: omit it, dispatch runs unconditionally
+   * / effect-free).
    */
   executeEffects?: (
     effects: Effect[],
-    ctx: { traitName: string; event: string; payload: EventPayload },
+    ctx: { traitName: string; event: string; payload: EventPayload; persona: RawUserClaims | null },
   ) => { effects: EffectTrace[]; emitted: Array<{ event: string; payload?: EventPayload }> };
 }
 
@@ -90,6 +95,15 @@ export class FakeRuntime {
    *  `success:false` serverResponse. Simulates the compiled server's
    *  payload-validator rejecting a malformed payload. */
   private rejected = new Set<string>();
+  /**
+   * C1-V9 item A: the CURRENT viewer `executeEffects` sees at dispatch
+   * time — `FakeDriver.getPersona`/`setPersona` read and write this
+   * directly. NOT cleared by `reset()`: a real app's default persona
+   * survives a mock-store reset (`resetMockPersistence` reseeds under
+   * whatever `config.defaultUser` already is), so a fixture's persona
+   * must survive it too.
+   */
+  private persona: RawUserClaims | null = null;
 
   constructor(
     private traits: TraitWalkConfig[],
@@ -101,6 +115,16 @@ export class FakeRuntime {
   /** Make `(traitName, event)` dispatches fail server-side validation. */
   rejectEvent(traitName: string, event: string): void {
     this.rejected.add(`${traitName}::${event}`);
+  }
+
+  /** The viewer `executeEffects` currently sees. */
+  getPersona(): RawUserClaims | null {
+    return this.persona;
+  }
+
+  /** Switch the viewer `executeEffects` sees on every subsequent dispatch. */
+  setPersona(persona: RawUserClaims | null): void {
+    this.persona = persona;
   }
 
   reset(): void {
@@ -187,7 +211,7 @@ export class FakeRuntime {
     // or no declared effects: stays empty, the pre-existing behavior.
     const declaredEffects = transition.effects ?? [];
     if (this.options.executeEffects && declaredEffects.length > 0) {
-      const result = this.options.executeEffects(declaredEffects, { traitName, event, payload });
+      const result = this.options.executeEffects(declaredEffects, { traitName, event, payload, persona: this.persona });
       this.lastEffectResults = result.effects;
       for (const emitted of result.emitted) {
         this.eventLog.push({ type: emitted.event, payload: emitted.payload, timestamp: Date.now() });
@@ -294,17 +318,27 @@ export function createFakeDriver(traits: TraitWalkConfig[], options?: FakeDriver
   const runtime = new FakeRuntime(traits, options);
 
   const driver: Driver<FakeDriverContext> = {
-    async sendEvent(_ctx, event, payload): Promise<SendResult> {
-      const result = runtime.dispatch(_ctx.trait.traitName, event, payload);
+    async sendEvent(_ctx, event, payload, traitScope): Promise<SendResult> {
+      // C1-V15 item A: a `beforeReplay` guard-precondition preamble
+      // dispatches against a SIBLING trait, not `ctx.trait` (fixed for the
+      // WHOLE outer per-trait walk) — `traitScope` (`${orbital}.${trait}`,
+      // the SAME qualified scope the real bus-backed drivers already route
+      // by) names the actual target when it differs. Falls back to
+      // `ctx.trait.traitName` when absent — every pre-existing call site
+      // that never passed a cross-trait scope keeps dispatching exactly as
+      // before this item.
+      const targetTrait = traitScope?.split('.').pop() ?? _ctx.trait.traitName;
+      const result = runtime.dispatch(targetTrait, event, payload);
       return { sent: true, serverResponse: result.serverResponse };
     },
     async getState(_ctx, traitName) {
       return runtime.getState(traitName);
     },
-    async triggerDOM(ctx, step) {
+    async triggerDOM(ctx, step, traitScope) {
       // FakeDriver has no DOM; route to sendEvent so the kernel still
       // covers the step.
-      const result = runtime.dispatch(ctx.trait.traitName, step.event, step.payload as EventPayload);
+      const targetTrait = traitScope?.split('.').pop() ?? ctx.trait.traitName;
+      const result = runtime.dispatch(targetTrait, step.event, step.payload as EventPayload);
       return result.to !== null;
     },
     async snapshot(_ctx, _step): Promise<SnapshotResult> {
@@ -330,6 +364,19 @@ export function createFakeDriver(traits: TraitWalkConfig[], options?: FakeDriver
     },
     async settle(_ctx) {
       // No-op for the fake driver; everything is synchronous.
+    },
+    async getPersona(_ctx) {
+      return runtime.getPersona();
+    },
+    async setPersona(_ctx, persona) {
+      runtime.setPersona(persona);
+    },
+    async listEntityRows(_ctx, entityName) {
+      // The fake runtime's own store IS the server-truth set — tests
+      // simulate a browser-visible SUBSET by constructing a `prev` Frame
+      // whose `entityChanges` carry fewer/different rows than what's
+      // actually seeded here (see `tick-crud-row-resolution.test.ts`).
+      return runtime.entityData()[entityName] ?? [];
     },
   };
 

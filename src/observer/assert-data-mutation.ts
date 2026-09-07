@@ -44,14 +44,6 @@ export function assertDataMutation(frames: ReadonlyArray<Frame>): Verdict[] {
       continue;
     }
 
-    // v3.2.0: the canonical signal is the persist effect's declared
-    // `emit.success` event landing in the server's emittedEvents
-    // cascade. The persist effect REQUIRES emit.success at the schema
-    // level (canonical-operators.json `requiresEmitSuccess: true`), so
-    // when present the verifier treats it as the source of truth —
-    // independent of whether the mock store reflects the row delta.
-    // Row-delta is reported as informational evidence in the detail
-    // string but doesn't gate the verdict.
     const successEvent = frame.cause.expectedSuccessEvent;
     const emittedOnServer = frame.serverResponse?.emittedEvents ?? [];
     const change = frame.entityChanges.find((c) => c.entityName === expected.entityName);
@@ -63,6 +55,54 @@ export function assertDataMutation(frames: ReadonlyArray<Frame>): Verdict[] {
       ? `delta=${signDelta(actualDelta)} (added=${change.added.length}, removed=${change.removed.length})`
       : `no entityChange recorded for ${expected.entityName}`;
 
+    // C1-V1 (owner ruling: the persist OUTCOME is surfaced unconditionally):
+    // the first signal is the persist effect's OWN recorded outcome for
+    // this entity — what the runtime set at the write (denied by policy,
+    // failed, or succeeded), never inferred from a row count or from the
+    // response cascade. A denied/failed write fails even when the row
+    // count or the cascade happens to look right; a success passes even
+    // when the declared `emit.success` is missing from the RECORDED
+    // response — the executor fires that emit synchronously after the
+    // store returns, but the bridge records the response before a
+    // cross-orbital fan-out of that emit settles (std-helpdesk
+    // `OPEN_ARTICLE`: `persist:success` + `HelpArticleViewCounted` in the
+    // server log, cascade `[ArticleViewed]` in the frame, 2026-09-07).
+    // `lastEffectResultsFor` merges the trait's own traces (a structural
+    // reconstruction from the declared SExprs — no outcome) AHEAD of the
+    // synthetic `server:<orbital>` entry that carries the real outcome, so
+    // prefer the record that actually carries one.
+    const persistRecords = frame.effectResults.filter(
+      (e) => e.type === 'persist' && e.entityName === expected.entityName,
+    );
+    const persistRecord = persistRecords.find((e) => e.outcome !== undefined) ?? persistRecords[0];
+    if (persistRecord?.outcome === 'denied' || persistRecord?.outcome === 'failed') {
+      verdicts.push({
+        passed: false,
+        detail: `data-mutation: ${frame.cause.event} on ${expected.entityName} persist ${persistRecord.outcome}`
+          + `${persistRecord.error ? `: ${persistRecord.error}` : ''} (${deltaDetail})`,
+        evidence: { frameIndices: [frame.index] },
+      });
+      continue;
+    }
+    if (persistRecord?.outcome === 'success') {
+      const emitNote = successEvent === undefined
+        ? ''
+        : emittedOnServer.includes(successEvent)
+          ? `; server emitted ${successEvent}`
+          : `; declared ${successEvent} not in the recorded response cascade [${emittedOnServer.join(', ')}]`;
+      verdicts.push({
+        passed: true,
+        detail: `data-mutation: ${frame.cause.event} on ${expected.entityName} persist succeeded`
+          + `${persistRecord.action ? ` (action=${persistRecord.action})` : ''}${emitNote} (${deltaDetail})`,
+        evidence: { frameIndices: [frame.index] },
+      });
+      continue;
+    }
+
+    // No outcome record reached the frame: the persist effect's declared
+    // `emit.success` landing in the server's emittedEvents cascade is the
+    // next signal (the persist effect REQUIRES emit.success at the schema
+    // level — canonical-operators.json `requiresEmitSuccess: true`).
     if (successEvent !== undefined) {
       const emitFired = emittedOnServer.includes(successEvent);
       if (emitFired) {
@@ -81,9 +121,8 @@ export function assertDataMutation(frames: ReadonlyArray<Frame>): Verdict[] {
       continue;
     }
 
-    // Fallback: no expectedSuccessEvent declared (hand-written .orb
-    // that hasn't been migrated to the required-emit contract).
-    // Use the legacy row-delta check.
+    // Fallback: no persist outcome record and no expectedSuccessEvent
+    // declared — use the legacy row-delta check.
     if (change === undefined) {
       verdicts.push({
         passed: false,

@@ -1,22 +1,57 @@
 import { describe, it, expect } from 'vitest';
-import type { OrbitalSchema } from '@almadar/core';
+import type { AnyPatternConfig, Effect, Entity, Orbital, OrbitalSchema, PageRef, SExpr, Trait, TraitRef, Transition, UISlot } from '@almadar/core';
+import { isEntityCall, isEntityReference } from '@almadar/core';
 import { lintWiring } from '../wiring-lint.js';
 
 /** Minimal resolved-schema builder around one orbital. */
-function schemaWith(orbital: Record<string, unknown>): OrbitalSchema {
-  return { name: 'fixture', orbitals: [orbital] } as unknown as OrbitalSchema;
+function schemaWith(orbital: Orbital): OrbitalSchema {
+  return { name: 'fixture', orbitals: [orbital] };
 }
 
-const MODAL_RENDER = [
+/** Resolved-schema builder for the handful of tests that need more than
+ *  one orbital (a single-orbital `schemaWith` argument list would collapse
+ *  cross-orbital `listens`/theme checks onto one namespace). */
+function schemaOf(orbitals: Orbital[]): OrbitalSchema {
+  return { name: 'fixture', orbitals };
+}
+
+/**
+ * Trait fixture builder. Only `name` is required — `scope` defaults to
+ * `'instance'` (no fixture in this file exercises collection scope).
+ * Routing every trait literal through this (rather than a bare object
+ * literal assigned to an unannotated `const`) keeps nested literal types
+ * (`scope: 'internal'`, tuple-typed `effects`) narrowed instead of
+ * widened to `string` / element arrays wider than the tuple union —
+ * the actual reason the file needed a double type-cast at every call site.
+ */
+function trait(t: { name: string } & Omit<Partial<Trait>, 'name'>): Trait {
+  return { scope: 'instance', ...t };
+}
+
+/**
+ * Orbital fixture builder. Only `name`, `traits`, `pages` are required —
+ * `entity` defaults to a bare string reference. None of the checks this
+ * file exercises reads a string-form `entity` (every reader guards on
+ * `typeof entity === 'object'` before touching entity fields), so the
+ * placeholder is inert wherever it isn't overridden.
+ */
+function orbital(
+  o: { name: string; traits: TraitRef[]; pages: PageRef[] } & Omit<Partial<Orbital>, 'name' | 'traits' | 'pages'>,
+): Orbital {
+  return { entity: 'FixtureEntity', ...o };
+}
+
+const MODAL_RENDER: Effect = [
   'render-ui',
   'modal',
   { type: 'stack', children: ['@trait.RemoveIcon', '@trait.RemoveAlert'] },
 ];
 
 describe('lintWiring — client-unbound-state-machine', () => {
-  const removeConfirm = {
+  const removeConfirm = trait({
     name: 'RemoveConfirm',
     stateMachine: {
+      states: [], events: [],
       transitions: [
         { from: 'idle', event: 'REQUEST_REMOVE', to: 'confirming', effects: [MODAL_RENDER] },
         { from: 'confirming', event: 'CONFIRM_REMOVE', to: 'idle', effects: [] },
@@ -25,18 +60,18 @@ describe('lintWiring — client-unbound-state-machine', () => {
     listens: [
       { event: 'REQUEST_REMOVE', triggers: 'REQUEST_REMOVE', source: { kind: 'trait', trait: 'Browse' } },
     ],
-  };
-  const browse = {
+  });
+  const browse = trait({
     name: 'Browse',
-    stateMachine: { transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [] }] },
+    stateMachine: { states: [], events: [], transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [] }] },
     emits: [{ event: 'REQUEST_REMOVE', scope: 'internal', payloadSchema: [{ name: 'id', type: 'string' }] }],
-  };
-  const removeIcon = { name: 'RemoveIcon', stateMachine: { transitions: [] } };
-  const removeAlert = { name: 'RemoveAlert', stateMachine: { transitions: [] } };
+  });
+  const removeIcon = trait({ name: 'RemoveIcon', stateMachine: { states: [], events: [], transitions: [] } });
+  const removeAlert = trait({ name: 'RemoveAlert', stateMachine: { states: [], events: [], transitions: [] } });
 
   it('flags the std-ecommerce shape: modal container omitted from the page decl its children mount on', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'CartOrbital',
         traits: [removeConfirm, browse, removeIcon, removeAlert],
         pages: [
@@ -46,7 +81,7 @@ describe('lintWiring — client-unbound-state-machine', () => {
             traits: [{ ref: 'Browse' }, { ref: 'RemoveIcon' }, { ref: 'RemoveAlert' }],
           },
         ],
-      }),
+      })),
     );
     expect(result.errors).toBe(1);
     const finding = result.findings[0];
@@ -57,7 +92,7 @@ describe('lintWiring — client-unbound-state-machine', () => {
 
   it('is clean once the container is page-mounted (the applied fix)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'CartOrbital',
         traits: [removeConfirm, browse, removeIcon, removeAlert],
         pages: [
@@ -67,33 +102,39 @@ describe('lintWiring — client-unbound-state-machine', () => {
             traits: [{ ref: 'Browse' }, { ref: 'RemoveConfirm' }, { ref: 'RemoveIcon' }, { ref: 'RemoveAlert' }],
           },
         ],
-      }),
+      })),
     );
-    expect(result.findings).toEqual([]);
+    // `browse` here declares REQUEST_REMOVE only in its emits contract (no
+    // modeled click affordance) — a separate, correct
+    // listener-affordance-removed-by-config warning; this test's concern is
+    // client-unbound-state-machine only.
+    expect(result.findings.filter((f) => f.check === 'client-unbound-state-machine')).toEqual([]);
   });
 
   it('credits binding through the transitive @trait embed closure, config and state machine alike', () => {
-    const composer = {
+    const composer = trait({
       name: 'Composer',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [
-          { from: 'idle', event: 'INIT', to: 'idle', effects: [['render-ui', 'main', { children: ['@trait.Middle'] }]] },
+          { from: 'idle', event: 'INIT', to: 'idle', effects: [['render-ui', 'main', { type: 'stack', children: ['@trait.Middle'] }]] },
         ],
       },
-    };
-    const middle = { name: 'Middle', stateMachine: { transitions: [] }, config: { body: '@trait.RemoveConfirm' } };
+    });
+    const middle = trait({ name: 'Middle', scope: 'instance', stateMachine: { states: [], events: [],  transitions: [] }, config: { body: { type: 'string', default: '@trait.RemoveConfirm' } } });
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'CartOrbital',
         traits: [composer, middle, removeConfirm, browse],
         pages: [{ name: 'CartPage', path: '/cart', traits: [{ ref: 'Composer' }, { ref: 'Browse' }] }],
-      }),
+      })),
     );
-    expect(result.findings).toEqual([]);
+    // `browse` declares REQUEST_REMOVE only in its emits contract — see the
+    // note in the sibling test above.
+    expect(result.findings.filter((f) => f.check !== 'listener-affordance-removed-by-config')).toEqual([]);
   });
 
   it('skips orbitals with no pages (registry atoms lint at their own page)', () => {
-    const result = lintWiring(schemaWith({ name: 'AtomOrbital', traits: [removeConfirm], pages: [] }));
+    const result = lintWiring(schemaWith(orbital({ name: 'AtomOrbital', traits: [removeConfirm], pages: [] })));
     expect(result.findings).toEqual([]);
   });
 });
@@ -101,21 +142,24 @@ describe('lintWiring — client-unbound-state-machine', () => {
 describe('lintWiring — listens-source-never-emits', () => {
   it('flags the std-cicd shape: route names a source that never produces the event', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'BuildOrbital',
         traits: [
           {
             name: 'BuildCatalog',
-            stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] },
           },
           {
             name: 'BuildButtonCreate',
-            stateMachine: { transitions: [] },
-            config: { action: 'CREATE' },
+            scope: 'instance',
+            stateMachine: {
+              states: [], events: [],
+              transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [['render-ui', 'main', { type: 'button', action: 'CREATE' }]] }],
+            },
           },
           {
             name: 'BuildCreate',
-            stateMachine: { transitions: [{ from: 'closed', event: 'CREATE', to: 'open', effects: [] }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'closed', event: 'CREATE', to: 'open', effects: [] }] },
             listens: [{ event: 'CREATE', triggers: 'CREATE', source: { kind: 'trait', trait: 'BuildCatalog' } }],
           },
         ],
@@ -126,7 +170,7 @@ describe('lintWiring — listens-source-never-emits', () => {
             traits: [{ ref: 'BuildCatalog' }, { ref: 'BuildButtonCreate' }, { ref: 'BuildCreate' }],
           },
         ],
-      }),
+      })),
     );
     expect(result.errors).toBe(1);
     const finding = result.findings[0];
@@ -138,13 +182,13 @@ describe('lintWiring — listens-source-never-emits', () => {
     // Composed schemas keep call-site ref-traits ({name, ref}) unresolved:
     // the source exists, its producibility just is not statically decidable.
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'TaskListOrbital',
         traits: [
           { name: 'ListCreate', ref: 'Modal.traits.ModalRecordModal' },
           {
             name: 'ListPersistor',
-            stateMachine: { transitions: [{ from: 'ready', event: 'DO_CREATE', to: 'ready', effects: [] }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'ready', event: 'DO_CREATE', to: 'ready', effects: [] }] },
             listens: [{ event: 'SAVE', triggers: 'DO_CREATE', source: { kind: 'trait', trait: 'ListCreate' } }],
           },
         ],
@@ -155,24 +199,24 @@ describe('lintWiring — listens-source-never-emits', () => {
             traits: [{ ref: 'ListCreate' }, { ref: 'ListPersistor' }],
           },
         ],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'listens-source-never-emits')).toEqual([]);
   });
 
   it('a source that exists NOWHERE (neither inline nor declared ref) still flags missing-source', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'TaskListOrbital',
         traits: [
           {
             name: 'ListPersistor',
-            stateMachine: { transitions: [{ from: 'ready', event: 'DO_CREATE', to: 'ready', effects: [] }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'ready', event: 'DO_CREATE', to: 'ready', effects: [] }] },
             listens: [{ event: 'SAVE', triggers: 'DO_CREATE', source: { kind: 'trait', trait: 'GhostTrait' } }],
           },
         ],
         pages: [{ name: 'ListPage', path: '/list', traits: [{ ref: 'ListPersistor' }] }],
-      }),
+      })),
     );
     const missing = result.findings.filter((f) => f.check === 'listens-source-never-emits');
     expect(missing).toHaveLength(1);
@@ -181,12 +225,12 @@ describe('lintWiring — listens-source-never-emits', () => {
 
   it('credits every production form: emits contract, effect emit option, explicit emit effect, action affordance, itemActions', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'MixOrbital',
         traits: [
           {
             name: 'Grid',
-            stateMachine: {
+            scope: 'instance', stateMachine: { states: [], events: [], 
               transitions: [
                 {
                   from: 'idle',
@@ -195,17 +239,17 @@ describe('lintWiring — listens-source-never-emits', () => {
                   effects: [
                     ['fetch', 'Row', { emit: { success: 'RowsLoaded' } }],
                     ['emit', 'PING', { at: '@entity.id' }],
-                    ['render-ui', 'main', { children: [{ type: 'button', action: 'OPEN' }] }],
+                    ['render-ui', 'main', { type: 'stack', children: [{ type: 'button', action: 'OPEN' }] }],
                   ],
                 },
               ],
             },
             emits: [{ event: 'SELECTED', scope: 'internal' }],
-            config: { itemActions: [{ event: 'EDIT', label: 'Edit' }] },
+            config: { itemActions: { type: 'array', default: [{ event: 'EDIT', label: 'Edit' }] } },
           },
           {
             name: 'Sink',
-            stateMachine: {
+            scope: 'instance', stateMachine: { states: [], events: [], 
               transitions: [
                 { from: 'a', event: 'W', to: 'a', effects: [] },
                 { from: 'a', event: 'X', to: 'a', effects: [] },
@@ -224,31 +268,38 @@ describe('lintWiring — listens-source-never-emits', () => {
           },
         ],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Grid' }, { ref: 'Sink' }] }],
-      }),
+      })),
     );
-    expect(result.findings).toEqual([]);
+    // SELECTED is credited by contract alone (no live effect) — this test's
+    // concern; it separately earns a listener-affordance-removed-by-config
+    // warning (a route legal per contract but backed by no live mechanism),
+    // which is a different check.
+    expect(result.findings.filter((f) => f.check === 'listens-source-never-emits')).toEqual([]);
   });
 
   it('credits BOTH branches of a conditional (if-wrapped) action list — role-conditional lists are live emitters', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'CondOrbital',
         traits: [
           {
             name: 'Grid',
-            stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] },
             config: {
-              itemActions: [
-                'if',
-                ['=', '@user.role', 'reader'],
-                [{ event: 'VIEW', label: 'Open' }],
-                [{ event: 'VIEW', label: 'Open' }, { event: 'EDIT', label: 'Edit' }],
-              ],
+              itemActions: {
+                type: 'array',
+                default: [
+                  'if',
+                  ['=', '@user.role', 'reader'],
+                  [{ event: 'VIEW', label: 'Open' }],
+                  [{ event: 'VIEW', label: 'Open' }, { event: 'EDIT', label: 'Edit' }],
+                ],
+              },
             },
           },
           {
             name: 'Sink',
-            stateMachine: {
+            scope: 'instance', stateMachine: { states: [], events: [], 
               transitions: [
                 { from: 'a', event: 'X', to: 'a', effects: [] },
                 { from: 'a', event: 'Y', to: 'a', effects: [] },
@@ -261,34 +312,88 @@ describe('lintWiring — listens-source-never-emits', () => {
           },
         ],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Grid' }, { ref: 'Sink' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'listens-source-never-emits')).toEqual([]);
   });
 
   it('flags a route whose source trait does not exist', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'GhostOrbital',
         traits: [
           {
             name: 'Sink',
-            stateMachine: { transitions: [{ from: 'a', event: 'X', to: 'a', effects: [] }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'a', event: 'X', to: 'a', effects: [] }] },
             listens: [{ event: 'X', triggers: 'X', source: { kind: 'trait', trait: 'Ghost' } }],
           },
         ],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Sink' }] }],
-      }),
+      })),
     );
     expect(result.errors).toBe(1);
     expect(result.findings[0]?.message).toContain('does not exist');
   });
 });
 
+describe('lintWiring — listener-affordance-removed-by-config', () => {
+  it('flags a listen route whose source contract declares the event but a config override (itemActions narrowed to VIEW-only) silenced the only live producer', () => {
+    const browse = trait({
+      name: 'Browse',
+      emits: [{ event: 'EDIT_ROW', scope: 'internal' }],
+      stateMachine: { states: [], events: [], transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [] }] },
+      config: { itemActions: { type: 'array', default: [{ event: 'VIEW', label: 'View' }] } },
+    });
+    const editModal = trait({
+      name: 'EditModal',
+      stateMachine: { states: [], events: [], transitions: [{ from: 'idle', event: 'OPEN_EDIT', to: 'open', effects: [] }] },
+      listens: [{ event: 'EDIT_ROW', triggers: 'OPEN_EDIT', source: { kind: 'trait', trait: 'Browse' } }],
+    });
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'O',
+        traits: [browse, editModal],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Browse' }, { ref: 'EditModal' }] }],
+      })),
+    );
+    const found = result.findings.filter((f) => f.check === 'listener-affordance-removed-by-config');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.trait).toBe('EditModal');
+    expect(found[0]?.message).toContain('EDIT_ROW');
+    // Not a double-report: the contract HAS the event, so
+    // listens-source-never-emits (which fires when the contract lacks it)
+    // must stay silent on this same route.
+    expect(result.findings.filter((f) => f.check === 'listens-source-never-emits')).toEqual([]);
+  });
+
+  it('stays silent once itemActions restores the event as a live producer', () => {
+    const browse = trait({
+      name: 'Browse',
+      emits: [{ event: 'EDIT_ROW', scope: 'internal' }],
+      stateMachine: { states: [], events: [], transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [] }] },
+      config: { itemActions: { type: 'array', default: [{ event: 'VIEW', label: 'View' }, { event: 'EDIT_ROW', label: 'Edit' }] } },
+    });
+    const editModal = trait({
+      name: 'EditModal',
+      stateMachine: { states: [], events: [], transitions: [{ from: 'idle', event: 'OPEN_EDIT', to: 'open', effects: [] }] },
+      listens: [{ event: 'EDIT_ROW', triggers: 'OPEN_EDIT', source: { kind: 'trait', trait: 'Browse' } }],
+    });
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'O',
+        traits: [browse, editModal],
+        pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Browse' }, { ref: 'EditModal' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'listener-affordance-removed-by-config')).toEqual([]);
+  });
+});
+
 describe('lintWiring — payload-starved-route', () => {
-  const modal = {
+  const modal = trait({
     name: 'CourseEdit',
-    stateMachine: { transitions: [{ from: 'closed', event: 'EDIT_COURSE', to: 'open', effects: [] }] },
+    scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'closed', event: 'EDIT_COURSE', to: 'open', effects: [] }] },
     emits: [
       {
         event: 'EDIT_COURSE',
@@ -300,55 +405,57 @@ describe('lintWiring — payload-starved-route', () => {
       },
     ],
     listens: [{ event: 'EDIT_COURSE', triggers: 'EDIT_COURSE', source: { kind: 'trait', trait: 'HeaderButton' } }],
-  };
+  });
 
   it('flags the std-lms shape: header button emits the event with no payload while the contract requires id', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'CourseOrbital',
         traits: [
           modal,
           {
             name: 'HeaderButton',
-            stateMachine: { transitions: [] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [] },
             emits: [{ event: 'EDIT_COURSE', scope: 'internal' }],
           },
         ],
         pages: [{ name: 'P', path: '/courses', traits: [{ ref: 'CourseEdit' }, { ref: 'HeaderButton' }] }],
-      }),
+      })),
     );
     expect(result.errors).toBe(1);
-    const finding = result.findings[0];
-    expect(finding?.check).toBe('payload-starved-route');
+    // `HeaderButton` declares EDIT_COURSE only in its emits contract (no
+    // live effect/render/config producer) — a separate, correct
+    // listener-affordance-removed-by-config warning alongside this error.
+    const finding = result.findings.find((f) => f.check === 'payload-starved-route');
     expect(finding?.message).toContain('{id}');
   });
 
   it('is satisfied by the itemActions native {id, row} payload (the applied std-lms fix)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'CourseOrbital',
         traits: [
           { ...modal, listens: [{ event: 'EDIT_COURSE', triggers: 'EDIT_COURSE', source: { kind: 'trait', trait: 'Gallery' } }] },
           {
             name: 'Gallery',
-            stateMachine: { transitions: [] },
-            config: { itemActions: [{ event: 'EDIT_COURSE', label: 'Edit' }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [] },
+            config: { itemActions: { type: 'array', default: [{ event: 'EDIT_COURSE', label: 'Edit' }] } },
           },
         ],
         pages: [{ name: 'P', path: '/courses', traits: [{ ref: 'CourseEdit' }, { ref: 'Gallery' }] }],
-      }),
+      })),
     );
     expect(result.findings).toEqual([]);
   });
 
   it('credits payloadMapping renames when deciding starvation', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'SearchOrbital',
         traits: [
           {
             name: 'Search',
-            stateMachine: { transitions: [{ from: 'idle', event: 'SEARCH', to: 'searching', effects: [] }] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'idle', event: 'SEARCH', to: 'searching', effects: [] }] },
             emits: [
               { event: 'SEARCH', scope: 'internal', payloadSchema: [{ name: 'searchTerm', type: 'string', required: true }] },
             ],
@@ -365,14 +472,17 @@ describe('lintWiring — payload-starved-route', () => {
           },
           {
             name: 'Layout',
-            stateMachine: { transitions: [] },
+            scope: 'instance', stateMachine: { states: [], events: [],  transitions: [] },
             emits: [{ event: 'TOP_SEARCH', scope: 'internal', payloadSchema: [{ name: 'value', type: 'string' }] }],
           },
         ],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'Search' }, { ref: 'Layout' }] }],
-      }),
+      })),
     );
-    expect(result.findings).toEqual([]);
+    // `Layout` declares TOP_SEARCH only in its emits contract — a separate,
+    // correct listener-affordance-removed-by-config warning; this test's
+    // concern is payload starvation only.
+    expect(result.findings.filter((f) => f.check === 'payload-starved-route')).toEqual([]);
   });
 
   // `with { k: <expr> }` values are full s-expressions, not just renames. A
@@ -380,12 +490,12 @@ describe('lintWiring — payload-starved-route', () => {
   // supplied by the emitter — the escalating-ladder shape, where each rung
   // projects the next rung's inputs out of a carried request object.
   const ladderSchema = (emitterPayload: { name: string; type: string }[]) =>
-    schemaWith({
+    schemaWith(orbital({
       name: 'LadderOrbital',
       traits: [
         {
           name: 'LookupRung',
-          stateMachine: { transitions: [{ from: 'idle', event: 'LOOKUP', to: 'checked', effects: [] }] },
+          scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'idle', event: 'LOOKUP', to: 'checked', effects: [] }] },
           emits: [
             {
               event: 'LOOKUP',
@@ -410,12 +520,12 @@ describe('lintWiring — payload-starved-route', () => {
         },
         {
           name: 'ExactRung',
-          stateMachine: { transitions: [] },
+          scope: 'instance', stateMachine: { states: [], events: [],  transitions: [] },
           emits: [{ event: 'EXACT_UNMATCHED', scope: 'internal', payloadSchema: emitterPayload }],
         },
       ],
       pages: [{ name: 'P', path: '/p', traits: [{ ref: 'LookupRung' }, { ref: 'ExactRung' }] }],
-    });
+    }));
 
   it('credits an expression mapping whose @payload reads are all supplied', () => {
     const result = lintWiring(
@@ -424,7 +534,10 @@ describe('lintWiring — payload-starved-route', () => {
         { name: 'request', type: 'object' },
       ]),
     );
-    expect(result.findings).toEqual([]);
+    // `ExactRung` declares EXACT_UNMATCHED only in its emits contract — a
+    // separate, correct listener-affordance-removed-by-config warning; this
+    // test's concern is payload starvation only.
+    expect(result.findings.filter((f) => f.check === 'payload-starved-route')).toEqual([]);
   });
 
   it('still reports starvation when an expression reads an unsupplied field', () => {
@@ -438,31 +551,31 @@ describe('lintWiring — payload-starved-route', () => {
 });
 
 describe('lintWiring — unclaimed-main-writer', () => {
-  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
-  const contentBody = { type: 'stack', children: [{ type: 'typography', content: 'rows' }] };
+  const mainRender = (pattern: AnyPatternConfig): Effect => ['render-ui', 'main', pattern];
+  const contentBody: AnyPatternConfig = { type: 'stack', children: [{ type: 'typography', content: 'rows' }] };
 
-  const shell = {
+  const shell = trait({
     name: 'AppLayout',
-    config: { contentTrait: '@trait.Search' },
-    stateMachine: {
+    config: { contentTrait: { type: 'string', default: '@trait.Search' } },
+    scope: 'instance', stateMachine: { states: [], events: [], 
       transitions: [
         { from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: ['@trait.Search'] })] },
       ],
     },
-  };
-  const search = {
+  });
+  const search = trait({
     name: 'Search',
-    config: { idleContent: '@trait.Catalog' },
-    stateMachine: {
+    config: { idleContent: { type: 'string', default: '@trait.Catalog' } },
+    scope: 'instance', stateMachine: { states: [], events: [], 
       transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender({ type: 'box', children: ['@trait.Catalog'] })] }],
     },
-  };
-  const catalog = {
+  });
+  const catalog = trait({
     name: 'Catalog',
-    stateMachine: {
+    scope: 'instance', stateMachine: { states: [], events: [], 
       transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender(contentBody)] }],
     },
-  };
+  });
   const page = (extraRefs: string[]) => ({
     name: 'P',
     path: '/p',
@@ -471,20 +584,20 @@ describe('lintWiring — unclaimed-main-writer', () => {
 
   it('is clean on the composed convention (shell + channel-claimed content body)', () => {
     const result = lintWiring(
-      schemaWith({ name: 'O', traits: [shell, search, catalog], pages: [page([])] }),
+      schemaWith(orbital({ name: 'O', traits: [shell, search, catalog], pages: [page([])] })),
     );
     expect(result.findings).toEqual([]);
   });
 
   it('warns on an unclaimed second content body (the std-accounting /entries shape)', () => {
-    const secondBrowse = {
+    const secondBrowse = trait({
       name: 'SecondBrowse',
-      stateMachine: {
-        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender({ type: 'data-grid' })] }],
+      scope: 'instance', stateMachine: { states: [], events: [], 
+        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender({ type: 'data-grid', entity: 'Row' })] }],
       },
-    };
+    });
     const result = lintWiring(
-      schemaWith({ name: 'O', traits: [shell, search, catalog, secondBrowse], pages: [page(['SecondBrowse'])] }),
+      schemaWith(orbital({ name: 'O', traits: [shell, search, catalog, secondBrowse], pages: [page(['SecondBrowse'])] })),
     );
     expect(result.errors).toBe(0);
     expect(result.warnings).toBe(1);
@@ -493,70 +606,70 @@ describe('lintWiring — unclaimed-main-writer', () => {
   });
 
   it('is clean once the second body is claimed through the channel (the applied fix)', () => {
-    const claimedBrowse = {
+    const claimedBrowse = trait({
       name: 'SecondBrowse',
-      stateMachine: {
-        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender({ type: 'data-grid' })] }],
+      scope: 'instance', stateMachine: { states: [], events: [], 
+        transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender({ type: 'data-grid', entity: 'Row' })] }],
       },
-    };
-    const fixedSearch = { ...search, config: { idleContent: '@trait.SecondBrowse' } };
+    });
+    const fixedSearch: Trait = { ...search, config: { idleContent: { type: 'string', default: '@trait.SecondBrowse' } } };
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [shell, fixedSearch, claimedBrowse],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'AppLayout' }, { ref: 'Search' }, { ref: 'SecondBrowse' }] }],
-      }),
+      })),
     );
     expect(result.findings).toEqual([]);
   });
 
   it('ignores modal-cleanup placeholder main-writes (childless box)', () => {
-    const modal = {
+    const modal = trait({
       name: 'Edit',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [
           { from: 'open', event: 'CLOSE', to: 'closed', effects: [mainRender({ type: 'box' }), ['render-ui', 'modal', null]] },
         ],
       },
-    };
+    });
     const result = lintWiring(
-      schemaWith({ name: 'O', traits: [shell, search, catalog, modal], pages: [page(['Edit'])] }),
+      schemaWith(orbital({ name: 'O', traits: [shell, search, catalog, modal], pages: [page(['Edit'])] })),
     );
     expect(result.findings).toEqual([]);
   });
 
   it('ignores page-mounted atomic chrome', () => {
-    const chrome = {
+    const chrome = trait({
       name: 'InlineIconRender1',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender({ type: 'icon' })] }],
       },
-    };
+    });
     const result = lintWiring(
-      schemaWith({ name: 'O', traits: [shell, search, catalog, chrome], pages: [page(['InlineIconRender1'])] }),
+      schemaWith(orbital({ name: 'O', traits: [shell, search, catalog, chrome], pages: [page(['InlineIconRender1'])] })),
     );
     expect(result.findings).toEqual([]);
   });
 
   it('ignores a page-mounted feature when no channel body exists (shell+feature convention)', () => {
-    const bareShell = {
+    const bareShell = trait({
       name: 'AppLayout',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [{ from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: [] })] }],
       },
-    };
-    const feature = {
+    });
+    const feature = trait({
       name: 'Upload',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender(contentBody)] }],
       },
-    };
+    });
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [bareShell, feature],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'AppLayout' }, { ref: 'Upload' }] }],
-      }),
+      })),
     );
     expect(result.findings).toEqual([]);
   });
@@ -579,31 +692,31 @@ describe('lintWiring — unclaimed-main-writer', () => {
   it('POSITIVE CONTROL: a real authored channel plus a wholly unrelated second writer still reports', () => {
     // ShellWithChannel -> (contentTrait) -> ChannelBody: an authored,
     // single-link designation chain — a genuine, unambiguous channel owner.
-    const shellWithChannel = {
+    const shellWithChannel = trait({
       name: 'ShellWithChannel',
-      config: { contentTrait: '@trait.ChannelBody' },
-      stateMachine: {
+      config: { contentTrait: { type: 'string', default: '@trait.ChannelBody' } },
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [
           { from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: ['@trait.ChannelBody'] })] },
         ],
       },
-    };
-    const channelBody = {
+    });
+    const channelBody = trait({
       name: 'ChannelBody',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender(contentBody)] }],
       },
-    };
+    });
     // StrayFeature shares no designation or containment edge with either of
     // the above — a genuinely independent second body stacked on the page.
-    const strayFeature = {
+    const strayFeature = trait({
       name: 'StrayFeature',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRender(contentBody)] }],
       },
-    };
+    });
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [shellWithChannel, channelBody, strayFeature],
         pages: [
@@ -613,7 +726,7 @@ describe('lintWiring — unclaimed-main-writer', () => {
             traits: [{ ref: 'ShellWithChannel' }, { ref: 'ChannelBody' }, { ref: 'StrayFeature' }],
           },
         ],
-      }),
+      })),
     );
     expect(result.errors).toBe(0);
     expect(result.warnings).toBe(1);
@@ -625,26 +738,26 @@ describe('lintWiring — unclaimed-main-writer', () => {
     // OuterComposer embeds MiddleWrapper directly in its render-ui (state
     // machine only, no config forward) — the materialised-JSX shape: an
     // ordinary `@trait.X` embed, not a designation.
-    const outerComposer = {
+    const outerComposer = trait({
       name: 'OuterComposer',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [
           { from: 'composing', event: 'INIT', to: 'composing', effects: [mainRender({ type: 'box', children: ['@trait.MiddleWrapper'] })] },
         ],
       },
-    };
+    });
     // MiddleWrapper designates InnerBody through config — the synthetic
     // sibling's own internal channel link (std-browse's DataGrid1 ->
     // DenseTableView -> MasterListView chain, flattened here to one hop).
-    const middleWrapper = { name: 'MiddleWrapper', config: { body: '@trait.InnerBody' } };
-    const innerBody = {
+    const middleWrapper = trait({ name: 'MiddleWrapper', config: { body: { type: 'string', default: '@trait.InnerBody' } } });
+    const innerBody = trait({
       name: 'InnerBody',
-      stateMachine: {
+      scope: 'instance', stateMachine: { states: [], events: [], 
         transitions: [{ from: 'browsing', event: 'INIT', to: 'browsing', effects: [mainRender(contentBody)] }],
       },
-    };
+    });
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [outerComposer, middleWrapper, innerBody],
         pages: [
@@ -654,23 +767,24 @@ describe('lintWiring — unclaimed-main-writer', () => {
             traits: [{ ref: 'OuterComposer' }, { ref: 'MiddleWrapper' }, { ref: 'InnerBody' }],
           },
         ],
-      }),
+      })),
     );
     expect(result.findings).toEqual([]);
   });
 });
 
 describe('lintWiring — steady-state-no-init-reentry', () => {
-  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
-  const rowsBody = { type: 'stack', children: [{ type: 'data-grid' }] };
-  const spinner = { type: 'loading-state', title: 'Loading…' };
-  const fetchRows = ['fetch', 'Board', { emit: { success: 'RowsLoaded', failure: 'RowsFailed' } }];
+  const mainRender = (pattern: AnyPatternConfig): Effect => ['render-ui', 'main', pattern];
+  const rowsBody: AnyPatternConfig = { type: 'stack', children: [{ type: 'data-grid' }] };
+  const spinner: AnyPatternConfig = { type: 'loading-state', title: 'Loading…' };
+  const fetchRows: Effect = ['fetch', 'Board', { emit: { success: 'RowsLoaded', failure: 'RowsFailed' } }];
 
   /** The std-board shape: `loading` fetches, `browsing` shows the rows. */
-  const browseTrait = (browsingTransitions: unknown[]) => ({
+  const browseTrait = (browsingTransitions: Transition[]): Trait => trait({
     name: 'Board',
     stateMachine: {
       states: [{ name: 'loading', isInitial: true }, { name: 'browsing' }],
+      events: [],
       transitions: [
         { from: 'loading', event: 'INIT', to: 'loading', effects: [fetchRows, mainRender(spinner)] },
         { from: 'loading', event: 'RowsLoaded', to: 'browsing', effects: [mainRender(rowsBody)] },
@@ -683,7 +797,7 @@ describe('lintWiring — steady-state-no-init-reentry', () => {
 
   it('flags a loaded steady state that handles no INIT (the permanent-spinner family)', () => {
     const result = lintWiring(
-      schemaWith({ name: 'O', traits: [browseTrait([{ from: 'browsing', event: 'OPEN_CARD', to: 'browsing', effects: [] }])], pages: [page] }),
+      schemaWith(orbital({ name: 'O', traits: [browseTrait([{ from: 'browsing', event: 'OPEN_CARD', to: 'browsing', effects: [] }])], pages: [page] })),
     );
     const finding = result.findings.find((f) => f.check === 'steady-state-no-init-reentry');
     expect(finding).toBeDefined();
@@ -695,48 +809,49 @@ describe('lintWiring — steady-state-no-init-reentry', () => {
 
   it('is clean once the steady state mirrors the loading INIT (the applied fix)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [browseTrait([{ from: 'browsing', event: 'INIT', to: 'loading', effects: [fetchRows, mainRender(spinner)] }])],
         pages: [page],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
   });
 
   it('accepts a wildcard INIT as covering every steady state', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [browseTrait([{ from: '*', event: 'INIT', to: 'loading', effects: [fetchRows] }])],
         pages: [page],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
   });
 
   it('ignores a steady state that paints no content body (nothing visible to strand)', () => {
-    const logger = {
+    const logger = trait({
       name: 'Board',
-      stateMachine: {
+      scope: 'instance', stateMachine: {
+        events: [],
         states: [{ name: 'loading', isInitial: true }, { name: 'browsing' }],
         transitions: [
           { from: 'loading', event: 'INIT', to: 'loading', effects: [fetchRows] },
           { from: 'loading', event: 'RowsLoaded', to: 'browsing', effects: [['set', '@entity.rows', '?data']] },
         ],
       },
-    };
-    const result = lintWiring(schemaWith({ name: 'O', traits: [logger], pages: [page] }));
+    });
+    const result = lintWiring(schemaWith(orbital({ name: 'O', traits: [logger], pages: [page] })));
     expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
   });
 
   it('ignores a trait the client never binds (no page decl, no embed)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
-        traits: [browseTrait([]), { name: 'Shell', stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] } }],
+        traits: [browseTrait([]), { name: 'Shell', scope: 'instance', stateMachine: { states: [], events: [],  transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [] }] } }],
         pages: [{ name: 'P', path: '/board', traits: [{ ref: 'Shell' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'steady-state-no-init-reentry')).toEqual([]);
   });
@@ -747,7 +862,7 @@ describe('lintWiring — unscoped-owned-entity', () => {
    * An app whose `Ticket.assignee` points at the `[identity]` `Person`.
    * `readPolicy` is the `@read` directive; absent means ALLOW-ALL.
    */
-  function appWithOwnerColumn(readPolicy?: unknown): OrbitalSchema {
+  function appWithOwnerColumn(readPolicy?: SExpr): OrbitalSchema {
     return {
       name: 'fixture',
       orbitals: [
@@ -779,7 +894,7 @@ describe('lintWiring — unscoped-owned-entity', () => {
           pages: [],
         },
       ],
-    } as unknown as OrbitalSchema;
+    };
   }
 
   const unscoped = (schema: OrbitalSchema) =>
@@ -801,7 +916,7 @@ describe('lintWiring — unscoped-owned-entity', () => {
     // Owner columns are resolved from the DECLARED relation to the identity
     // entity. With no identity there is nothing to scope against, so an
     // un-migrated app stays quiet rather than emitting noise for every entity.
-    const schema = {
+    const schema: OrbitalSchema = {
       name: 'fixture',
       orbitals: [
         {
@@ -816,7 +931,7 @@ describe('lintWiring — unscoped-owned-entity', () => {
           pages: [],
         },
       ],
-    } as unknown as OrbitalSchema;
+    };
     expect(unscoped(schema)).toHaveLength(0);
   });
 
@@ -824,7 +939,10 @@ describe('lintWiring — unscoped-owned-entity', () => {
     // Name matching would scope the wrong column. The campaign retypes these to
     // a real reference, and the lint lights up only then.
     const schema = appWithOwnerColumn();
-    const ticket = (schema.orbitals[0] as unknown as { entity: { fields: unknown[] } }).entity;
+    const ticket = schema.orbitals[0]?.entity;
+    if (ticket === undefined || isEntityReference(ticket) || isEntityCall(ticket)) {
+      throw new Error('fixture entity must be an inline Entity');
+    }
     ticket.fields = [{ name: 'assignee', type: 'string' }];
     expect(unscoped(schema)).toHaveLength(0);
   });
@@ -860,7 +978,7 @@ describe('lintWiring — unscoped-owned-entity respects a declared waiver', () =
           pages: [],
         },
       ],
-    } as unknown as OrbitalSchema;
+    };
   }
 
   const unscoped = (schema: OrbitalSchema) =>
@@ -882,16 +1000,16 @@ describe('lintWiring — unscoped-owned-entity respects a declared waiver', () =
 });
 
 describe('lintWiring — dead-bodiless-action', () => {
-  const painted = (slot: string) => ['render-ui', slot, { type: 'stack', children: [] }];
+  const painted = (slot: UISlot): Effect => ['render-ui', slot, { type: 'stack', children: [] }];
 
   it('flags a state-changing arm with no effects, on a state this trait paints', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'PreviewOrbital',
         traits: [
           {
             name: 'SchemaPreview',
-            stateMachine: {
+            scope: 'instance', stateMachine: { states: [], events: [], 
               transitions: [
                 { from: 'loading', event: 'PREVIEW_ERROR', to: 'error', effects: [painted('main')] },
                 { from: 'error', event: 'START_PREVIEW', to: 'loading', effects: [] },
@@ -900,7 +1018,7 @@ describe('lintWiring — dead-bodiless-action', () => {
           },
         ],
         pages: [{ name: 'PreviewPage', path: '/preview', traits: [{ ref: 'SchemaPreview' }] }],
-      }),
+      })),
     );
     const found = result.findings.filter((f) => f.check === 'dead-bodiless-action');
     expect(found).toHaveLength(1);
@@ -909,12 +1027,12 @@ describe('lintWiring — dead-bodiless-action', () => {
 
   it('does not flag a lifecycle trait that paints nothing, nor a bodiless self-transition', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'PreviewOrbital',
         traits: [
           {
             name: 'ProjectErasure',
-            stateMachine: {
+            scope: 'instance', stateMachine: { states: [], events: [], 
               transitions: [
                 { from: 'execScanning', event: 'ExecScanLoaded', to: 'idle', effects: [] },
                 { from: 'idle', event: 'STOP', to: 'idle', effects: [] },
@@ -923,7 +1041,7 @@ describe('lintWiring — dead-bodiless-action', () => {
           },
         ],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'ProjectErasure' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'dead-bodiless-action')).toHaveLength(0);
   });
@@ -932,12 +1050,12 @@ describe('lintWiring — dead-bodiless-action', () => {
 describe('lintWiring — dead-lifecycle-emit', () => {
   it('flags (emit INIT) used as a repaint', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'PreviewOrbital',
         traits: [
           {
             name: 'SchemaPreview',
-            stateMachine: {
+            scope: 'instance', stateMachine: { states: [], events: [], 
               transitions: [
                 {
                   from: 'previewing',
@@ -950,7 +1068,7 @@ describe('lintWiring — dead-lifecycle-emit', () => {
           },
         ],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'SchemaPreview' }] }],
-      }),
+      })),
     );
     const found = result.findings.filter((f) => f.check === 'dead-lifecycle-emit');
     expect(found).toHaveLength(1);
@@ -959,12 +1077,12 @@ describe('lintWiring — dead-lifecycle-emit', () => {
 
   it('leaves a normal (emit X) alone', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'PreviewOrbital',
         traits: [
           {
             name: 'SchemaPreview',
-            stateMachine: {
+            scope: 'instance', stateMachine: { states: [], events: [], 
               transitions: [
                 { from: 'previewing', event: 'STOP_PREVIEW', to: 'idle', effects: [['emit', 'PREVIEW_STOPPED']] },
               ],
@@ -972,21 +1090,21 @@ describe('lintWiring — dead-lifecycle-emit', () => {
           },
         ],
         pages: [{ name: 'P', path: '/p', traits: [{ ref: 'SchemaPreview' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'dead-lifecycle-emit')).toHaveLength(0);
   });
 });
 
 describe('lintWiring — dead-lifecycle-action reads registry-declared event props', () => {
-  const pageFor = (trait: string) => ({ name: 'P', path: '/p', traits: [{ ref: trait }] });
-  const traitRendering = (name: string, node: Record<string, unknown>) => ({
+  const pageFor = (trait: string): PageRef => ({ name: 'P', path: '/p', traits: [{ ref: trait }] });
+  const traitRendering = (name: string, node: AnyPatternConfig): Trait => trait({
     name,
-    stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [['render-ui', 'main', node]] }] },
+    stateMachine: { states: [], events: [], transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [['render-ui', 'main', node]] }] },
   });
-  const lifecycleFindings = (node: Record<string, unknown>) =>
+  const lifecycleFindings = (node: AnyPatternConfig) =>
     lintWiring(
-      schemaWith({ name: 'O', traits: [traitRendering('T', node)], pages: [pageFor('T')] }),
+      schemaWith(orbital({ name: 'O', traits: [traitRendering('T', node)], pages: [pageFor('T')] })),
     ).findings.filter((f) => f.check === 'dead-lifecycle-action');
 
   it('flags `action` — the shape the pre-widening rule already caught', () => {
@@ -998,7 +1116,7 @@ describe('lintWiring — dead-lifecycle-action reads registry-declared event pro
   });
 
   it("flags form-section's `cancelEvent` (the std-form-advanced dead Cancel)", () => {
-    expect(lifecycleFindings({ type: 'form-section', cancelEvent: 'INIT' })).toHaveLength(1);
+    expect(lifecycleFindings({ type: 'form-section', fields: [], cancelEvent: 'INIT' })).toHaveLength(1);
   });
 
   it("flags empty-state's `actionEvent` (the std-inventory 'Back to inventory')", () => {
@@ -1006,7 +1124,11 @@ describe('lintWiring — dead-lifecycle-action reads registry-declared event pro
   });
 
   it('resolves the prop against the node type — an undeclared prop of the same name is not an affordance', () => {
-    expect(lifecycleFindings({ type: 'typography', retryEvent: 'INIT' })).toHaveLength(0);
+    // `retryEvent` isn't a declared `typography` prop — held in a variable
+    // (not a fresh literal) so the excess property lands as a genuine extra
+    // field on the value the lint scans, exactly what the assertion tests.
+    const node = { type: 'typography' as const, retryEvent: 'INIT' };
+    expect(lifecycleFindings(node)).toHaveLength(0);
   });
 
   it('leaves a first-class event on a declared prop alone', () => {
@@ -1015,18 +1137,19 @@ describe('lintWiring — dead-lifecycle-action reads registry-declared event pro
 
   it('reads an event-list descriptor array through its declared eventField', () => {
     expect(
-      lifecycleFindings({ type: 'data-grid', itemActions: [{ event: 'INIT', label: 'Refresh' }] }),
+      lifecycleFindings({ type: 'data-grid', entity: 'Row', itemActions: [{ event: 'INIT', label: 'Refresh' }] }),
     ).toHaveLength(1);
   });
 });
 
 describe('lintWiring — viewer-stranded credits value-input controls', () => {
-  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
-  const page = { name: 'P', path: '/lab', traits: [{ ref: 'Lab' }] };
+  const mainRender = (pattern: AnyPatternConfig): Effect => ['render-ui', 'main', pattern];
+  const page: PageRef = { name: 'P', path: '/lab', traits: [{ ref: 'Lab' }] };
 
-  const labWith = (repaintBody: unknown) => ({
+  const labWith = (repaintBody: AnyPatternConfig): Trait => trait({
     name: 'Lab',
     stateMachine: {
+      events: [],
       states: [{ name: 'idle', isInitial: true }],
       transitions: [
         {
@@ -1042,22 +1165,22 @@ describe('lintWiring — viewer-stranded credits value-input controls', () => {
 
   it('a labelless range-slider with a wired onChange is a way on (the learning-lab shape)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [labWith({ type: 'stack', children: [{ type: 'range-slider', value: 10, onChange: 'SET_X' }] })],
         pages: [page],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'viewer-stranded')).toEqual([]);
   });
 
   it('POSITIVE CONTROL: a labelless button-only repaint still strands', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [labWith({ type: 'stack', children: [{ type: 'button', action: 'SET_X' }] })],
         pages: [page],
-      }),
+      })),
     );
     const stranded = result.findings.filter((f) => f.check === 'viewer-stranded');
     expect(stranded).toHaveLength(1);
@@ -1066,7 +1189,7 @@ describe('lintWiring — viewer-stranded credits value-input controls', () => {
 
   it('an S-expression label the render evaluator resolves to text is a way on (the earth-lab shape)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [
           labWith({
@@ -1078,18 +1201,18 @@ describe('lintWiring — viewer-stranded credits value-input controls', () => {
           }),
         ],
         pages: [page],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'viewer-stranded')).toEqual([]);
   });
 
   it('POSITIVE CONTROL: an unresolved string-sigil label still strands', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [labWith({ type: 'stack', children: [{ type: 'button', action: 'SET_X', label: '@config.actionLabel' }] })],
         pages: [page],
-      }),
+      })),
     );
     const stranded = result.findings.filter((f) => f.check === 'viewer-stranded');
     expect(stranded).toHaveLength(1);
@@ -1103,25 +1226,25 @@ describe('lintWiring — viewer-stranded credits value-input controls', () => {
   // `ref: RecordDetail.traits.RecordItemDetail`).
   it('an embed of a declared ref trait is a way on, not a strand (the composed std-notes shape)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [
           labWith({ type: 'stack', children: ['@trait.DocSurface'] }),
-          { name: 'DocSurface', ref: 'RecordDetail.traits.RecordItemDetail', refId: 'trt_x', config: {} },
+          { name: 'DocSurface', ref: 'RecordDetail.traits.RecordItemDetail', config: {} },
         ],
         pages: [page],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'viewer-stranded')).toEqual([]);
   });
 
   it('POSITIVE CONTROL: an embed naming an UNDECLARED trait still strands', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'O',
         traits: [labWith({ type: 'stack', children: ['@trait.Ghost'] })],
         pages: [page],
-      }),
+      })),
     );
     const stranded = result.findings.filter((f) => f.check === 'viewer-stranded');
     expect(stranded).toHaveLength(1);
@@ -1130,25 +1253,22 @@ describe('lintWiring — viewer-stranded credits value-input controls', () => {
 });
 
 describe('lintWiring — app-theme-divergent', () => {
-  const themedOrbital = (name: string, theme: string, path: string) => ({
+  const themedOrbital = (name: string, theme: string, path: string): Orbital => orbital({
     name,
     traits: [
-      { name: `${name}Layout`, ref: 'std-app-layout#AppLayout', config: { theme: { default: theme, type: 'unknown' }, contentTrait: '@trait.Content' } },
-      { name: 'Content', stateMachine: { transitions: [] } },
+      { name: `${name}Layout`, ref: 'std-app-layout#AppLayout', config: { theme: { default: theme, type: 'string' }, contentTrait: { type: 'string', default: '@trait.Content' } } },
+      trait({ name: 'Content', stateMachine: { states: [], events: [], transitions: [] } }),
     ],
     pages: [{ name: `${name}Page`, path, traits: [{ ref: `${name}Layout` }, { ref: 'Content' }] }],
   });
 
   it('flags a page-owning orbital with no pinned theme while siblings pin one', () => {
-    const bare = {
+    const bare = orbital({
       name: 'RosterOrbital',
-      traits: [{ name: 'Directory', stateMachine: { transitions: [] } }],
+      traits: [trait({ name: 'Directory', stateMachine: { states: [], events: [], transitions: [] } })],
       pages: [{ name: 'RosterPage', path: '/roster', traits: [{ ref: 'Directory' }] }],
-    };
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'), bare],
-    } as unknown as OrbitalSchema);
+    });
+    const result = lintWiring(schemaOf([themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'), bare]));
     const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
     expect(divergent).toHaveLength(1);
     expect(divergent[0]?.severity).toBe('warning');
@@ -1158,14 +1278,11 @@ describe('lintWiring — app-theme-divergent', () => {
   });
 
   it('flags an orbital pinning a DIFFERENT theme than the rest of the app', () => {
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'),
-        themedOrbital('NoteOrbital', 'linear-clean-light', '/notes'),
-        themedOrbital('OddOrbital', 'terminal-dark', '/odd'),
-      ],
-    } as unknown as OrbitalSchema);
+    const result = lintWiring(schemaOf([
+      themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'),
+      themedOrbital('NoteOrbital', 'linear-clean-light', '/notes'),
+      themedOrbital('OddOrbital', 'terminal-dark', '/odd'),
+    ]));
     const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
     expect(divergent).toHaveLength(1);
     expect(divergent[0]?.orbital).toBe('OddOrbital');
@@ -1173,33 +1290,179 @@ describe('lintWiring — app-theme-divergent', () => {
   });
 
   it('stays silent when every page-owning orbital pins the same theme, and when nothing pins', () => {
-    const coherent = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'),
-        themedOrbital('NoteOrbital', 'linear-clean-light', '/notes'),
-      ],
-    } as unknown as OrbitalSchema);
+    const coherent = lintWiring(schemaOf([
+      themedOrbital('TaskOrbital', 'linear-clean-light', '/tasks'),
+      themedOrbital('NoteOrbital', 'linear-clean-light', '/notes'),
+    ]));
     expect(coherent.findings.filter((f) => f.check === 'app-theme-divergent')).toEqual([]);
-    const unthemed = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        {
-          name: 'TaskOrbital',
-          traits: [{ name: 'Content', stateMachine: { transitions: [] } }],
-          pages: [{ name: 'TaskPage', path: '/tasks', traits: [{ ref: 'Content' }] }],
-        },
-      ],
-    } as unknown as OrbitalSchema);
+    const unthemed = lintWiring(schemaOf([
+      orbital({
+        name: 'TaskOrbital',
+        traits: [trait({ name: 'Content', stateMachine: { states: [], events: [], transitions: [] } })],
+        pages: [{ name: 'TaskPage', path: '/tasks', traits: [{ ref: 'Content' }] }],
+      }),
+    ]));
     expect(unthemed.findings.filter((f) => f.check === 'app-theme-divergent')).toEqual([]);
   });
 });
 
+describe('lintWiring — orbital-config-knob-unforwarded', () => {
+  const emptyStateMachine = { states: [], events: [], transitions: [] };
+  const knobOrbitalEntity = { name: 'Thing', persistence: 'runtime' as const, fields: [{ name: 'id', type: 'string' as const, required: true }] };
+  const forwardingTrait = (name: string, knob: string): Trait => ({
+    name,
+    scope: 'instance',
+    config: { [knob]: { default: `@config.${knob}`, type: 'unknown' } },
+    stateMachine: emptyStateMachine,
+  });
+
+  it('flags an orbital-level knob no trait forwards, alongside one that is forwarded', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'ListOrbital',
+          entity: knobOrbitalEntity,
+          pages: [],
+          config: {
+            pageSize: { type: 'number', default: 25 },
+            orphan: { type: 'string', default: 'unused' },
+          },
+          traits: [forwardingTrait('BrowseList', 'pageSize')],
+        },
+      ],
+    });
+    const findings = result.findings.filter((f) => f.check === 'orbital-config-knob-unforwarded');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('warning');
+    expect(findings[0]?.orbital).toBe('ListOrbital');
+    expect(findings[0]?.message).toBe(
+      'Orbital "ListOrbital" declares config knob "orphan" but no trait forwards @config.orphan — ' +
+        'the knob is dead (an importer can set it, nothing reads it)',
+    );
+  });
+
+  it('resolves an app-level knob forwarded by a trait in ANY orbital, and flags one that is not', () => {
+    const result = lintWiring({
+      name: 'MyApp',
+      designTokens: {},
+      customPatterns: {},
+      config: {
+        appName: { type: 'string', default: 'Time' },
+        orphanApp: { type: 'string', default: 'unused' },
+      },
+      orbitals: [
+        { name: 'ShellOrbital', entity: knobOrbitalEntity, pages: [], traits: [forwardingTrait('AppLayout', 'appName')] },
+        { name: 'OtherOrbital', entity: knobOrbitalEntity, pages: [], traits: [{ name: 'Plain', scope: 'instance', stateMachine: emptyStateMachine }] },
+      ],
+    });
+    const findings = result.findings.filter((f) => f.check === 'orbital-config-knob-unforwarded');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.orbital).toBe('MyApp');
+    expect(findings[0]?.message).toBe(
+      'App "MyApp" declares config knob "orphanApp" but no trait forwards @config.orphanApp — ' +
+        'the knob is dead (an importer can set it, nothing reads it)',
+    );
+  });
+
+  it('does not count a dotted @config.knob.sub default as a forward', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'ListOrbital',
+          entity: knobOrbitalEntity,
+          pages: [],
+          config: { columns: { type: 'array', default: [] } },
+          traits: [forwardingTrait('BrowseList', 'columns.width')],
+        },
+      ],
+    });
+    const findings = result.findings.filter((f) => f.check === 'orbital-config-knob-unforwarded');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain('"columns"');
+  });
+
+  it('does not flag a resolved forward carrying forwardedFrom provenance (no @config token left)', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'ListOrbital',
+          entity: knobOrbitalEntity,
+          pages: [],
+          config: { pageSize: { type: 'number', default: 25 } },
+          traits: [
+            {
+              name: 'BrowseList',
+              scope: 'instance',
+              config: { pageSize: { default: 25, type: 'number', forwardedFrom: '@config.pageSize' } },
+              stateMachine: emptyStateMachine,
+            },
+          ],
+        },
+      ],
+    });
+    const findings = result.findings.filter((f) => f.check === 'orbital-config-knob-unforwarded');
+    expect(findings).toEqual([]);
+  });
+
+  it('flags a resolved knob with neither the @config token nor forwardedFrom provenance', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'ListOrbital',
+          entity: knobOrbitalEntity,
+          pages: [],
+          config: { pageSize: { type: 'number', default: 25 } },
+          traits: [
+            {
+              name: 'BrowseList',
+              scope: 'instance',
+              config: { pageSize: { default: 25, type: 'number' } },
+              stateMachine: emptyStateMachine,
+            },
+          ],
+        },
+      ],
+    });
+    const findings = result.findings.filter((f) => f.check === 'orbital-config-knob-unforwarded');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain('"pageSize"');
+  });
+
+  it('stays silent for a schema with no config anywhere', () => {
+    const result = lintWiring({
+      name: 'fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'PlainOrbital',
+          entity: knobOrbitalEntity,
+          pages: [],
+          traits: [{ name: 'Content', scope: 'instance', stateMachine: emptyStateMachine }],
+        },
+      ],
+    });
+    expect(result.findings.filter((f) => f.check === 'orbital-config-knob-unforwarded')).toEqual([]);
+  });
+});
+
 describe('lintWiring — identity-roster-unwritable', () => {
-  const identityEntity = {
+  const identityEntity: Entity = {
     name: 'Staff',
     collection: 'staff',
-    persistent: true,
+    persistence: 'persistent',
     identity: true,
     fields: [
       { name: 'id', type: 'string', required: true },
@@ -1208,22 +1471,19 @@ describe('lintWiring — identity-roster-unwritable', () => {
   };
 
   it('flags an [identity] entity no transition persist-creates', () => {
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        {
-          name: 'StaffOrbital',
-          entity: identityEntity,
-          traits: [
-            {
-              name: 'Directory',
-              stateMachine: { transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [['fetch', 'Staff', {}]] }] },
-            },
-          ],
-          pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Directory' }] }],
-        },
-      ],
-    } as unknown as OrbitalSchema);
+    const result = lintWiring(schemaOf([
+      orbital({
+        name: 'StaffOrbital',
+        entity: identityEntity,
+        traits: [
+          trait({
+            name: 'Directory',
+            stateMachine: { states: [], events: [], transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [['fetch', 'Staff', {}]] }] },
+          }),
+        ],
+        pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Directory' }] }],
+      }),
+    ]));
     const unwritable = result.findings.filter((f) => f.check === 'identity-roster-unwritable');
     expect(unwritable).toHaveLength(1);
     expect(unwritable[0]?.severity).toBe('warning');
@@ -1232,60 +1492,55 @@ describe('lintWiring — identity-roster-unwritable', () => {
   });
 
   it('stays silent once a persistor arm reaches persist create — including nested in an if', () => {
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        {
-          name: 'StaffOrbital',
-          entity: identityEntity,
-          traits: [
-            {
-              name: 'Persistor',
-              stateMachine: {
-                transitions: [
-                  {
-                    from: 'idle',
-                    event: 'DO_CREATE',
-                    to: 'idle',
-                    effects: [['if', ['=', 1, 1], ['persist', 'create', 'Staff', '@payload.data', { emit: { success: 'STAFF_CREATED' } }]]],
-                  },
-                ],
-              },
+    const result = lintWiring(schemaOf([
+      orbital({
+        name: 'StaffOrbital',
+        entity: identityEntity,
+        traits: [
+          trait({
+            name: 'Persistor',
+            stateMachine: {
+              states: [], events: [],
+              transitions: [
+                {
+                  from: 'idle',
+                  event: 'DO_CREATE',
+                  to: 'idle',
+                  effects: [['if', ['=', 1, 1], ['persist', 'create', 'Staff', '@payload.data', { emit: { success: 'STAFF_CREATED' } }]]],
+                },
+              ],
             },
-          ],
-          pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Persistor' }] }],
-        },
-      ],
-    } as unknown as OrbitalSchema);
+          }),
+        ],
+        pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Persistor' }] }],
+      }),
+    ]));
     expect(result.findings.filter((f) => f.check === 'identity-roster-unwritable')).toEqual([]);
   });
 
   it('stays silent for an app with no [identity] entity', () => {
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        {
-          name: 'TaskOrbital',
-          entity: { name: 'Task', collection: 'tasks', fields: [{ name: 'id', type: 'string', required: true }] },
-          traits: [{ name: 'Content', stateMachine: { transitions: [] } }],
-          pages: [{ name: 'TaskPage', path: '/tasks', traits: [{ ref: 'Content' }] }],
-        },
-      ],
-    } as unknown as OrbitalSchema);
+    const result = lintWiring(schemaOf([
+      orbital({
+        name: 'TaskOrbital',
+        entity: { name: 'Task', collection: 'tasks', fields: [{ name: 'id', type: 'string', required: true }] },
+        traits: [trait({ name: 'Content', stateMachine: { states: [], events: [], transitions: [] } })],
+        pages: [{ name: 'TaskPage', path: '/tasks', traits: [{ ref: 'Content' }] }],
+      }),
+    ]));
     expect(result.findings.filter((f) => f.check === 'identity-roster-unwritable')).toEqual([]);
   });
 });
 
 describe('lintWiring — app-theme-divergent with a schema-level theme', () => {
-  const orbital = (name: string, path: string, pin?: string) => ({
+  const pinnedOrbital = (name: string, path: string, pin?: string): Orbital => orbital({
     name,
     traits: [
       {
         name: `${name}Layout`,
         ref: 'std-app-layout#AppLayout',
-        config: pin !== undefined ? { theme: { default: pin, type: 'unknown' } } : {},
+        config: pin !== undefined ? { theme: { default: pin, type: 'string' } } : {},
       },
-      { name: 'Content', stateMachine: { transitions: [] } },
+      trait({ name: 'Content', stateMachine: { states: [], events: [], transitions: [] } }),
     ],
     pages: [{ name: `${name}Page`, path, traits: [{ ref: `${name}Layout` }, { ref: 'Content' }] }],
   });
@@ -1294,8 +1549,8 @@ describe('lintWiring — app-theme-divergent with a schema-level theme', () => {
     const result = lintWiring({
       name: 'fixture',
       theme: 'linear-clean-light',
-      orbitals: [orbital('TaskOrbital', '/tasks', 'linear-clean-light'), orbital('RosterOrbital', '/roster')],
-    } as unknown as OrbitalSchema);
+      orbitals: [pinnedOrbital('TaskOrbital', '/tasks', 'linear-clean-light'), pinnedOrbital('RosterOrbital', '/roster')],
+    });
     expect(result.findings.filter((f) => f.check === 'app-theme-divergent')).toEqual([]);
   });
 
@@ -1303,8 +1558,8 @@ describe('lintWiring — app-theme-divergent with a schema-level theme', () => {
     const result = lintWiring({
       name: 'fixture',
       theme: 'linear-clean-light',
-      orbitals: [orbital('TaskOrbital', '/tasks'), orbital('OddOrbital', '/odd', 'terminal-dark')],
-    } as unknown as OrbitalSchema);
+      orbitals: [pinnedOrbital('TaskOrbital', '/tasks'), pinnedOrbital('OddOrbital', '/odd', 'terminal-dark')],
+    });
     const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
     expect(divergent).toHaveLength(1);
     expect(divergent[0]?.orbital).toBe('OddOrbital');
@@ -1313,10 +1568,7 @@ describe('lintWiring — app-theme-divergent with a schema-level theme', () => {
   });
 
   it('keeps the dominant-vote behavior when no app theme is declared', () => {
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [orbital('TaskOrbital', '/tasks', 'linear-clean-light'), orbital('RosterOrbital', '/roster')],
-    } as unknown as OrbitalSchema);
+    const result = lintWiring(schemaOf([pinnedOrbital('TaskOrbital', '/tasks', 'linear-clean-light'), pinnedOrbital('RosterOrbital', '/roster')]));
     const divergent = result.findings.filter((f) => f.check === 'app-theme-divergent');
     expect(divergent).toHaveLength(1);
     expect(divergent[0]?.orbital).toBe('RosterOrbital');
@@ -1324,15 +1576,17 @@ describe('lintWiring — app-theme-divergent with a schema-level theme', () => {
 });
 
 describe('lintWiring — navigate-target-undeclared', () => {
-  const navigateTrait = (target: unknown) => ({
+  const navigateTrait = (target: string | SExpr): Trait => trait({
     name: 'Row',
     stateMachine: {
+      states: [], events: [],
       transitions: [{ from: 'idle', event: 'OPEN', to: 'idle', effects: [['navigate', target]] }],
     },
   });
-  const navigateWithParams = (target: unknown) => ({
+  const navigateWithParams = (target: string | SExpr): Trait => trait({
     name: 'Row',
     stateMachine: {
+      states: [], events: [],
       transitions: [
         { from: 'idle', event: 'OPEN', to: 'idle', effects: [['navigate', target, { id: '@payload.id' }]] },
       ],
@@ -1341,11 +1595,11 @@ describe('lintWiring — navigate-target-undeclared', () => {
 
   it('flags a navigate to a path no page in the app declares (the 404 class)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'ContactsOrbital',
         traits: [navigateTrait('/staff-directory')],
         pages: [{ name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] }],
-      }),
+      })),
     );
     const found = result.findings.filter((f) => f.check === 'navigate-target-undeclared');
     expect(found).toHaveLength(1);
@@ -1356,47 +1610,47 @@ describe('lintWiring — navigate-target-undeclared', () => {
 
   it('is clean on an exact literal match', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'ContactsOrbital',
         traits: [navigateTrait('/contacts')],
         pages: [{ name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
   });
 
   it('matches a concrete path against a declared :param page positionally', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'ContactsOrbital',
         traits: [navigateWithParams('/contacts/abc123')],
         pages: [
           { name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] },
           { name: 'ContactDetailPage', path: '/contacts/:id', traits: [{ ref: 'Row' }] },
         ],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
   });
 
   it('matches a str/concat-built target by its literal prefix against a :param-stripped page path', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'ContactsOrbital',
         traits: [navigateWithParams(['str/concat', '/contacts/', '@payload.id'])],
         pages: [{ name: 'ContactDetailPage', path: '/contacts/:id', traits: [{ ref: 'Row' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
   });
 
   it('flags a str/concat-built target whose prefix matches no declared page', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'ContactsOrbital',
         traits: [navigateWithParams(['str/concat', '/vendors/', '@payload.id'])],
         pages: [{ name: 'ContactDetailPage', path: '/contacts/:id', traits: [{ ref: 'Row' }] }],
-      }),
+      })),
     );
     const found = result.findings.filter((f) => f.check === 'navigate-target-undeclared');
     expect(found).toHaveLength(1);
@@ -1405,52 +1659,49 @@ describe('lintWiring — navigate-target-undeclared', () => {
 
   it('does not guess at a fully dynamic binding target (no literal information)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'ContactsOrbital',
         traits: [navigateTrait('@config.redirectUrl')],
         pages: [{ name: 'ContactsPage', path: '/contacts', traits: [{ ref: 'Row' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
   });
 
   it('resolves against pages declared in a SIBLING orbital (cross-orbital declared-path universe)', () => {
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        {
-          name: 'DashboardOrbital',
-          traits: [navigateTrait('/reports')],
-          pages: [{ name: 'DashboardPage', path: '/dashboard', traits: [{ ref: 'Row' }] }],
-        },
-        {
-          name: 'ReportsOrbital',
-          traits: [{ name: 'Reports', stateMachine: { transitions: [] } }],
-          pages: [{ name: 'ReportsPage', path: '/reports', traits: [{ ref: 'Reports' }] }],
-        },
-      ],
-    } as unknown as OrbitalSchema);
+    const result = lintWiring(schemaOf([
+      orbital({
+        name: 'DashboardOrbital',
+        traits: [navigateTrait('/reports')],
+        pages: [{ name: 'DashboardPage', path: '/dashboard', traits: [{ ref: 'Row' }] }],
+      }),
+      orbital({
+        name: 'ReportsOrbital',
+        traits: [trait({ name: 'Reports', stateMachine: { states: [], events: [], transitions: [] } })],
+        pages: [{ name: 'ReportsPage', path: '/reports', traits: [{ ref: 'Reports' }] }],
+      }),
+    ]));
     expect(result.findings.filter((f) => f.check === 'navigate-target-undeclared')).toEqual([]);
   });
 });
 
 describe('lintWiring — page-absent-from-nav', () => {
-  const layoutWithNavItems = (items: unknown[]) => ({
+  const layoutWithNavItems = (items: ReadonlyArray<{ href: string; label: string }>): Trait => trait({
     name: 'AppLayout',
-    config: { navItems: items },
-    stateMachine: { transitions: [] },
+    config: { navItems: { type: 'array', default: [...items] } },
+    stateMachine: { states: [], events: [], transitions: [] },
   });
 
   it('flags a declared page reachable by no navItems array in the app (the ATS /staff class)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'StaffOrbital',
         traits: [layoutWithNavItems([{ href: '/dashboard', label: 'Dashboard' }])],
         pages: [
           { name: 'DashboardPage', path: '/dashboard', traits: [{ ref: 'AppLayout' }] },
           { name: 'StaffPage', path: '/staff', traits: [{ ref: 'AppLayout' }] },
         ],
-      }),
+      })),
     );
     const found = result.findings.filter((f) => f.check === 'page-absent-from-nav');
     expect(found).toHaveLength(1);
@@ -1460,58 +1711,122 @@ describe('lintWiring — page-absent-from-nav', () => {
 
   it('is clean once the page has an entry in a navItems array', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'StaffOrbital',
         traits: [layoutWithNavItems([{ href: '/dashboard', label: 'Dashboard' }, { href: '/staff', label: 'Staff' }])],
         pages: [
           { name: 'DashboardPage', path: '/dashboard', traits: [{ ref: 'AppLayout' }] },
           { name: 'StaffPage', path: '/staff', traits: [{ ref: 'AppLayout' }] },
         ],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
   });
 
   it('does not flag a parameterized detail page (structurally reached by row click, not a nav link)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'StaffOrbital',
         traits: [layoutWithNavItems([{ href: '/staff', label: 'Staff' }])],
         pages: [
           { name: 'StaffPage', path: '/staff', traits: [{ ref: 'AppLayout' }] },
           { name: 'StaffDetailPage', path: '/staff/:id', traits: [{ ref: 'AppLayout' }] },
         ],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
   });
 
   it('does not flag the app root page', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'StaffOrbital',
         traits: [layoutWithNavItems([])],
         pages: [{ name: 'HomePage', path: '/', traits: [{ ref: 'AppLayout' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
   });
 
   it('stays silent for an app with no navItems array anywhere (has not opted into the convention)', () => {
     const result = lintWiring(
-      schemaWith({
+      schemaWith(orbital({
         name: 'StaffOrbital',
-        traits: [{ name: 'Directory', stateMachine: { transitions: [] } }],
+        traits: [{ name: 'Directory', scope: 'instance', stateMachine: { states: [], events: [],  transitions: [] } }],
         pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'Directory' }] }],
-      }),
+      })),
     );
     expect(result.findings.filter((f) => f.check === 'page-absent-from-nav')).toEqual([]);
   });
 });
 
+describe('lintWiring — page-path-duplicate', () => {
+  const layout = trait({ name: 'Layout', scope: 'instance', stateMachine: { states: [], events: [],  transitions: [] } });
+
+  it('flags two pages whose paths collide once the param NAME is normalized away (/x/:id vs /x/:slug)', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'CatalogOrbital',
+        traits: [layout],
+        pages: [
+          { name: 'ItemById', path: '/x/:id', traits: [{ ref: 'Layout' }] },
+          { name: 'ItemBySlug', path: '/x/:slug', traits: [{ ref: 'Layout' }] },
+        ],
+      })),
+    );
+    const found = result.findings.filter((f) => f.check === 'page-path-duplicate');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.message).toContain("'/x/:id'");
+    expect(found[0]?.message).toContain("'/x/:slug'");
+    expect(found[0]?.message).toContain('CatalogOrbital.ItemById');
+    expect(found[0]?.message).toContain('CatalogOrbital.ItemBySlug');
+  });
+
+  it('does not flag pages whose param segment sits at a different position (/x/:id vs /y/:id)', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'CatalogOrbital',
+        traits: [layout],
+        pages: [
+          { name: 'ItemById', path: '/x/:id', traits: [{ ref: 'Layout' }] },
+          { name: 'OtherById', path: '/y/:id', traits: [{ ref: 'Layout' }] },
+        ],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'page-path-duplicate')).toEqual([]);
+  });
+
+  it('flags an exact duplicate path once', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'CatalogOrbital',
+        traits: [layout],
+        pages: [
+          { name: 'ItemA', path: '/x/y', traits: [{ ref: 'Layout' }] },
+          { name: 'ItemB', path: '/x/y', traits: [{ ref: 'Layout' }] },
+        ],
+      })),
+    );
+    const found = result.findings.filter((f) => f.check === 'page-path-duplicate');
+    expect(found).toHaveLength(1);
+  });
+
+  it('does not flag a single declared page', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'CatalogOrbital',
+        traits: [layout],
+        pages: [{ name: 'ItemById', path: '/x/:id', traits: [{ ref: 'Layout' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'page-path-duplicate')).toEqual([]);
+  });
+});
+
 describe('lintWiring — relation-field-rendered-raw', () => {
-  const mainRender = (pattern: unknown) => ['render-ui', 'main', pattern];
-  const ticketEntity = {
+  const mainRender = (pattern: AnyPatternConfig): Effect => ['render-ui', 'main', pattern];
+  const ticketEntity: Entity = {
     name: 'Ticket',
     persistence: 'persistent',
     collection: 'tickets',
@@ -1521,10 +1836,11 @@ describe('lintWiring — relation-field-rendered-raw', () => {
       { name: 'assigneeId', type: 'relation', relation: { entity: 'Staff' } },
     ],
   };
-  const tableTrait = (columnEntry: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+  const tableTrait = (columnEntry: Record<string, unknown>, extra: Record<string, unknown> = {}): Trait => trait({
     name: 'TicketTable',
     linkedEntity: 'Ticket',
     stateMachine: {
+      states: [], events: [],
       transitions: [
         {
           from: 'browsing',
@@ -1543,17 +1859,17 @@ describe('lintWiring — relation-field-rendered-raw', () => {
       ],
     },
   });
-  const schema = (columnEntry: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+  const schema = (columnEntry: Record<string, unknown>, extra: Record<string, unknown> = {}): OrbitalSchema => ({
     name: 'fixture',
     orbitals: [
-      {
+      orbital({
         name: 'TicketOrbital',
         entity: ticketEntity,
         traits: [tableTrait(columnEntry, extra)],
         pages: [{ name: 'TicketsPage', path: '/tickets', traits: [{ ref: 'TicketTable' }] }],
-      },
+      }),
     ],
-  }) as unknown as OrbitalSchema;
+  });
 
   it('flags a relation-typed column with no type/format override and no relationsData', () => {
     const result = lintWiring(schema({ key: 'assigneeId', field: 'assigneeId', header: 'Assignee' }));
@@ -1582,40 +1898,39 @@ describe('lintWiring — relation-field-rendered-raw', () => {
   });
 
   it('never fires on detail-panel/form/form-section — those get server-side relationsData auto-injection', () => {
-    const result = lintWiring({
-      name: 'fixture',
-      orbitals: [
-        {
-          name: 'TicketOrbital',
-          entity: ticketEntity,
-          traits: [
-            {
-              name: 'TicketDetail',
-              linkedEntity: 'Ticket',
-              stateMachine: {
-                transitions: [
-                  {
-                    from: 'viewing',
-                    event: 'INIT',
-                    to: 'viewing',
-                    effects: [
-                      mainRender({
-                        type: 'detail-panel',
-                        fields: [{ key: 'title' }, { key: 'assigneeId' }],
-                        // deliberately also shaped with a columns array, to prove the
-                        // exclusion is by @fieldsContract, not by absence of `columns`
-                        columns: [{ key: 'assigneeId' }],
-                      }),
-                    ],
-                  },
-                ],
-              },
+    // `columns` isn't a declared `detail-panel` prop — held in a variable
+    // (not a fresh literal) so the excess property lands as a genuine extra
+    // field, proving the exclusion is by @fieldsContract, not by absence of
+    // `columns`.
+    const node = {
+      type: 'detail-panel' as const,
+      fields: [{ key: 'title' }, { key: 'assigneeId' }],
+      columns: [{ key: 'assigneeId' }],
+    };
+    const result = lintWiring(schemaOf([
+      orbital({
+        name: 'TicketOrbital',
+        entity: ticketEntity,
+        traits: [
+          trait({
+            name: 'TicketDetail',
+            linkedEntity: 'Ticket',
+            stateMachine: {
+              states: [], events: [],
+              transitions: [
+                {
+                  from: 'viewing',
+                  event: 'INIT',
+                  to: 'viewing',
+                  effects: [mainRender(node)],
+                },
+              ],
             },
-          ],
-          pages: [{ name: 'TicketPage', path: '/tickets/:id', traits: [{ ref: 'TicketDetail' }] }],
-        },
-      ],
-    } as unknown as OrbitalSchema);
+          }),
+        ],
+        pages: [{ name: 'TicketPage', path: '/tickets/:id', traits: [{ ref: 'TicketDetail' }] }],
+      }),
+    ]));
     expect(result.findings.filter((f) => f.check === 'relation-field-rendered-raw')).toEqual([]);
   });
 });

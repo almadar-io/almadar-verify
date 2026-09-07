@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EdgeWalkTransition } from '@almadar/core';
 import { tick } from '../tick.js';
-import { createFakeDriver, type FakeDriverContext } from '../impls/fake.js';
+import { createFakeDriver } from '../impls/fake.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import type { Frame } from '../../frame/types.js';
@@ -39,10 +39,6 @@ function step(
     triggerKind,
     coverageKey: `${trait.traitName}:${from}+${event}->${to}`,
   };
-}
-
-function makeCtx(): FakeDriverContext {
-  return { outputDir: '/tmp', trait, runtime: undefined as unknown as never };
 }
 
 describe('tick', () => {

@@ -33,21 +33,12 @@ export function collectEntityFields(orbital: OrbitalSchema): Record<string, Enti
     if (entityRef === undefined) continue;
     if (isEntityReference(entityRef) || isEntityCall(entityRef)) continue;
     const fields = entityRef.fields ?? [];
-    out[entityRef.name] = fields
-      .filter((f): f is typeof f & { name: string } =>
-        typeof f.name === 'string' && f.name.length > 0,
-      )
-      .map((f) => {
-        const def: EntityFieldDef = { name: f.name, type: f.type };
-        // Preserve the enum `values` so payload synthesis picks a VALID option
-        // (not a random faker string) for enum / `<select>` fields, and so
-        // consumers (e.g. the crud-flow planner) can recognise enum fields.
-        const values = (f as { values?: ReadonlyArray<string> }).values;
-        if (Array.isArray(values) && values.every((v): v is string => typeof v === 'string')) {
-          def.values = values;
-        }
-        return def;
-      });
+    // `EntityFieldDef` IS core's `EntityField` — pass the declared fields
+    // through unchanged (min/max/intrinsic/default/relation/items/properties
+    // included) instead of re-deriving a narrowed `{name,type,values}` copy.
+    out[entityRef.name] = fields.filter((f): f is typeof f & { name: string } =>
+      typeof f.name === 'string' && f.name.length > 0,
+    );
   }
   return out;
 }

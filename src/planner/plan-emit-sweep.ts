@@ -16,10 +16,12 @@
  * @packageDocumentation
  */
 
+import type { Orbital, OrbitalSchema } from '@almadar/core';
+import { dispatchNavigates } from './internal/orbital-walk.js';
 import type { ExtendedWalkStep, PlanEmitInput } from './types.js';
 
 export function planEmitSweep(input: PlanEmitInput): ExtendedWalkStep[] {
-  const { trait, emits } = input;
+  const { trait, emits, schema, orb } = input;
   const result: ExtendedWalkStep[] = [];
 
   // Deduplicate by `success` event name; failure events are still
@@ -29,11 +31,11 @@ export function planEmitSweep(input: PlanEmitInput): ExtendedWalkStep[] {
   for (const decl of emits) {
     if (decl.success !== undefined && !seen.has(decl.success)) {
       seen.add(decl.success);
-      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.success));
+      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.success, schema, orb));
     }
     if (decl.failure !== undefined && !seen.has(decl.failure)) {
       seen.add(decl.failure);
-      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.failure));
+      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.failure, schema, orb));
     }
   }
 
@@ -47,8 +49,30 @@ export function planEmitSweep(input: PlanEmitInput): ExtendedWalkStep[] {
  * trait handles it; the topology walk in `planWalk` already covers the
  * emitting trait's own transitions. The coverage key uses `[emit]` as
  * the suffix to distinguish from topology coverage.
+ *
+ * `navigates` is looked up through `dispatchNavigates` — the SAME oracle
+ * `planWalk`/`planClickPathSamples`/`planReplayTo` already consult —
+ * because a swept event can be declared on a trait (`emits { BACK }`,
+ * `NoteDetailLayout`'s composed `std-detail-layout`) whose OWN transition
+ * from its initial state carries a `navigate`/`navigate-back` effect, or
+ * whose only receiver is a LISTENER's triggered arm (`NoteBacklinksRouter
+ * listens NoteSubpages.SELECT_RELATED -> SELECT_RELATED`, which itself
+ * navigates). Before this, an emit-sweep re-dispatch of an already-
+ * click-path-verified navigating event fired a SECOND time via the bus,
+ * found the trait genuinely unmounted (the click-path step already
+ * navigated away), and mis-reported it as `stateless dispatch` — the same
+ * failure `toEdgeWalkTransition`'s `navigates` derivation exists to
+ * prevent, just missed here because this planner never consulted it.
  */
-function makeEmitStep(traitName: string, initialState: string, eventName: string): ExtendedWalkStep {
+function makeEmitStep(
+  traitName: string,
+  initialState: string,
+  eventName: string,
+  schema: OrbitalSchema | undefined,
+  orb: Orbital | undefined,
+): ExtendedWalkStep {
+  const navigates = schema !== undefined && orb !== undefined
+    && dispatchNavigates(schema, orb, traitName, eventName);
   return {
     from: initialState,
     event: eventName,
@@ -59,5 +83,6 @@ function makeEmitStep(traitName: string, initialState: string, eventName: string
     traitName,
     triggerKind: 'bus',
     coverageKey: `${traitName}:${initialState}+${eventName}->${initialState}[emit]`,
+    ...(navigates && { navigates: true }),
   };
 }

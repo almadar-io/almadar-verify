@@ -13,6 +13,7 @@ import type { OrbitalSchema } from '@almadar/core';
 import type { TraitWalkConfig } from '../engine/types.js';
 import { collectEffectEmittedEvents } from './internal/effect-emits.js';
 import {
+  dispatchNavigates,
   eachInlineTrait,
   findDefaultRoute,
   findInitialState,
@@ -32,7 +33,18 @@ export function extractTraitWalkConfigs(orbital: OrbitalSchema): TraitWalkConfig
     const config: TraitWalkConfig = {
       traitName: trait.name,
       initialState,
-      transitions: trait.stateMachine.transitions.map(toEdgeWalkTransition),
+      transitions: trait.stateMachine.transitions.map((t) => {
+        const edge = toEdgeWalkTransition(t);
+        // `toEdgeWalkTransition` only sees the dispatched transition's OWN
+        // effects; `dispatchNavigates` also credits a listener whose
+        // triggered arm navigates (the dispatched trait itself never does,
+        // but the route still changes) — a strict superset, so this only
+        // ever flips `navigates` false→true, never the reverse.
+        if (!edge.navigates && dispatchNavigates(orbital, orb, trait.name, t.event)) {
+          edge.navigates = true;
+        }
+        return edge;
+      }),
       events: trait.stateMachine.events,
     };
     if (trait.linkedEntity !== undefined) {

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { Effect, Orbital, OrbitalSchema } from '@almadar/core';
 import { planEmitSweep } from '../plan-emit-sweep.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
 import type { EmitDeclaration } from '../../browser/catalog-probes.js';
@@ -58,5 +59,121 @@ describe('planEmitSweep', () => {
     expect(step.coverageKey).toBe(
       'BrowseItemBrowse:loading+PingEvent->loading[emit]',
     );
+  });
+
+  it('omits navigates when schema/orb are not provided (pre-existing behavior)', () => {
+    const emits: EmitDeclaration[] = [{ success: 'PingEvent' }];
+    const [step] = planEmitSweep({ trait, emits });
+    expect(step.navigates).toBeUndefined();
+  });
+
+  // R-EMIT-SWEEP-NAVIGATES-NOT-STAMPED: NoteDetailLayout/NoteSubpages-shaped
+  // regression (std-notes). Both traits are frontier/imported composed
+  // atoms whose `emits { BACK }` / `(emit SELECT_RELATED ...)` contract
+  // ALSO gets independently re-dispatched by this planner via the bus (on
+  // top of the click-path step that already exercises the same event).
+  // The event genuinely navigates — either the trait's own transition from
+  // its initial state carries `navigate`/`navigate-back` (BACK), or only a
+  // LISTENER's triggered arm does (SELECT_RELATED, `NoteBacklinksRouter
+  // listens NoteSubpages.SELECT_RELATED -> SELECT_RELATED`). Before this
+  // fix `makeEmitStep` never stamped `navigates`, so `tick`'s post-dispatch
+  // null-state read (legitimate — the earlier click-path step already
+  // navigated the trait's page away) misreported as `stateless dispatch`.
+  describe('navigates (dispatchNavigates oracle)', () => {
+    function orbitalWithListenerCascade(listenerEffects: Effect[]): { schema: OrbitalSchema; orb: Orbital } {
+      const orb: Orbital = {
+        name: 'NoteOrbital',
+        entity: { name: 'Note', persistence: 'runtime', fields: [{ name: 'id', type: 'string', required: true }] },
+        traits: [
+          {
+            name: 'Subpages',
+            scope: 'instance',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [{ key: 'SELECT_RELATED', name: 'SelectRelated' }],
+              transitions: [
+                { from: 'idle', to: 'idle', event: 'SELECT_RELATED', effects: [['emit', 'SELECT_RELATED', {}]] },
+              ],
+            },
+            emits: [{ event: 'SELECT_RELATED', scope: 'external' }],
+          },
+          {
+            name: 'BacklinksRouter',
+            scope: 'instance',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [{ key: 'SELECT', name: 'Select' }],
+              transitions: [{ from: 'idle', to: 'idle', event: 'SELECT', effects: listenerEffects }],
+            },
+            listens: [
+              {
+                event: 'SELECT_RELATED',
+                triggers: 'SELECT',
+                scope: 'external',
+                source: { kind: 'trait', trait: 'Subpages' },
+              },
+            ],
+          },
+        ],
+        pages: [],
+      };
+      const schema: OrbitalSchema = { name: 'NoteApp', designTokens: {}, customPatterns: {}, orbitals: [orb] };
+      return { schema, orb };
+    }
+
+    it('stamps navigates: true when only a LISTENER\'s triggered arm navigates (SELECT_RELATED-shaped)', () => {
+      const { schema, orb } = orbitalWithListenerCascade([['navigate', '/notes/related']]);
+      const subpages: TraitWalkConfig = { traitName: 'Subpages', initialState: 'idle', transitions: [] };
+      const [step] = planEmitSweep({
+        trait: subpages,
+        emits: [{ success: 'SELECT_RELATED' }],
+        schema,
+        orb,
+      });
+      expect(step.navigates).toBe(true);
+    });
+
+    it('does not stamp navigates when neither the trait nor its listener navigates', () => {
+      const { schema, orb } = orbitalWithListenerCascade([['set', '@entity.selected', '@payload.key']]);
+      const subpages: TraitWalkConfig = { traitName: 'Subpages', initialState: 'idle', transitions: [] };
+      const [step] = planEmitSweep({
+        trait: subpages,
+        emits: [{ success: 'SELECT_RELATED' }],
+        schema,
+        orb,
+      });
+      expect(step.navigates).toBeUndefined();
+    });
+
+    it('stamps navigates: true when the swept trait\'s own initial-state transition navigates (BACK-shaped)', () => {
+      const orb: Orbital = {
+        name: 'NoteOrbital',
+        entity: { name: 'Note', persistence: 'runtime', fields: [{ name: 'id', type: 'string', required: true }] },
+        traits: [
+          {
+            name: 'NoteDetailLayout',
+            scope: 'instance',
+            stateMachine: {
+              states: [{ name: 'composing', isInitial: true }],
+              events: [{ key: 'BACK', name: 'Back' }],
+              transitions: [
+                { from: 'composing', to: 'composing', event: 'BACK', effects: [['navigate-back']] },
+              ],
+            },
+            emits: [{ event: 'BACK', scope: 'external' }],
+          },
+        ],
+        pages: [],
+      };
+      const schema: OrbitalSchema = { name: 'NoteApp', designTokens: {}, customPatterns: {}, orbitals: [orb] };
+      const detailLayout: TraitWalkConfig = { traitName: 'NoteDetailLayout', initialState: 'composing', transitions: [] };
+      const [step] = planEmitSweep({
+        trait: detailLayout,
+        emits: [{ success: 'BACK' }],
+        schema,
+        orb,
+      });
+      expect(step.navigates).toBe(true);
+    });
   });
 });

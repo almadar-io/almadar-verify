@@ -190,4 +190,29 @@ describe('planReplayTo', () => {
       expect(planReplayTo({ trait: erasureTrait, targetState: 'execScanning' })).toEqual([]);
     });
   });
+
+  describe('navigates (item D generalization)', () => {
+    it('stamps navigates: true on a replay hop whose edge navigates (e.g. a navigate-back arm)', () => {
+      // `step.edge` here is exactly what `extractTraitWalkConfigs` produces
+      // via `dispatchNavigates` — a `WalkTransition` with `navigates: true`
+      // stamped whether the transition navigates directly OR a listener's
+      // triggered arm does. `planReplayTo` must copy that flag onto its own
+      // step (same spread `plan-walk.ts`'s `makeStep` uses), or a reconcile
+      // hop over a navigating edge misreports as a stateless dispatch.
+      const trait: TraitWalkConfig = {
+        traitName: 'DetailLayout',
+        initialState: 'idle',
+        transitions: [
+          { from: 'idle', event: 'BACK', to: 'composing', hasGuard: false, navigates: true },
+          { from: 'composing', event: 'NEXT', to: 'done', hasGuard: false },
+        ],
+      };
+      const steps = expectPath(planReplayTo({ trait, targetState: 'done' }));
+      expect(steps).toHaveLength(2);
+      expect(steps[0].event).toBe('BACK');
+      expect(steps[0].navigates).toBe(true);
+      expect(steps[1].event).toBe('NEXT');
+      expect(steps[1].navigates).toBeUndefined();
+    });
+  });
 });

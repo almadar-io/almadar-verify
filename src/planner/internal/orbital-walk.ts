@@ -12,6 +12,7 @@
  */
 
 import type {
+  Effect,
   Orbital,
   OrbitalSchema,
   Page,
@@ -75,6 +76,73 @@ export function traitBootRenderSlots(trait: Trait): Set<string> {
 }
 
 /**
+ * Whether ANY effect in this list is a route-changing navigation —
+ * `navigate` (to a new route) or `navigate-back` (pop the nav stack), the
+ * only two heads `EffectExecutor` wires to a client navigation handler
+ * (`navigate`/`navigateBack` — grepped, no third exists). One owner so a
+ * driver reads the same truth the executor acts on: a transition whose
+ * ONLY effect is `navigate-back` swaps the page exactly like `navigate`
+ * does, and a dispatch-error gate that only knew about `navigate` accepted
+ * a null post-dispatch state read for one but not the other.
+ */
+export function transitionNavigates(effects: ReadonlyArray<Effect> | undefined): boolean {
+  return (effects ?? []).some(
+    (e) => Array.isArray(e) && (e[0] === 'navigate' || e[0] === 'navigate-back'),
+  );
+}
+
+/**
+ * Whether dispatching `eventKey` at `traitName` (in `orbital`) EVER changes
+ * the route — either the dispatched trait's own transition navigates
+ * directly, or a LISTENER's triggered arm does. A listener unmounts the
+ * page just the same as the dispatched trait navigating itself
+ * (`NoteBacklinksRouter listens NoteSubpages.SELECT_RELATED -> SELECT_RELATED`
+ * whose own arm is `(navigate …)` — the trait the walk DISPATCHED to,
+ * `NoteSubpages`, never navigates; the listener does), so a driver reading
+ * only `transitionNavigates` on the dispatched transition mistook that for
+ * a stateless-dispatch defect (`getState returned null`) instead of a real
+ * navigation.
+ *
+ * One hop is enough: a listener's OWN listener is a second dispatch the
+ * verifier observes separately (its own frame, its own `navigates` check).
+ * Deterministic, listens-graph-based — no name matching. The ONE owner
+ * every navigates-deriving call site (walk configs, click-path samples,
+ * replay-to) should use instead of `transitionNavigates` alone.
+ */
+export function dispatchNavigates(
+  schema: OrbitalSchema,
+  orbital: Orbital,
+  traitName: string,
+  eventKey: string,
+): boolean {
+  const sourceTrait = (orbital.traits ?? []).find(
+    (t): t is Trait => isInlineTrait(t) && t.name === traitName,
+  );
+  const dispatchedNavigates = (sourceTrait?.stateMachine?.transitions ?? []).some(
+    (t) => t.event === eventKey && transitionNavigates(t.effects),
+  );
+  if (dispatchedNavigates) return true;
+
+  for (const orb of schema.orbitals) {
+    for (const listenerTrait of orb.traits ?? []) {
+      if (!isInlineTrait(listenerTrait)) continue;
+      for (const listen of listenerTrait.listens ?? []) {
+        const source = listen.source;
+        if (source === undefined || source.kind === 'any') continue;
+        const sourceOrbitalName = source.kind === 'orbital' ? source.orbital : orb.name;
+        if (sourceOrbitalName !== orbital.name || source.trait !== traitName) continue;
+        if (listen.event !== eventKey) continue;
+        const triggeredNavigates = (listenerTrait.stateMachine?.transitions ?? []).some(
+          (t) => t.event === listen.triggers && transitionNavigates(t.effects),
+        );
+        if (triggeredNavigates) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Project a core `Transition` into the kernel walker's `WalkTransition`.
  */
 export function toEdgeWalkTransition(t: Transition): WalkTransition {
@@ -82,7 +150,7 @@ export function toEdgeWalkTransition(t: Transition): WalkTransition {
   const out: WalkTransition = { from: t.from, event: t.event, to: t.to, hasGuard };
   // Firing this transition can swap the page (trait unmounts) — the
   // dispatch-error gate accepts a null post-dispatch state read for it.
-  if ((t.effects ?? []).some((e) => Array.isArray(e) && e[0] === 'navigate')) {
+  if (transitionNavigates(t.effects)) {
     out.navigates = true;
   }
   // Carry the declared effects through (not just derive `navigates` and

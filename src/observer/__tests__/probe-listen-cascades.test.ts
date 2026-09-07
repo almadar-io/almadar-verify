@@ -31,13 +31,343 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import type { OrbitalSchema } from '@almadar/core';
+import type { OrbitalSchema, SExpr, TraitEventListener } from '@almadar/core';
+import { asEventId } from '@almadar/core';
 import { OrbitalServerRuntime } from '@almadar/runtime/OrbitalServerRuntime';
+import { InMemoryPersistence } from '@almadar/runtime';
 import { probeListenCascades } from '../probe-listen-cascades.js';
+
+/** Owner-scoped by-id-fetch fixture shared by the two `persistence` seeding
+ *  tests below (item B): `Source` fetches `Widget` BY ID on `INIT`, guarded
+ *  on a non-empty `?id` — the exact `std-record-detail` shape
+ *  (`Almadar_LOLO.md`'s `RecordItemDetail`) whose synthesized id used to
+ *  miss every seeded row. `Widget`'s `read_policy` scopes reads to the
+ *  viewer that owns the row, so this fixture ALSO exercises the
+ *  owner-column stamping fix — an unstamped seed row fails this policy and
+ *  reports "not found" exactly like a genuinely missing row would. */
+function ownerScopedFetchApp(listenEventId?: string): OrbitalSchema {
+  return {
+    name: 'DetailApp',
+    orbitals: [
+      {
+        name: 'DetailOrbital',
+        entity: {
+          name: 'Widget',
+          persistence: 'runtime',
+          read_policy: ['=', '@entity.ownerId', '@user.id'],
+          fields: [
+            { name: 'id', type: 'string' },
+            { name: 'ownerId', type: 'relation', relation: { entity: 'Person' } },
+          ],
+        },
+        traits: [
+          {
+            name: 'Source',
+            scope: 'instance',
+            linkedEntity: 'Widget',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }, { name: 'loading' }],
+              events: [{ key: 'INIT', name: 'Init', payloadSchema: [{ name: 'id', type: 'string' }] }],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'loading',
+                  event: 'INIT',
+                  guard: ['!=', ['str/default', '@payload.id', ''], ''],
+                  effects: [
+                    ['fetch', 'Widget', { id: '@payload.id', emit: { success: 'WidgetLoaded', failure: 'WidgetLoadFailed' } }],
+                  ],
+                },
+              ],
+            },
+            emits: [
+              { event: 'WidgetLoaded', scope: 'external' },
+              { event: 'WidgetLoadFailed', scope: 'external' },
+            ],
+          },
+          {
+            name: 'Listener',
+            scope: 'instance',
+            linkedEntity: 'Widget',
+            stateMachine: {
+              states: [{ name: 'active', isInitial: true }],
+              events: [{ key: 'RECEIVED', name: 'Received' }],
+              transitions: [{ from: 'active', to: 'active', event: 'RECEIVED', effects: [['emit', 'DONE', {}]] }],
+            },
+            emits: [{ event: 'DONE', scope: 'external' }],
+            listens: [
+              {
+                event: 'WidgetLoaded',
+                triggers: 'RECEIVED',
+                scope: 'external',
+                source: { kind: 'trait', trait: 'Source' },
+                ...(listenEventId === undefined ? {} : { eventId: asEventId(listenEventId) }),
+              },
+            ],
+          },
+        ],
+        pages: [],
+      },
+      // `ownerFieldsFromSchema` only credits `Widget.ownerId` as an owner
+      // column once SOME entity in the schema is tagged `[identity]` — the
+      // schema-wide gate `identityEntityNames` checks before scanning any
+      // relation field at all.
+      {
+        name: 'PersonOrbital',
+        entity: { name: 'Person', identity: true, persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+        traits: [],
+        pages: [],
+      },
+    ],
+  };
+}
+
+/**
+ * Whole-row `persist update` fixture (item B4-V4, residual off
+ * `std-notes`' `NotePersistor.DO_UPDATE`): the transition writes
+ * `(persist update Item @payload.data {...})`, and `data`'s declared
+ * payload schema is `type: object` + `properties` WITH NO `entity` marker
+ * — exactly what `orbital-compiler`'s `resolve_sentinel_fields` produces
+ * when resolving a payload field typed with the `@entity` self-reference
+ * sigil (`data : @entity!` in `.lolo`, the real `std-note.lolo` shape):
+ * `field_type`/`properties` get set, `PayloadField.entity` never does
+ * (unlike the lowering-time stamp for a literal `row: Item` annotation).
+ * `Item`'s owner-scoped `update_policy` means a payload whose `id`/`authorId`
+ * are the probe's own random synthesis matches no real row and is denied —
+ * this is the live failure `probeListenCascades` was reporting for
+ * `NoteBrowseList`/`NoteFavoritesList`/`NoteDoc` (`listen-source-cannot-emit
+ * … did not emit NOTE_UPDATED (guard rejected the synthesized payload)`)
+ * until `findPersistWholeRowField` patched the seeded row's identity onto
+ * the dispatched payload's whole-row field.
+ */
+function wholeRowPersistUpdateApp(): OrbitalSchema {
+  return {
+    name: 'ItemApp',
+    orbitals: [
+      {
+        name: 'ItemOrbital',
+        entity: {
+          name: 'Item',
+          persistence: 'runtime',
+          update_policy: ['=', ['object/get', '@entity', 'authorId'], '@user.id'],
+          fields: [
+            { name: 'id', type: 'string' },
+            { name: 'authorId', type: 'relation', relation: { entity: 'Person' } },
+            { name: 'title', type: 'string' },
+          ],
+        },
+        traits: [
+          {
+            name: 'Persistor',
+            scope: 'instance',
+            linkedEntity: 'Item',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [
+                {
+                  key: 'DO_UPDATE',
+                  name: 'Do Update',
+                  payloadSchema: [
+                    {
+                      name: 'data',
+                      type: 'object',
+                      required: true,
+                      properties: [
+                        { name: 'id', type: 'string', required: true },
+                        { name: 'authorId', type: 'relation' },
+                        { name: 'title', type: 'string', required: true },
+                      ],
+                    },
+                  ],
+                },
+              ],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'idle',
+                  event: 'DO_UPDATE',
+                  effects: [
+                    ['persist', 'update', 'Item', '@payload.data', { emit: { success: 'ITEM_UPDATED' } }],
+                  ],
+                },
+              ],
+            },
+            emits: [{ event: 'ITEM_UPDATED', scope: 'external' }],
+          },
+          {
+            name: 'Listener',
+            scope: 'instance',
+            linkedEntity: 'Item',
+            stateMachine: {
+              states: [{ name: 'active', isInitial: true }],
+              events: [{ key: 'RECEIVED', name: 'Received' }],
+              transitions: [{ from: 'active', to: 'active', event: 'RECEIVED', effects: [['emit', 'DONE', {}]] }],
+            },
+            emits: [{ event: 'DONE', scope: 'external' }],
+            listens: [
+              {
+                event: 'ITEM_UPDATED',
+                triggers: 'RECEIVED',
+                scope: 'external',
+                source: { kind: 'trait', trait: 'Persistor' },
+              },
+            ],
+          },
+        ],
+        pages: [],
+      },
+      // Same identity-tagging requirement as `ownerScopedFetchApp` above:
+      // `ownerFieldsFromSchema` only credits `Item.authorId` as an owner
+      // column once SOME entity in the schema is `[identity]`.
+      {
+        name: 'PersonOrbital',
+        entity: { name: 'Person', identity: true, persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+        traits: [],
+        pages: [],
+      },
+    ],
+  };
+}
+
+describe('probeListenCascades — persist whole-row payload with no PayloadField.entity marker (B4-V4)', () => {
+  it('patches the seeded row identity onto a DO_UPDATE whole-row field and reports 0 findings', async () => {
+    const schema = wholeRowPersistUpdateApp();
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.probed).toBe(1);
+    expect(result.findings).toEqual([]);
+  });
+});
+
+/**
+ * Role-only persist-create fixture (B4-V5, off `std-time-tracking`'s real
+ * `Employee [identity] { @create ["=", @user.role, "approver"] }` shape —
+ * no owner column, the access check is purely `@user.role`). The probe's
+ * own default viewer carries a deliberately EMPTY `role` (`DEFAULT_VIEWER`,
+ * `@almadar/core`'s doc), so dispatching unchanged denies the persist
+ * before it ever emits — `roleSatisfyingPolicy` must derive a role from the
+ * policy's OWN literal, intersected with `Employee.role`'s declared
+ * vocabulary, and the probe must switch the dispatch to it.
+ */
+function roleOnlyPersistCreateApp(createPolicy: SExpr): OrbitalSchema {
+  return {
+    name: 'EmployeeApp',
+    orbitals: [
+      {
+        name: 'EmployeeOrbital',
+        entity: {
+          name: 'Employee',
+          identity: true,
+          persistence: 'runtime',
+          create_policy: createPolicy,
+          fields: [
+            { name: 'id', type: 'string' },
+            { name: 'name', type: 'string' },
+            { name: 'role', type: 'string', values: ['employee', 'approver'] },
+          ],
+        },
+        traits: [
+          {
+            name: 'Persistor',
+            scope: 'instance',
+            linkedEntity: 'Employee',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [
+                {
+                  key: 'DO_CREATE',
+                  name: 'Do Create',
+                  payloadSchema: [
+                    {
+                      name: 'data',
+                      type: 'object',
+                      required: true,
+                      properties: [
+                        { name: 'id', type: 'string', required: true },
+                        { name: 'name', type: 'string', required: true },
+                      ],
+                    },
+                  ],
+                },
+              ],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'idle',
+                  event: 'DO_CREATE',
+                  effects: [
+                    ['persist', 'create', 'Employee', '@payload.data', { emit: { success: 'EMPLOYEE_CREATED' } }],
+                  ],
+                },
+              ],
+            },
+            emits: [{ event: 'EMPLOYEE_CREATED', scope: 'external' }],
+          },
+          {
+            name: 'Listener',
+            scope: 'instance',
+            linkedEntity: 'Employee',
+            stateMachine: {
+              states: [{ name: 'active', isInitial: true }],
+              events: [{ key: 'RECEIVED', name: 'Received' }],
+              transitions: [{ from: 'active', to: 'active', event: 'RECEIVED', effects: [['emit', 'DONE', {}]] }],
+            },
+            emits: [{ event: 'DONE', scope: 'external' }],
+            listens: [
+              {
+                event: 'EMPLOYEE_CREATED',
+                triggers: 'RECEIVED',
+                scope: 'external',
+                source: { kind: 'trait', trait: 'Persistor' },
+              },
+            ],
+          },
+        ],
+        pages: [],
+      },
+    ],
+  };
+}
+
+describe('probeListenCascades — role-only persist policy (B4-V5)', () => {
+  it('synthesizes an approver viewer for the dispatch and reports 0 findings', async () => {
+    const schema = roleOnlyPersistCreateApp(['=', '@user.role', 'approver']);
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.probed).toBe(1);
+    expect(result.findings).toEqual([]);
+    // The role switch is scoped to the one dispatch it was synthesized for —
+    // the runtime's own default viewer is left exactly as the probe found
+    // it (DEFAULT_VIEWER's deliberately empty role).
+    expect(runtime.getDefaultUser()?.role).toBe('');
+  });
+
+  it('a policy accepting no roster role is reported, never forced green', async () => {
+    // "owner" is not a declared member of `Employee.role`'s vocabulary
+    // (`["employee", "approver"]`) — structurally no roster member can ever
+    // satisfy this policy, so `roleSatisfyingPolicy` must return `undefined`
+    // and the probe must report the honest denial, not synthesize past it.
+    const schema = roleOnlyPersistCreateApp(['=', '@user.role', 'owner']);
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.probed).toBe(1);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.check).toBe('listen-source-cannot-emit');
+  });
+});
 
 describe('probeListenCascades — synthetic fixtures', () => {
   it('reports 0 findings when the source emits and the listener\'s cascade fires', async () => {
-    const schema = {
+    const schema: OrbitalSchema = {
       name: 'PingApp',
       orbitals: [
         {
@@ -73,7 +403,7 @@ describe('probeListenCascades — synthetic fixtures', () => {
           pages: [],
         },
       ],
-    } as unknown as OrbitalSchema;
+    };
 
     const runtime = new OrbitalServerRuntime({ debug: false });
     await runtime.register(schema);
@@ -84,7 +414,7 @@ describe('probeListenCascades — synthetic fixtures', () => {
   });
 
   it('reports listen-source-cannot-emit when the declared source never emits the event', async () => {
-    const schema = {
+    const schema: OrbitalSchema = {
       name: 'DeadWireApp',
       orbitals: [
         {
@@ -122,7 +452,7 @@ describe('probeListenCascades — synthetic fixtures', () => {
           pages: [],
         },
       ],
-    } as unknown as OrbitalSchema;
+    };
 
     const runtime = new OrbitalServerRuntime({ debug: false });
     await runtime.register(schema);
@@ -133,6 +463,330 @@ describe('probeListenCascades — synthetic fixtures', () => {
     expect(result.findings[0]?.check).toBe('listen-source-cannot-emit');
     expect(result.findings[0]?.trait).toBe('Listener');
     expect(result.findings[0]?.sourceTrait).toBe('Source');
+  });
+
+  // The three fixtures below are the `producibleEvents`/embed-host
+  // convergence (wiring-lint's own emitter oracle): a source that can
+  // structurally produce the event by a mechanism this probe cannot
+  // dispatch-and-observe server-side (only a literal `emit` effect or a
+  // fetch/persist success|failure option lands in `response.emittedEvents`)
+  // must SKIP rather than report `listen-source-cannot-emit` — that static
+  // side is already proven by `lintWiring`'s `listens-source-never-emits`.
+
+  it('reports 0 findings when the source declares the event only in emits[] (no literal effect emit)', async () => {
+    const schema: OrbitalSchema = {
+      name: 'ContractOnlyApp',
+      orbitals: [
+        {
+          name: 'ContractOnlyOrbital',
+          entity: { name: 'Ping', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+          traits: [
+            {
+              // `emits` names PING but no transition anywhere literally
+              // emits it — structurally producible (the same contract
+              // `producibleEvents`/`listens-source-never-emits` trust), but
+              // nothing this probe can dispatch and observe.
+              name: 'Source',
+              scope: 'instance',
+              linkedEntity: 'Ping',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'FIRE', name: 'Fire' }],
+                transitions: [{ from: 'idle', to: 'idle', event: 'FIRE', effects: [['set', '@entity.id', '@payload.id']] }],
+              },
+              emits: [{ event: 'PING', scope: 'external' }],
+            },
+            {
+              name: 'Listener',
+              scope: 'instance',
+              linkedEntity: 'Ping',
+              stateMachine: {
+                states: [{ name: 'active', isInitial: true }],
+                events: [{ key: 'TICK', name: 'Tick' }],
+                transitions: [{ from: 'active', to: 'active', event: 'TICK', effects: [['emit', 'RECEIVED', {}]] }],
+              },
+              emits: [{ event: 'RECEIVED', scope: 'external' }],
+              listens: [
+                { event: 'PING', triggers: 'TICK', scope: 'external', source: { kind: 'trait', trait: 'Source' } },
+              ],
+            },
+          ],
+          pages: [],
+        },
+      ],
+    };
+
+    const runtime = new OrbitalServerRuntime({ debug: false });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema);
+    expect(result.probed).toBe(0);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('reports 0 findings when the source produces the event via a registry event-outlet prop (searchEvent)', async () => {
+    const schema: OrbitalSchema = {
+      name: 'SearchOutletApp',
+      orbitals: [
+        {
+          name: 'SearchOutletOrbital',
+          entity: { name: 'Ping', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+          traits: [
+            {
+              // `dashboard-layout`'s `searchEvent` prop is a registry
+              // event-outlet (`kind: "event-ref"`, `eventKeyPropsOf`) —
+              // declared, real, user-clickable, but a client bus emit this
+              // server-side probe cannot dispatch and observe.
+              name: 'AppLayout',
+              scope: 'instance',
+              linkedEntity: 'Ping',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'FIRE', name: 'Fire' }],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'idle',
+                    event: 'FIRE',
+                    effects: [['render-ui', 'main', { type: 'dashboard-layout', searchEvent: 'NOTE_SEARCH' }]],
+                  },
+                ],
+              },
+            },
+            {
+              name: 'Listener',
+              scope: 'instance',
+              linkedEntity: 'Ping',
+              stateMachine: {
+                states: [{ name: 'active', isInitial: true }],
+                events: [{ key: 'REFETCH_QUERY', name: 'Refetch' }],
+                transitions: [{ from: 'active', to: 'active', event: 'REFETCH_QUERY', effects: [['emit', 'RECEIVED', {}]] }],
+              },
+              emits: [{ event: 'RECEIVED', scope: 'external' }],
+              listens: [
+                {
+                  event: 'NOTE_SEARCH',
+                  triggers: 'REFETCH_QUERY',
+                  scope: 'external',
+                  source: { kind: 'trait', trait: 'AppLayout' },
+                },
+              ],
+            },
+          ],
+          pages: [],
+        },
+      ],
+    };
+
+    const runtime = new OrbitalServerRuntime({ debug: false });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema);
+    expect(result.probed).toBe(0);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('reports 0 findings when the event is produced by an embedded child (compiler-lowered inline button) under the source', async () => {
+    const schema: OrbitalSchema = {
+      name: 'EmbedApp',
+      orbitals: [
+        {
+          name: 'EmbedOrbital',
+          entity: { name: 'Ping', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+          traits: [
+            {
+              // The host's own render tree carries only the opaque
+              // `@trait.X` reference — the `action:` producer lives on the
+              // CHILD, exactly what a JSX inline `<Trait.traits.X
+              // action={E} />` embed lowers to (`InlineButtonRenderN`).
+              name: 'Catalog',
+              scope: 'instance',
+              linkedEntity: 'Ping',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'FIRE', name: 'Fire' }],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'idle',
+                    event: 'FIRE',
+                    effects: [['render-ui', 'main', { type: 'stack', children: ['@trait.InlineButtonRender1'] }]],
+                  },
+                ],
+              },
+            },
+            {
+              name: 'InlineButtonRender1',
+              scope: 'instance',
+              linkedEntity: 'Ping',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'FIRE', name: 'Fire' }],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'idle',
+                    event: 'FIRE',
+                    effects: [['render-ui', 'main', { type: 'button', action: 'CREATE_DRAFT', label: 'New' }]],
+                  },
+                ],
+              },
+            },
+            {
+              name: 'Persistor',
+              scope: 'instance',
+              linkedEntity: 'Ping',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'DO_CREATE', name: 'DoCreate' }],
+                transitions: [{ from: 'idle', to: 'idle', event: 'DO_CREATE', effects: [['emit', 'CREATED', {}]] }],
+              },
+              emits: [{ event: 'CREATED', scope: 'external' }],
+              listens: [
+                {
+                  event: 'CREATE_DRAFT',
+                  triggers: 'DO_CREATE',
+                  scope: 'external',
+                  // Declared source is the HOST (Catalog), not the embedded
+                  // child — embedded chrome emits under its embedder's
+                  // scope.
+                  source: { kind: 'trait', trait: 'Catalog' },
+                },
+              ],
+            },
+          ],
+          pages: [],
+        },
+      ],
+    };
+
+    const runtime = new OrbitalServerRuntime({ debug: false });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema);
+    expect(result.probed).toBe(0);
+    expect(result.findings).toEqual([]);
+  });
+});
+
+/**
+ * Self-identity fixture (B1-V item C): `Employee [identity]` declares
+ * `@read (or (= @user.role "approver") (= (object/get @entity id) @user.id))` —
+ * `std-time-tracking`'s actual shape. The row's OWN `id` is the ownership
+ * key, not a relation column, so the seeded row's `id` must equal the
+ * viewer's id (`ownerFieldsFromSchema`'s self-identity arm) or the by-id
+ * fetch's access check filters it out exactly like a genuinely missing row.
+ */
+function selfIdentityFetchApp(): OrbitalSchema {
+  return {
+    name: 'EmployeeApp',
+    orbitals: [
+      {
+        name: 'EmployeeOrbital',
+        entity: {
+          name: 'Employee',
+          identity: true,
+          persistence: 'runtime',
+          // The real `.lolo` -> `.orb` shape (verified against
+          // `packages/almadar-behaviors/behaviors/registry/app/organisms/
+          // std-time-tracking.orb`): `(object/get @entity id)`, not the
+          // bare dotted string.
+          read_policy: ['or', ['=', '@user.role', 'approver'], ['=', ['object/get', '@entity', 'id'], '@user.id']],
+          fields: [{ name: 'id', type: 'string' }, { name: 'name', type: 'string' }],
+        },
+        traits: [
+          {
+            name: 'Source',
+            scope: 'instance',
+            linkedEntity: 'Employee',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }, { name: 'loading' }],
+              events: [{ key: 'INIT', name: 'Init', payloadSchema: [{ name: 'id', type: 'string' }] }],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'loading',
+                  event: 'INIT',
+                  guard: ['!=', ['str/default', '@payload.id', ''], ''],
+                  effects: [
+                    ['fetch', 'Employee', { id: '@payload.id', emit: { success: 'EmployeeLoaded', failure: 'EmployeeLoadFailed' } }],
+                  ],
+                },
+              ],
+            },
+            emits: [
+              { event: 'EmployeeLoaded', scope: 'external' },
+              { event: 'EmployeeLoadFailed', scope: 'external' },
+            ],
+          },
+          {
+            name: 'Listener',
+            scope: 'instance',
+            linkedEntity: 'Employee',
+            stateMachine: {
+              states: [{ name: 'active', isInitial: true }],
+              events: [{ key: 'RECEIVED', name: 'Received' }],
+              transitions: [{ from: 'active', to: 'active', event: 'RECEIVED', effects: [['emit', 'DONE', {}]] }],
+            },
+            emits: [{ event: 'DONE', scope: 'external' }],
+            listens: [
+              {
+                event: 'EmployeeLoaded',
+                triggers: 'RECEIVED',
+                scope: 'external',
+                source: { kind: 'trait', trait: 'Source' },
+              },
+            ],
+          },
+        ],
+        pages: [],
+      },
+    ],
+  };
+}
+
+describe('probeListenCascades — self-identity seeding (B1-V item C)', () => {
+  it('stamps the seeded row\'s own id to the viewer id and reports 0 findings', async () => {
+    const schema = selfIdentityFetchApp();
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.findings).toEqual([]);
+  });
+});
+
+describe('probeListenCascades — persistence seeding (item B)', () => {
+  it('with a persistence adapter, an owner-scoped by-id fetch hits the seeded row and reports 0 findings', async () => {
+    const schema = ownerScopedFetchApp();
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('seeding does not mask a genuinely broken bus route (wrong eventId still reports listen-cascade-not-delivered)', async () => {
+    // Same owner-scoped by-id fetch (so WidgetLoaded genuinely fires this
+    // time — the "cannot emit" gate is not what's under test here) but the
+    // listen carries a WRONG explicit `eventId`, bypassing
+    // `resolveSourceEmitEventId` exactly like the vim-mode regression
+    // below: the emitter's own `emits[]` contract stamps no `eventId`, so
+    // it routes under the bare event name, while the listener now
+    // subscribes under an id key nothing emits under.
+    const schema = ownerScopedFetchApp('evt_01WRONGWRONGWRONGWRONGWRO');
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    const broken = result.findings.find(
+      (f) => f.check === 'listen-cascade-not-delivered' && f.event === 'WidgetLoaded' && f.triggers === 'RECEIVED',
+    );
+    expect(broken).toBeDefined();
+    expect(broken?.sourceTrait).toBe('Source');
   });
 });
 
@@ -169,13 +823,11 @@ function resolveViaCli(schema: object): OrbitalSchema {
  *  entry on the resolved schema, structurally (source.trait === 'Shell',
  *  event === 'PLUGIN_ENABLED') — not by trait name, so this stays correct
  *  if VimStudioBridge is ever renamed. */
-function findPluginEnabledListen(
-  schema: OrbitalSchema,
-): { event: string; eventId?: string; triggers: string; source?: { kind: string; trait?: string } } | undefined {
-  for (const orb of schema.orbitals as unknown as Array<{ traits: unknown[] }>) {
+function findPluginEnabledListen(schema: OrbitalSchema): TraitEventListener | undefined {
+  for (const orb of schema.orbitals) {
     for (const ref of orb.traits) {
-      const trait = ref as { listens?: Array<{ event: string; eventId?: string; triggers: string; source?: { kind: string; trait?: string } }> };
-      for (const listen of trait.listens ?? []) {
+      if (typeof ref !== 'object' || !('listens' in ref)) continue;
+      for (const listen of ref.listens ?? []) {
         if (listen.event === 'PLUGIN_ENABLED' && listen.source?.kind === 'trait' && listen.source.trait === 'Shell') {
           return listen;
         }
@@ -214,7 +866,7 @@ describe.skipIf(!canRunRealPlugin)('probeListenCascades — vim-mode plugin (rea
     // resolveSourceEmitEventId(...)` short-circuits on this now-wrong value,
     // so the listener subscribes under a bus key the emitter never uses —
     // exactly the pre-fix routing-key mismatch.
-    (listen as { eventId?: string }).eventId = 'evt_01WRONGWRONGWRONGWRONGWRO';
+    if (listen) listen.eventId = asEventId('evt_01WRONGWRONGWRONGWRONGWRO');
 
     const runtime = new OrbitalServerRuntime({ mode: 'mock', debug: false });
     await runtime.register(resolved);

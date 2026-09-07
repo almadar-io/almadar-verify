@@ -102,6 +102,17 @@ export interface FrameCause {
    */
   bareDispatchSkipped?: string;
   /**
+   * I-24: set when the DOM driver's `triggerDOM` returned `'no-row-affordance'`
+   * — a `crud-edit`/`crud-delete` step whose row action has NO DOM affordance
+   * anywhere (row-scoped click, unscoped fallback, and the crud-delete
+   * synthetic-dispatch recovery all missed). Carries the human-readable
+   * reason, mirrored verbatim into `Frame.errors` (severity error) as the
+   * `crud-affordance-absent` finding — a real product defect (a removed
+   * `itemActions`/`browseItemActions` affordance), never a silent bus
+   * fallback the way `bareDispatchSkipped` is.
+   */
+  crudAffordanceAbsent?: string;
+  /**
    * v3.0.0: per-entity row-count delta the originating step expects
    * the observer to see in `frame.entityChanges` after settle.
    * Carried from `ExtendedWalkStep.expectedRowDelta`.

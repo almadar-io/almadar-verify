@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { EntityRow, VerificationSnapshot } from '@almadar/core';
+import type { EffectTrace, EntityRow, VerificationSnapshot } from '@almadar/core';
 import { assertDataMutation } from '../assert-data-mutation.js';
 import type { Frame, FrameCause, EntityChange } from '../../frame/types.js';
 
@@ -41,6 +41,7 @@ function frame(
   index: number,
   cause: FrameCause,
   entityChanges: ReadonlyArray<EntityChange>,
+  effectResults: ReadonlyArray<EffectTrace> = [],
 ): Frame {
   return {
     index,
@@ -55,7 +56,7 @@ function frame(
     consoleDelta: { added: [], newErrors: 0, newWarnings: 0 },
     eventLogDelta: { added: [] },
     entityChanges,
-    effectResults: [],
+    effectResults,
     serverResponse: null,
     screenshotPath: null,
     accepted: true,
@@ -63,6 +64,19 @@ function frame(
     warnings: [],
   };
 }
+
+const persistEffect = (
+  entityName: string,
+  outcome: NonNullable<EffectTrace['outcome']>,
+  extra?: Partial<EffectTrace>,
+): EffectTrace => ({
+  type: 'persist',
+  entityName,
+  args: [],
+  status: outcome === 'success' ? 'executed' : 'failed',
+  outcome,
+  ...extra,
+});
 
 const createChange = (entityName: string, addedRows: ReadonlyArray<EntityRow>): EntityChange => ({
   entityName,
@@ -163,5 +177,139 @@ describe('assertDataMutation', () => {
     expect(verdicts[0].passed).toBe(true);
     expect(verdicts[1].passed).toBe(false);
     expect(verdicts[2].passed).toBe(true);
+  });
+
+  // C1-V1: the persist effect's own recorded outcome is consulted before
+  // the row-delta fallback (only reached when no expectedSuccessEvent is
+  // declared on the cause — the emit-cascade check still wins first).
+  describe('persist-effect outcome beats the recorded response cascade (expectedSuccessEvent declared)', () => {
+    const withSuccessEvent = (event: string, entityName: string): FrameCause => ({
+      ...dataMutationCause(event, { entityName, delta: 0 }),
+      expectedSuccessEvent: 'HelpArticleViewCounted',
+    });
+    const withResponse = (f: Frame, emittedEvents: string[]): Frame => ({
+      ...f,
+      serverResponse: {
+        orbitalName: 'HelpCenterOrbital',
+        success: true,
+        clientEffects: 0,
+        dataEntities: {},
+        emittedEvents,
+        timestamp: 1,
+      },
+    });
+
+    it('passes on a successful persist whose declared emit is missing from the recorded cascade (std-helpdesk OPEN_ARTICLE)', () => {
+      const frames: Frame[] = [
+        withResponse(
+          frame(0, withSuccessEvent('OPEN_ARTICLE', 'HelpArticle'), [], [persistEffect('HelpArticle', 'success', { action: 'update' })]),
+          ['ArticleViewed'],
+        ),
+      ];
+      const verdicts = assertDataMutation(frames);
+      expect(verdicts[0].passed).toBe(true);
+      expect(verdicts[0].detail).toMatch(/persist succeeded \(action=update\); declared HelpArticleViewCounted not in the recorded response cascade \[ArticleViewed\]/);
+    });
+
+    it('fails on a denied persist even when the declared emit IS in the cascade', () => {
+      const frames: Frame[] = [
+        withResponse(
+          frame(0, withSuccessEvent('OPEN_ARTICLE', 'HelpArticle'), [], [persistEffect('HelpArticle', 'denied', { error: 'no row key' })]),
+          ['HelpArticleViewCounted'],
+        ),
+      ];
+      const verdicts = assertDataMutation(frames);
+      expect(verdicts[0].passed).toBe(false);
+      expect(verdicts[0].detail).toMatch(/persist denied: no row key/);
+    });
+
+    it('with no outcome record, the cascade decides', () => {
+      const pass = assertDataMutation([withResponse(frame(0, withSuccessEvent('OPEN_ARTICLE', 'HelpArticle'), []), ['HelpArticleViewCounted'])]);
+      expect(pass[0].passed).toBe(true);
+      const fail = assertDataMutation([withResponse(frame(0, withSuccessEvent('OPEN_ARTICLE', 'HelpArticle'), []), ['ArticleViewed'])]);
+      expect(fail[0].passed).toBe(false);
+      expect(fail[0].detail).toMatch(/expected server to emit 'HelpArticleViewCounted' but cascade was \[ArticleViewed\]/);
+    });
+  });
+
+  describe('persist-effect outcome (no expectedSuccessEvent declared)', () => {
+    it('fails unconditionally on a denied persist, even when the row delta looks correct', () => {
+      const frames: Frame[] = [
+        frame(
+          0,
+          dataMutationCause('SAVE', { entityName: 'CartItem', delta: 1 }),
+          [createChange('CartItem', [{ id: '1', name: 'Apple' }])],
+          [persistEffect('CartItem', 'denied', { error: 'access denied' })],
+        ),
+      ];
+      const verdicts = assertDataMutation(frames);
+      expect(verdicts[0].passed).toBe(false);
+      expect(verdicts[0].detail).toMatch(/persist denied: access denied/);
+    });
+
+    it('fails unconditionally on a failed persist, even when the row delta looks correct', () => {
+      const frames: Frame[] = [
+        frame(
+          0,
+          dataMutationCause('SAVE', { entityName: 'CartItem', delta: 1 }),
+          [createChange('CartItem', [{ id: '1', name: 'Apple' }])],
+          [persistEffect('CartItem', 'failed', { error: 'backend unavailable' })],
+        ),
+      ];
+      const verdicts = assertDataMutation(frames);
+      expect(verdicts[0].passed).toBe(false);
+      expect(verdicts[0].detail).toMatch(/persist failed: backend unavailable/);
+    });
+
+    it('passes on a successful persist even when the row delta looks wrong', () => {
+      const frames: Frame[] = [
+        frame(
+          0,
+          dataMutationCause('SAVE', { entityName: 'CartItem', delta: 1 }),
+          [createChange('CartItem', [])], // delta 0 — would fail the row-delta check
+          [persistEffect('CartItem', 'success', { action: 'create' })],
+        ),
+      ];
+      const verdicts = assertDataMutation(frames);
+      expect(verdicts[0].passed).toBe(true);
+      expect(verdicts[0].detail).toMatch(/persist succeeded \(action=create\)/);
+    });
+
+    it('prefers the outcome-bearing server record over the trait\'s outcome-less reconstruction (bridge-mode merge order)', () => {
+      // `lastEffectResultsFor` lists the trait's reconstructed traces first
+      // (`status: 'executed'`, no outcome) and the synthetic `server:<orbital>`
+      // traces after — the real outcome must win, not the first match.
+      const reconstructed: EffectTrace = {
+        type: 'persist',
+        entityName: 'CartItem',
+        args: ['update', 'CartItem', '@entity'],
+        status: 'executed',
+      };
+      const frames: Frame[] = [
+        frame(
+          0,
+          dataMutationCause('SAVE', { entityName: 'CartItem', delta: 0 }),
+          [],
+          [reconstructed, persistEffect('CartItem', 'denied', { action: 'update', error: 'resolved no row key' })],
+        ),
+      ];
+      const verdicts = assertDataMutation(frames);
+      expect(verdicts[0].passed).toBe(false);
+      expect(verdicts[0].detail).toMatch(/persist denied: resolved no row key/);
+    });
+
+    it('falls back to row-delta when no persist effect record names the entity', () => {
+      const frames: Frame[] = [
+        frame(
+          0,
+          dataMutationCause('SAVE', { entityName: 'CartItem', delta: 1 }),
+          [createChange('CartItem', [{ id: '1' }])],
+          [persistEffect('OtherEntity', 'success')],
+        ),
+      ];
+      const verdicts = assertDataMutation(frames);
+      expect(verdicts[0].passed).toBe(true);
+      expect(verdicts[0].detail).toMatch(/delta = \+1 as expected/);
+    });
   });
 });

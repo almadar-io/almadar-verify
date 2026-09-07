@@ -19,11 +19,12 @@
 
 // node:fs is loaded dynamically below so browser bundles don't pull it in.
 import { collectEmbeddedTraitReferrers } from '@almadar/core';
-import type { EntityRow, EventPayload } from '@almadar/core';
+import type { EntityData, EntityRow, EventPayload, Orbital } from '@almadar/core';
 import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
 import type { Frame } from '../frame/types.js';
-import { tick } from '../driver/tick.js';
+import { tick, resolveEstablishRowPayload } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
+import { pickTargetRow } from '../planner/internal/self-relation-fields.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { collectEntityFields } from '../planner/internal/payload-synth.js';
@@ -124,6 +125,13 @@ export async function runVerification<Ctx extends DriverContext>(
 
   // ── Derive everything from the parsed orbital ─────────────────────
   const traits = extractTraitWalkConfigs(input.orbital);
+  // C1-V15 item A: `establishesRow.traitName` (guard-precondition.ts) may
+  // name a SIBLING trait to dispatch the preamble against, not the guarded
+  // step's own trait — this map is how the `beforeReplay` block below
+  // resolves that trait's own initial state (the preamble is always a
+  // dispatch FROM that trait's own boot state, same as `trait.initialState`
+  // is for the same-trait C1-V8/V14 shape).
+  const traitWalkConfigsByName = new Map(traits.map((t) => [t.traitName, t]));
 
   // Frontier scope: traits cloned from a `uses[]` import carry the
   // resolve/inline phase's `sourceBehavior` stamp — their topology is
@@ -162,11 +170,17 @@ export async function runVerification<Ctx extends DriverContext>(
   const persistWriteByKey = collectPersistWriteTransitions(input.orbital);
   const entityIdBindingByTrait = new Map<string, ReadonlyMap<string, EntityIdBindingSource>>();
   const linkedEntityByTrait = new Map<string, string>();
-  for (const { trait } of eachInlineTrait(input.orbital)) {
+  // Trait name → its declaring `Orbital`, so `planEmitSweep` can call the
+  // same `dispatchNavigates` oracle `planClickPathSamples`/`planWalk` use
+  // (needs the full schema + the trait's own orbital to resolve a
+  // listener-cascade navigate, not just the trait's own transitions).
+  const orbByTraitName = new Map<string, Orbital>();
+  for (const { orb, trait } of eachInlineTrait(input.orbital)) {
     if (trait.linkedEntity !== undefined) linkedEntityByTrait.set(trait.name, trait.linkedEntity);
     if (traitHasEntityIdBinding(trait)) {
       entityIdBindingByTrait.set(trait.name, collectEntityIdBindingTransitions(trait));
     }
+    orbByTraitName.set(trait.name, orb);
   }
 
   // Gap #13: trait-name → owning-orbital-name map. Threaded into `tick`
@@ -236,7 +250,8 @@ export async function runVerification<Ctx extends DriverContext>(
       const emits = emitSweepDeclarations(trait);
       if (emits.length > 0) {
         collectExtension(
-          planEmitSweep({ trait, emits }).filter((step) => acceptedEvents.has(step.event)),
+          planEmitSweep({ trait, emits, schema: input.orbital, orb: orbByTraitName.get(trait.traitName) })
+            .filter((step) => acceptedEvents.has(step.event)),
         );
       }
     }
@@ -314,6 +329,18 @@ export async function runVerification<Ctx extends DriverContext>(
     // plan actually contains a write that needs a pre-existing row
     // (`update`/`delete`, never `create`) AND the trait can legitimately
     // bind one; otherwise this is a wasted round-trip.
+    //
+    // C1-V14 (F3): `driver.snapshot`'s `entityData` is the BROWSER'S
+    // rendered subset — a page showing zero rows of the linked entity
+    // yields no seed row even when the store has one server-side, leaving
+    // the reconcile hop's `@entity.id` binding on a SYNTHESIZED id
+    // (`persist failed: Entity X with id <fake> not found`). Prefer the
+    // driver's server-truth row set (`listEntityRows`) when available;
+    // fall back to the snapshot exactly as before when it's absent or
+    // throws. Picked with the SAME `pickTargetRow` discipline `tick()`
+    // uses for every other row pick in this package (no second picker) —
+    // `serverRows === visibleRows` here reproduces the pre-existing
+    // snapshot-only behavior exactly (see `pickTargetRow`'s own doc).
     const idBindings = entityIdBindingByTrait.get(trait.traitName);
     const traitLinkedEntity = linkedEntityByTrait.get(trait.traitName);
     let idSeedRow: EntityRow | null = null;
@@ -325,10 +352,30 @@ export async function runVerification<Ctx extends DriverContext>(
         return persist !== undefined && persist.kind !== 'create';
       })
     ) {
-      const seedSnap = await input.driver.snapshot(ctx, null);
-      const rows = seedSnap.entityData[traitLinkedEntity];
-      idSeedRow = rows !== undefined && rows.length > 0 && rows[0].id !== undefined ? rows[0] : null;
+      let idSeedRows: ReadonlyArray<EntityRow> | undefined;
+      if (input.driver.listEntityRows !== undefined) {
+        try {
+          idSeedRows = await input.driver.listEntityRows(ctx, traitLinkedEntity);
+        } catch {
+          idSeedRows = undefined;
+        }
+      }
+      const rows = idSeedRows ?? (await input.driver.snapshot(ctx, null)).entityData[traitLinkedEntity] ?? [];
+      const pick = pickTargetRow(rows, rows, undefined);
+      idSeedRow = 'row' in pick && pick.row.id !== undefined ? pick.row : null;
     }
+
+    // C1-V9 item A: the app's own default persona, read ONCE per trait
+    // (mirrors `idSeedRow` above) so `tick()` can restore it after a
+    // `viewerRequirement`-bearing step switches away from it. Fetched
+    // only when the plan actually contains such a step AND the driver
+    // can answer — a wasted round-trip otherwise.
+    const needsPersona = plan.some(
+      (s) => s.viewerRequirement !== undefined || s.establishesRow?.viewerRequirement !== undefined,
+    );
+    const defaultPersona = needsPersona && input.driver.getPersona !== undefined
+      ? await input.driver.getPersona(ctx)
+      : undefined;
 
     log(
       `[runVerification] ${trait.traitName}: ${plan.length} steps (${baseSteps.length} base + ${extensionSteps.length} extension)${importedSource !== undefined ? ` — frontier: topology from ${importedSource} skipped` : ''}`,
@@ -389,10 +436,63 @@ export async function runVerification<Ctx extends DriverContext>(
       if (step.triggerKind !== 'auto-init') {
         await input.driver.reset(ctx);
 
+        // C1-V14 (F4): `beforeReplay` means this step's own replay path
+        // (from the trait's initial state to `step.from`) never traverses
+        // the transition that establishes this row (a BFS shortest path
+        // never revisits its own source state, so a self-loop AT the
+        // initial state is never a hop on a path to a DIFFERENT state
+        // reached FROM it — PF's `CREATE_TASK: backlog -> backlog` vs
+        // `MOVE_STAGE: in_progress -> in_progress`, replayed via
+        // `START_TASK: backlog -> in_progress`). Dispatch it HERE, as its
+        // own reconcile frame, before the replay hops below run — they
+        // (and the real step after them) need the row to already exist.
+        // Never scored as a data-mutation test (no `testKind`).
+        if (step.establishesRow?.beforeReplay === true) {
+          const preamble = step.establishesRow;
+          // C1-V15 item A: dispatch against the preamble's OWN trait when
+          // it names one (the sibling-establishes-a-guard-precondition
+          // shape) — else the guarded step's own trait, the original
+          // C1-V8/V14 same-trait shape. Either way the preamble fires FROM
+          // that trait's own initial state: a fresh `driver.reset` just ran
+          // above, so every trait in the orbital is at its own boot state.
+          const establishTraitName = preamble.traitName ?? trait.traitName;
+          const establishTraitConfig = traitWalkConfigsByName.get(establishTraitName);
+          const establishInitialState = establishTraitConfig?.initialState ?? trait.initialState;
+          let entitiesBeforePreamble: EntityData = {};
+          if (preamble.bindRowFrom !== undefined) {
+            entitiesBeforePreamble = (await input.driver.snapshot(ctx, null)).entityData;
+          }
+          const resolved = resolveEstablishRowPayload(preamble, establishTraitName, entitiesBeforePreamble, undefined);
+          const establishStep: ExtendedWalkStep = {
+            from: establishInitialState,
+            event: preamble.event,
+            to: establishInitialState,
+            guardCase: null,
+            payload: 'payload' in resolved ? resolved.payload : {},
+            // Mirrors `planReplayTo`'s own reconcile hops: not a scored
+            // test step, so guard-parity / portal-per-step observers skip
+            // it exactly like a replay hop.
+            isRepositioning: true,
+            traitName: establishTraitName,
+            triggerKind: 'reconcile',
+            coverageKey: `${establishTraitName}:${establishInitialState}+${preamble.event}->${establishInitialState}[establish-row]`,
+            ...('unreachableRow' in resolved && { unreachableRowReason: resolved.unreachableRow }),
+            ...(preamble.viewerRequirement !== undefined && { viewerRequirement: preamble.viewerRequirement }),
+          };
+          const establishFrame: Frame = await tick(input.driver, ctx, prev, establishStep, orbitalsByTrait, allowStateless, defaultPersona);
+          frames.push(establishFrame);
+          log(`  [${stepIdx + 1}/${plan.length}] establish-row (${establishTraitName}) ${establishStep.from} --${establishStep.event}--> ${establishStep.to}`);
+          prev = establishFrame;
+          if ('unreachableRow' in resolved) {
+            preconditionUnreachable = true;
+            preconditionReason = `precondition '${step.from}' unreachable — row-establishing preamble '${preamble.event}' failed: ${resolved.unreachableRow}`;
+          }
+        }
+
         // `from: '*'` fires on ANY current state — it has no precondition
         // to establish, so an empty replay path here is correct-by-design,
         // not a reachability failure.
-        if (step.from !== trait.initialState && step.from !== '*') {
+        if (!preconditionUnreachable && step.from !== trait.initialState && step.from !== '*') {
           const replayPath = planReplayTo(
             { trait, targetState: step.from },
             entityFieldsByName,
@@ -415,11 +515,12 @@ export async function runVerification<Ctx extends DriverContext>(
               },
               idBindings,
               idSeedRow,
+              persistWriteByKey.get(`${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}`)?.kind,
             );
             // Captured before `prev` is reassigned below — the entity/state
             // the dispatch actually saw, for `siblingGuardSatisfiable`.
             const beforeReconcileFrame = prev;
-            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait, allowStateless);
+            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait, allowStateless, defaultPersona);
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
             prev = reconcileFrame;
@@ -526,8 +627,13 @@ export async function runVerification<Ctx extends DriverContext>(
       // event that both `(set @entity.id @payload.id)` and persists in
       // one dispatch) — the reconcile-hop seeding above only reaches
       // binding transitions that are earlier hops on the replay path.
-      const seededStep = seedEntityIdIfBinding(step, idBindings, idSeedRow);
-      const frame: Frame = await tick(input.driver, ctx, prev, seededStep, orbitalsByTrait, allowStateless);
+      const seededStep = seedEntityIdIfBinding(
+        step,
+        idBindings,
+        idSeedRow,
+        persistWriteByKey.get(`${trait.traitName}:${step.from}+${step.event}->${step.to}`)?.kind,
+      );
+      const frame: Frame = await tick(input.driver, ctx, prev, seededStep, orbitalsByTrait, allowStateless, defaultPersona);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';
       log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
@@ -806,13 +912,20 @@ function emitSweepDeclarations(trait: TraitWalkConfig): EmitDeclaration[] {
  * that genuinely exists in the store, exactly as if a real user had
  * selected it. A no-op for every other step (`bindings`/`seedRow`
  * undefined, or the step's transition isn't a binding one).
+ *
+ * Never applied to a step whose own transition is a `persist create`: a
+ * `(set @entity.id ?id) … (persist create X @entity)` lifecycle binds the id
+ * it mints, and seeding an existing row's id there defeats the create
+ * (`Almadar_Runtime_Gaps.md` R-DATAMUTATION-CREATE-SEED-COLLISION).
  */
 function seedEntityIdIfBinding(
   step: ExtendedWalkStep,
   bindings: ReadonlyMap<string, EntityIdBindingSource> | undefined,
   seedRow: EntityRow | null,
+  stepPersistKind: 'create' | 'update' | 'delete' | 'batch' | undefined,
 ): ExtendedWalkStep {
   if (bindings === undefined || seedRow === null || seedRow.id === undefined) return step;
+  if (stepPersistKind === 'create') return step;
   const binding = bindings.get(`${step.from}+${step.event}->${step.to}`);
   if (binding === undefined) return step;
   return { ...step, payload: setPayloadPath(step.payload, binding.payloadPath, seedRow.id) };

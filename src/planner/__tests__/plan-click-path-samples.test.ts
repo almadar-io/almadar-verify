@@ -123,6 +123,49 @@ describe('planClickPathSamples', () => {
     expect(planClickPathSamples(dupe)).toHaveLength(1);
   });
 
+  it('stamps navigates: true for a click-path step whose target transition is navigate-back', () => {
+    const withBack: OrbitalSchema = {
+      ...cartWithButtons,
+      orbitals: [
+        {
+          ...cartWithButtons.orbitals[0],
+          traits: [
+            {
+              name: 'DetailAppLayout',
+              scope: 'instance',
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'INIT', name: 'Init' }, { key: 'BACK', name: 'Back' }],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'idle',
+                    event: 'INIT',
+                    effects: [
+                      ['render-ui', 'main', { type: 'button', action: 'BACK', label: 'Back' }],
+                    ],
+                  },
+                  { from: 'idle', to: 'idle', event: 'BACK', effects: [['navigate-back']] },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const steps = planClickPathSamples(withBack);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.event).toBe('BACK');
+    expect(steps[0]?.navigates).toBe(true);
+  });
+
+  it('does not stamp navigates for a click-path step whose target transition has no navigation effect', () => {
+    const steps = planClickPathSamples(cartWithButtons);
+    for (const step of steps) {
+      expect(step.navigates).toBeUndefined();
+    }
+  });
+
   it('returns [] when traits have no stateMachine', () => {
     const noSM: OrbitalSchema = {
       ...cartWithButtons,

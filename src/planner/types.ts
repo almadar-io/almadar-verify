@@ -9,11 +9,13 @@
  * @packageDocumentation
  */
 
-import type { FieldValue, ReplayStep, WalkStep } from '@almadar/core';
+import type { FieldValue, Orbital, OrbitalSchema, ReplayStep, WalkStep } from '@almadar/core';
 import type { TriggerKind } from '../frame/types.js';
 import type { TraitWalkConfig } from '../engine/types.js';
 import type { EmitDeclaration } from '../browser/catalog-probes.js';
 import type { EntityFieldDef } from '../browser/interaction.js';
+import type { ViewerRequirement } from './internal/viewer-requirement.js';
+import type { AffordanceDisabledExpr } from './internal/affordance-disabled.js';
 
 /**
  * v3.14.0 — explicit per-transition variant tag. `planWalk` emits up to
@@ -271,6 +273,271 @@ export interface ExtendedWalkStep extends WalkStep {
    * `WalkTransition.navigates`.
    */
   navigates?: boolean;
+
+  /**
+   * C1-V8 (R-PERSIST-NO-ROW-KEY-SILENT-SUCCESS, the `from === initialState`
+   * gap): a hop `tick()` must dispatch IMMEDIATELY BEFORE this step's own
+   * event, in the SAME live trait instance — no intervening `driver.reset`
+   * — so the row this step's `persist update|delete` writes to actually
+   * exists (and `@entity.id` is bound) when the write fires.
+   *
+   * Only needed when `runVerification`'s own state-topology reconcile
+   * preamble (`planReplayTo({ targetState: step.from })`, dispatched in
+   * the same reset window as the real step) never runs at all — its call
+   * site is guarded on `step.from !== trait.initialState && step.from !==
+   * '*'`, so a trait whose lifecycle creates a row FROM its own initial
+   * state and then mutates it FROM that same state (PF's
+   * `CREATE_TASK -> backlog` / `START_TASK: backlog -> in_progress`
+   * shape) gets no reconcile preamble at all — reachability is trivially
+   * satisfied (`from === initialState`), but the row was never created.
+   *
+   * `planDataMutationTests` populates this for `step.from === trait.
+   * initialState`, AND (C1-V14, F4 — generalizing C1-V8) for a `step.from`
+   * the pipeline's reconcile preamble DOES walk to but whose replay path
+   * never actually TRAVERSES the row-establishing transition: a BFS
+   * shortest path never revisits its own source state, so a self-loop AT
+   * the initial state (PF's `CREATE_TASK: backlog -> backlog`) is never a
+   * hop on the path to a state reached FROM that same initial state (PF's
+   * `MOVE_STAGE: in_progress -> in_progress`, replayed via `START_TASK:
+   * backlog -> in_progress`) — the "the existing reconcile mechanism
+   * already establishes the row" assumption this doc used to state
+   * unconditionally is FALSE for that shape. `planRowEstablishPreamble`
+   * detects it by computing the same `planReplayTo` path the pipeline
+   * will walk and checking whether an id-binding transition
+   * (`collectEntityIdBindingTransitions`) or the row-creating hop itself
+   * sits on it; when neither does, it falls through to the SAME two
+   * disjuncts evaluated at the trait's INITIAL state and marks the result
+   * `beforeReplay: true` (see that field's own doc). When `step.from`
+   * differs AND the replay path DOES traverse the establishing
+   * transition, the existing reconcile mechanism already establishes the
+   * row (it walks the SAME topology and, for the `bindRowFrom`-equivalent
+   * shape, already seeds a real row id via `entityIdBindingByTrait` /
+   * `seedEntityIdIfBinding`) — setting this field there too would double-
+   * dispatch the establishing transition.
+   *
+   * `tick()` never turns this hop into its own `Frame` when `beforeReplay`
+   * is unset/false — it must not itself be scored as a `data-mutation`
+   * test (mirrors how a `reconcile` frame carries no `testKind`); it is
+   * purely a dispatch that happens to run before the step's real one,
+   * inside the same `tick()` call. When `beforeReplay` IS `true`,
+   * `runVerification` dispatches it itself as its OWN `reconcile` frame,
+   * before the replay hops run (see that field's doc) — `tick()` must not
+   * dispatch it again inside the step.
+   */
+  establishesRow?: {
+    /** Event to dispatch as the preamble hop. */
+    event: string;
+    /**
+     * Payload for the preamble dispatch, synthesized by
+     * `planDataMutationTests` the same way it synthesizes every other
+     * data-mutation step's payload (`buildMinimalPayload` over the
+     * event's declared `payloadSchema`). Used as-is when `bindRowFrom`
+     * is undefined (the create+id-bind shape — case 1); otherwise
+     * `tick()` overwrites `payload[bindRowFrom.payloadField]` with a
+     * real row's value before dispatching (case 2).
+     */
+    payload: Record<string, FieldValue>;
+    /**
+     * Fetch/select-bound trait shape (case 2): the preamble transition
+     * binds `@entity.id` from a literal `@payload.<field>` reference
+     * (`persist-binding.ts`'s `findEntityIdSetPayloadPath`), and the
+     * planner cannot know a real row id ahead of time — only `tick()`
+     * knows, from `entitiesBefore` at dispatch. When set, `tick()` looks
+     * up the first row of `entityName` in `entitiesBefore` and merges
+     * `{[payloadField]: row[payloadField]}` into `payload`; when no such
+     * row exists at dispatch time, `tick()` fails the step closed with a
+     * `no target row` finding instead of dispatching a guaranteed-denied
+     * write.
+     */
+    bindRowFrom?: { entityName: string; payloadField: string };
+
+    /**
+     * C1-V9 item A: the viewer this preamble's OWN `persist create` needs
+     * to run as, derived from the entity's `@create` policy
+     * (`deriveViewerRequirement`). Set only when the creator establishes a
+     * row for an entity that declares a `@create` policy — `tick()`
+     * resolves it, switches persona before dispatching the preamble, and
+     * stamps `payload[owner.payloadOwnerField]` with the same resolved id
+     * so the new row self-declares ownership consistent with the switch.
+     * Governs the MAIN step's own dispatch too (same tick() call, same
+     * live row) — `step.viewerRequirement` is not consulted when this is
+     * set.
+     */
+    viewerRequirement?: ViewerRequirement;
+
+    /**
+     * C1-V14 (F4): `true` when this step's `from` is NOT the trait's
+     * initial state (or `'*'`) and the pipeline's own reconcile preamble
+     * (`planReplayTo({ targetState: step.from })`) never traverses this
+     * establishing transition on its way there — so `runVerification`
+     * must dispatch this preamble ITSELF, as its own `reconcile`-kind
+     * frame, right after `driver.reset(ctx)` and BEFORE walking the
+     * replay hops (the row must exist before those hops — and the real
+     * step after them — fire). Undefined/`false` (the original C1-V8
+     * shape: `step.from === trait.initialState`) keeps the pre-existing
+     * behavior — `tick()` dispatches it inline, immediately before the
+     * step's own event, in the SAME call. `tick()` reads this to skip its
+     * own in-step dispatch when the pipeline already sent it (never both).
+     */
+    beforeReplay?: boolean;
+
+    /**
+     * C1-V15 (item A, `guard-precondition.ts`): the trait to DISPATCH this
+     * preamble against, when it differs from the guarded step's own
+     * `traitName` — the sibling-establishes-a-guard-precondition shape
+     * (std-helpdesk's `TicketReplyPersistor.DO_CREATE -> idle when
+     * @entity.activeTicketId`, set only by a SIBLING trait's `SELECT_TICKET`).
+     * Undefined means "the same trait as the step" (the original C1-V8/V14
+     * `@entity.id` preambles, which are always same-trait). Always paired
+     * with `beforeReplay: true` when set — a sibling's post-dispatch state
+     * has no bearing on the CURRENT trait's own `tick()`-inline dispatch
+     * timing, so this shape only ever goes through `runVerification`'s own
+     * preamble dispatch, never `tick()`'s in-step one.
+     */
+    traitName?: string;
+  };
+
+  /**
+   * C1-V9 item B (R-PERSIST-NO-ROW-KEY-SILENT-SUCCESS, the persistor
+   * shape): the step's OWN persist effect reads its target row (or the
+   * row's id) directly from this top-level payload field — no preamble
+   * hop needed, `tick()` fills `payload[payloadField]` from a seeded row
+   * of `entityName` at dispatch time before firing the step itself.
+   * `wholeRow: true` means the field takes the WHOLE row object
+   * (`(persist update Note ?data)`); otherwise it takes the row's `id`
+   * (`(persist delete Note ?id)`, `{ id: ?id, … }`). Mutually exclusive
+   * with `establishesRow`/`unreachableRowReason` — see
+   * `findPersistPayloadBinding`'s doc for the three shapes detected.
+   */
+  bindRowFrom?: {
+    entityName: string;
+    payloadField: string;
+    wholeRow: boolean;
+    /**
+     * `delete` only: field names on `entityName` that relate back to
+     * `entityName` itself (`selfRelationFieldNames`). `tick()` avoids
+     * targeting a row any OTHER row references through one of these —
+     * the mock seeder's self-referential tree shape makes the
+     * structurally-default row (position 0) a root with children EVERY
+     * time, which an `onDelete: restrict` rule then rejects regardless
+     * of who the viewer is. Empty/undefined when the entity declares no
+     * self-relation (nothing to avoid).
+     */
+    avoidReferencedVia?: readonly string[];
+  };
+
+  /**
+   * C1-V9 item A: the viewer THIS step's own persist action needs to run
+   * as, derived from the target entity's declared access policy for that
+   * action (`deriveViewerRequirement`). Consulted only when
+   * `establishesRow.viewerRequirement` is undefined — a creator preamble's
+   * requirement governs the whole `tick()` call instead (see its doc).
+   * `tick()` resolves this against `entitiesBefore` (owner case) or the
+   * driver's default persona (create's `useDefaultId` case), switches
+   * persona before dispatch, and restores the default after. An empty
+   * `{}` (policy declared, nothing derivable) or a row-less owner lookup
+   * fails the frame closed with a `no-satisfying-persona` finding —
+   * never a silent dispatch under the wrong viewer.
+   */
+  viewerRequirement?: ViewerRequirement;
+
+  /**
+   * C1-V9 item C: for `crud-edit`/`crud-delete` steps (`planUserCrudFlow`),
+   * whether the DOM affordance that opens this step is a genuine ROW
+   * action — declared in an `itemActions`/`browseItemActions`-shaped
+   * config array on the rendering trait, so it is stamped with
+   * `data-row-id` once per row. `false` means the affordance is a plain
+   * single button somewhere on the page (e.g. a detail page's own action
+   * button reached via a cross-trait listener) — `Driver.triggerDOM` must
+   * not require `[data-row-id]` on it, and a miss must not be reported as
+   * `crud-affordance-absent` (a real product defect), only fall back like
+   * any ordinary step. `undefined` is treated as `true` (the default,
+   * pre-existing row-scoped behavior) for backward compatibility.
+   */
+  isRowAction?: boolean;
+
+  /**
+   * C1-V8: set instead of `establishesRow` when NEITHER a row-creating
+   * self-loop nor a row-selecting `@payload`-bound transition exists
+   * anywhere reachable from this step's `from` state — the trait never
+   * legitimately binds `@entity.id` before this persist fires, so the
+   * write cannot succeed by construction. `tick()` skips the dispatch
+   * entirely (never a silent bus dispatch, never a pass) and records this
+   * string as the frame's error — same family as `crudAffordanceAbsent`.
+   */
+  unreachableRowReason?: string;
+
+  /**
+   * C1-V11: for `crud-edit`/`crud-delete` steps (`planUserCrudFlow`) whose
+   * `targetRowId` is left undefined (the planner never knows which row
+   * exists at dispatch time), the self-relation field names
+   * (`selfRelationFieldNames`) `tick()` must avoid targeting a row that
+   * some OTHER row references through — `delete` only; always undefined
+   * for `crud-edit` (a restrict-rule self-relation blocks a DELETE, never
+   * an edit, so edit only needs SOME owned row, not an unreferenced one).
+   *
+   * `tick()` resolves the actual target row ONCE, before dispatch, via
+   * `pickBindableRow(entitiesBefore[expectedRowDelta.entityName],
+   * avoidReferencedVia, {requireUnreferenced: true when this is set and
+   * non-empty})` and threads the SAME row into three places: `targetRowId`
+   * (drives the DOM's row-scoped click), the viewer-switch `rowOverride`
+   * (so the persona switched to is THAT row's owner), and `step.payload`
+   * (so a bus-fallback dispatch carries a real id/row instead of `{}`).
+   * No candidate found (every row referenced, or none seeded) fails the
+   * frame closed with a `no-target-row` finding — same family as
+   * `unreachableRowReason` — instead of clicking the mock seeder's
+   * self-referential tree's row 0, which is a root with children EVERY
+   * time and would be rejected by the runtime's own `onDelete: restrict`
+   * rule regardless of viewer.
+   */
+  avoidReferencedVia?: readonly string[];
+
+  /**
+   * C1-V15 item B (`affordance-disabled.ts`): for `crud-edit`/`crud-delete`
+   * steps whose `targetRowId` is left undefined, the `disabled` expression
+   * governing the DOM affordance this step clicks — std-helpdesk's `RATE`
+   * button is enabled only for a resolved, unrated ticket
+   * (`disabled={(if (and (= ?data.status resolved) (not ?data.csatScore))
+   * false true)}`); clicking it while disabled is a structural no-op (DOM
+   * ✓, cascade ✗). `tick()`'s row resolution evaluates this per candidate
+   * row (`@almadar/evaluator`, the same evaluator the runtime uses) and
+   * excludes any row for which it evaluates `true` — no candidate left
+   * closes the frame with `no-target-row` naming the reason, instead of
+   * clicking a row the affordance would silently ignore. Undefined means
+   * the affordance declares no evaluable `disabled` (never disabled, or a
+   * bare boolean literal — the always-`true` case is
+   * `crud-affordance-absent`'s job, not this filter's).
+   */
+  affordanceDisabledExpr?: AffordanceDisabledExpr;
+
+  /**
+   * C1-V15 item C: for `crud-delete` steps on an entity whose seed can
+   * legitimately run out of unreferenced rows (`selfRelationFieldNames`
+   * non-empty — std-time-tracking's `Employee.seedRow` self-relation,
+   * `onDelete: restrict`), the SAME entity's own declared `crud-create`
+   * flow, reduced to its bare persist dispatch — bus-fired directly against
+   * the PERSISTOR trait (`event`/`traitName`), bypassing its own DOM/
+   * form-fill proof (that proof already runs as this walk's SEPARATE
+   * `crud-create` step; re-driving it here would just re-prove the same
+   * thing while blocking the delete step on it).
+   *
+   * `tick()`'s crud row-resolution reaches for this ONLY when
+   * `pickTargetRow` finds no candidate for the delete's OWN pick (the
+   * "every seeded row is referenced" case is a RUNTIME fact, not knowable
+   * at plan time) — dispatches this fallback once, then retries the pick
+   * against the post-create server truth. The freshly-created row is
+   * unreferenced by construction (nothing has had a chance to reference it
+   * yet), so the retry finds it without any special-casing beyond "ask the
+   * store again." Absent means the entity has no self-relation to run out
+   * of headroom on, or the orbital declares no `create` for this entity —
+   * `tick()` keeps today's `no-target-row` behavior unchanged.
+   */
+  deleteEstablishFallback?: {
+    event: string;
+    payload: Record<string, FieldValue>;
+    traitName: string;
+    viewerRequirement?: ViewerRequirement;
+  };
 }
 
 /**
@@ -299,6 +566,19 @@ export interface PlanEmitInput {
   trait: TraitWalkConfig;
   /** Emit declarations collected from the trait's effects. */
   emits: ReadonlyArray<EmitDeclaration>;
+  /**
+   * Full schema + the trait's owning `Orbital`, used to look up whether
+   * firing a swept event navigates — either directly (the trait's own
+   * transition from its initial state carries a `navigate`/`navigate-back`
+   * effect) or via a listener's triggered arm (`dispatchNavigates`, the
+   * one shared oracle `planWalk`/`planClickPathSamples`/`planReplayTo`
+   * already consult). Optional: omitted only by call sites (and existing
+   * unit tests) that don't have the schema in scope, in which case swept
+   * steps carry no `navigates` flag — the same as before this field
+   * existed.
+   */
+  schema?: OrbitalSchema;
+  orb?: Orbital;
 }
 
 /** Input to `planReplayTo`. */

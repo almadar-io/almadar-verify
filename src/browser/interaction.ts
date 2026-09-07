@@ -14,7 +14,8 @@
  */
 
 import type { Page } from 'playwright';
-import type { EventPayload, EventPayloadValue } from '@almadar/core';
+import type { EntityField, EventPayload, EventPayloadValue } from '@almadar/core';
+import { sampleFieldValue, type SampleContext } from '@almadar/core/mock';
 import {
   seedRandom,
   randomFloat,
@@ -28,7 +29,6 @@ import {
   randomSentence,
   randomBoolean,
   randomUuid,
-  randomArrayElement,
 } from '@almadar/runtime/mockRandom';
 import { createLogger } from '@almadar/logger';
 
@@ -101,25 +101,19 @@ seedRandom(42);
  * Returns a string (all HTML inputs accept string values).
  */
 /**
- * A valid value for a semantic-domain field, or `undefined` when the type is not
- * one. Three near-identical payload switches used to fall through to
- * `randomWords(2)` for these, which the emitted `z.string().email()` refinement
- * rejects on submit — turning a real feature into a verifier regression.
+ * One deterministic value for one entity field, delegating to the core
+ * owner (`@almadar/core/mock`'s `sampleFieldValue`) so the verifier's
+ * synthesized payloads match the one mock-seed policy every other layer
+ * uses — semantic domains (email/url/phone/uuid), declared vocabularies,
+ * declared defaults, and the `date`/`money`/`file` struct shapes all come
+ * from that one place now instead of three near-identical local switches.
+ * `strategy: 'index'` is pure-function-of-(field, row) — deterministic, no
+ * PRNG draw — matching the row-1 payloads this planner always synthesized.
  */
-function semanticPayloadValue(type: string | undefined): string | undefined {
-  switch (type) {
-    case 'email':
-      return 'verify@example.com';
-    case 'url':
-    case 'image':
-      return 'https://example.com/verify';
-    case 'phone':
-      return '+1-555-0100';
-    case 'uuid':
-      return '00000000-0000-4000-8000-000000000001';
-    default:
-      return undefined;
-  }
+function sampleEntityFieldValue(field: EntityFieldDef, entityName: string): EventPayloadValue {
+  const ctx: SampleContext = { entityName, index: 1, strategy: 'index' };
+  const value = sampleFieldValue(field, ctx);
+  return value === undefined ? null : value;
 }
 
 /** String forms a planner may hand a checkbox that mean "unchecked". */
@@ -141,6 +135,10 @@ export function generateFieldValue(inputType: string, _fieldName: string): strin
       return randomRecentDate().toISOString().split('T')[0]!;
     case 'datetime-local':
       return randomRecentDate().toISOString().slice(0, 16);
+    case 'month':
+      return randomRecentDate().toISOString().slice(0, 7);
+    case 'time':
+      return randomRecentDate().toISOString().slice(11, 16);
     case 'color':
       return randomColor();
     case 'text':
@@ -150,13 +148,63 @@ export function generateFieldValue(inputType: string, _fieldName: string): strin
 }
 
 /**
- * Entity field definition with optional predefined values.
- * Used to generate meaningful payloads when entity fields declare allowed values.
+ * The string an `<input type="…">` control accepts for a synthesized value.
+ * Planners type form fields loosely (a `date!` entity field arrives as a full
+ * ISO timestamp, a `money` field as two words), and a native control refuses
+ * what it cannot parse — Playwright's `fill()` throws "Malformed value" on a
+ * date input, and a REQUIRED control left empty blocks the native submit, so
+ * the SAVE click fires no transition and the create reads as a runtime
+ * failure. Verified on std-time-tracking `EmployeeCreate.hireDate`. Numeric
+ * and date-family controls re-synthesize in-type when the value does not fit.
  */
-export interface EntityFieldDef {
-  name: string;
-  type?: string;
-  values?: string[];
+export function coerceValueForInputType(
+  stringValue: string,
+  inputType: string | null,
+  fieldName: string,
+): string {
+  switch (inputType) {
+    case 'number':
+    case 'range': {
+      const numeric = Number(stringValue);
+      return Number.isFinite(numeric) && stringValue.trim() !== ''
+        ? stringValue
+        : generateFieldValue('number', fieldName);
+    }
+    case 'date':
+    case 'datetime-local':
+    case 'month':
+    case 'time': {
+      const parsed = new Date(stringValue);
+      if (Number.isNaN(parsed.getTime())) return generateFieldValue(inputType, fieldName);
+      const iso = parsed.toISOString();
+      if (inputType === 'date') return iso.slice(0, 10);
+      if (inputType === 'datetime-local') return iso.slice(0, 16);
+      if (inputType === 'month') return iso.slice(0, 7);
+      return iso.slice(11, 16);
+    }
+    default:
+      return stringValue;
+  }
+}
+
+/**
+ * Entity field definition planners synthesize payload values from — the
+ * core `EntityField` union itself (widened from a local `{name,type,values}`
+ * shape) so `sampleEntityFieldValue` can pass declared `min`/`max`/
+ * `intrinsic`/`default`/`relation`/`items`/`properties` straight to the core
+ * owner instead of a caller re-deriving them.
+ */
+export type EntityFieldDef = EntityField;
+
+/** `values` lives on the `EntityField` union's scalar/enum/union variants
+ *  only — relation/array/object don't carry it. Narrow with `in` so a
+ *  no-`values` variant never reads as having a vocabulary. Exported so
+ *  planner callers (e.g. `plan-user-crud-flow.ts`'s enum-field exclusion)
+ *  share the one narrowing instead of re-deriving it. */
+export function declaredValuesOf(field: EntityFieldDef): readonly string[] | undefined {
+  return 'values' in field && field.values !== undefined && field.values.length > 0
+    ? field.values
+    : undefined;
 }
 
 /**
@@ -176,7 +224,7 @@ export function buildMinimalPayload(
   const entityFieldMap = new Map<string, EntityFieldDef>();
   if (entityFields) {
     for (const ef of entityFields) {
-      entityFieldMap.set(ef.name, ef);
+      if (ef.name !== undefined) entityFieldMap.set(ef.name, ef);
     }
   }
 
@@ -189,26 +237,28 @@ export function buildMinimalPayload(
     // in another payload field (e.g., payload has "field"="status" and "value" needs
     // to come from the status field's values array).
     const entityField = entityFieldMap.get(name);
-    if (entityField?.values && entityField.values.length > 0) {
+    const entityFieldValues = entityField === undefined ? undefined : declaredValuesOf(entityField);
+    if (entityFieldValues !== undefined) {
       // Pick the first predefined value for deterministic test results
-      payload[name] = entityField.values[0];
+      payload[name] = entityFieldValues[0];
       continue;
     }
 
     // For generic "field"/"value" pattern: if payload has a "field" entry that names
     // an entity field, and current entry is "value", use that entity field's values
     if (name === 'value' && typeof payload.field === 'string') {
-      const referencedField = entityFieldMap.get(payload.field as string);
-      if (referencedField?.values && referencedField.values.length > 0) {
-        payload[name] = referencedField.values[0];
+      const referencedField = entityFieldMap.get(payload.field);
+      const referencedValues = referencedField === undefined ? undefined : declaredValuesOf(referencedField);
+      if (referencedValues !== undefined) {
+        payload[name] = referencedValues[0];
         continue;
       }
     }
 
     // For "field" payload entries: if an entity field has values, use that field name
     if (name === 'field' && entityFields) {
-      const fieldWithValues = entityFields.find(ef => ef.values && ef.values.length > 0);
-      if (fieldWithValues) {
+      const fieldWithValues = entityFields.find((ef) => ef.name !== undefined && declaredValuesOf(ef) !== undefined);
+      if (fieldWithValues?.name !== undefined) {
         payload[name] = fieldWithValues.name;
         continue;
       }
@@ -271,31 +321,8 @@ export function buildMinimalPayload(
       } else if (entityFields && entityFields.length > 0) {
         const row: EventPayload = {};
         for (const ef of entityFields) {
-          if (ef.values && ef.values.length > 0) {
-            row[ef.name] = ef.values[0];
-            continue;
-          }
-          const semantic = semanticPayloadValue(ef.type);
-          if (semantic !== undefined) {
-            row[ef.name] = semantic;
-            continue;
-          }
-          switch (ef.type) {
-            case 'number':
-            case 'integer':
-            case 'float':
-              row[ef.name] = randomFloat({ min: 1, max: 999, fractionDigits: 2 });
-              break;
-            case 'boolean':
-              row[ef.name] = randomBoolean();
-              break;
-            case 'date':
-              row[ef.name] = randomRecentDate().toISOString();
-              break;
-            default:
-              row[ef.name] = randomWords(2);
-              break;
-          }
+          if (ef.name === undefined) continue;
+          row[ef.name] = sampleEntityFieldValue(ef, name);
         }
         payload[name] = [row];
       } else {
@@ -339,31 +366,8 @@ export function buildMinimalPayload(
         if (entityFields && entityFields.length > 0) {
           const obj: EventPayload = {};
           for (const ef of entityFields) {
-            if (ef.values && ef.values.length > 0) {
-              obj[ef.name] = ef.values[0];
-              continue;
-            }
-            const semanticObj = semanticPayloadValue(ef.type);
-            if (semanticObj !== undefined) {
-              obj[ef.name] = semanticObj;
-              continue;
-            }
-            switch (ef.type) {
-              case 'number':
-              case 'integer':
-              case 'float':
-                obj[ef.name] = randomFloat({ min: 1, max: 999, fractionDigits: 2 });
-                break;
-              case 'boolean':
-                obj[ef.name] = randomBoolean();
-                break;
-              case 'date':
-                obj[ef.name] = randomRecentDate().toISOString();
-                break;
-              default:
-                obj[ef.name] = randomWords(2);
-                break;
-            }
+            if (ef.name === undefined) continue;
+            obj[ef.name] = sampleEntityFieldValue(ef, name);
           }
           payload[name] = obj;
         } else {
@@ -385,31 +389,8 @@ export function buildMinimalPayload(
         if (entityFields && entityFields.length > 0) {
           const row: EventPayload = { id: randomUuid() };
           for (const ef of entityFields) {
-            if (ef.values && ef.values.length > 0) {
-              row[ef.name] = ef.values[0];
-              continue;
-            }
-            const semanticRow = semanticPayloadValue(ef.type);
-            if (semanticRow !== undefined) {
-              row[ef.name] = semanticRow;
-              continue;
-            }
-            switch (ef.type) {
-              case 'number':
-              case 'integer':
-              case 'float':
-                row[ef.name] = randomFloat({ min: 1, max: 999, fractionDigits: 2 });
-                break;
-              case 'boolean':
-                row[ef.name] = randomBoolean();
-                break;
-              case 'date':
-                row[ef.name] = randomRecentDate().toISOString();
-                break;
-              default:
-                row[ef.name] = randomWords(2);
-                break;
-            }
+            if (ef.name === undefined) continue;
+            row[ef.name] = sampleEntityFieldValue(ef, name);
           }
           payload[name] = row;
         } else {
@@ -661,6 +642,7 @@ export async function fillFormFieldsFromMap(
       });
       continue;
     }
+    let filledValue = stringValue;
     try {
       if (tag === 'select') {
         // The synthesized value may not be one of the `<select>`'s options:
@@ -685,23 +667,15 @@ export async function fillFormFieldsFromMap(
         // behaviour of the generic scanner) silently drops the key from the
         // submitted payload.
         await field.setChecked(!FALSEY_FORM_VALUES.has(stringValue.toLowerCase()));
-      } else if (inputType === 'number' || inputType === 'range') {
-        // The planner types form fields as `string`, so a numeric input can
-        // receive a word. Re-synthesize in range rather than fail the form.
-        const numeric = Number(stringValue);
-        await field.fill(
-          Number.isFinite(numeric) && stringValue.trim() !== ''
-            ? stringValue
-            : generateFieldValue('number', name),
-        );
       } else {
-        await field.fill(stringValue);
+        filledValue = coerceValueForInputType(stringValue, inputType, name);
+        await field.fill(filledValue);
       }
       count++;
       domLog.debug('dom:fill:field-result', {
         name,
         result: 'filled',
-        value: stringValue,
+        value: filledValue,
         tag,
         inputType,
       });

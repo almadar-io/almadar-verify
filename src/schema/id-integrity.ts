@@ -307,6 +307,21 @@ class Checker {
     if (!isInlineTrait(tr)) return;
     const td = tr;
     this.check(td.linkedEntityId, 'entity', td.linkedEntity, `${path}.linkedEntity`);
+    // `entityRefIds` (V4 leverage-ids: token NAME → the entity's stable id)
+    // is a reference position for rules 1 ("unknown ref") and 3 ("kind
+    // mismatch") only — NOT rule 2 ("name mismatch"), passed `undefined`
+    // here on purpose: `orbital_core::stamp`'s documented contract lets a
+    // same-schema, same-id declaration rename leave this key stale by
+    // design (resolved transparently by id, `resolveEntityTokensById`),
+    // so a key/curName drift alone is not a defect. What IS a defect — a
+    // clone (orbital import / aux clone / `entities {}` remap) whose key
+    // still names the upstream entity while the value still holds the
+    // upstream's id, foreign to this schema's arena entirely — is caught
+    // by rule 1 directly: that id resolves to no arena node or ledger
+    // entry here. Two-path parity twin of Rust's `id_integrity.rs`.
+    for (const [tokenName, eid] of Object.entries(td.entityRefIds ?? {})) {
+      this.check(eid, 'entity', undefined, `${path}.entityRefIds[${tokenName}]`);
+    }
     const emits = td.emits ?? [];
     for (let ei = 0; ei < emits.length; ei++) {
       const emit = emits[ei];

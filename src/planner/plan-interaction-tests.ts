@@ -113,7 +113,9 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
         // form values from the entity's fields directly.
         const entityFields = entityFieldsByName[linkedEntity] ?? [];
         const synthSchema = entityFields
-          .filter((f) => f.name !== 'id' && f.name !== 'createdAt' && f.name !== 'updatedAt')
+          .filter((f): f is typeof f & { name: string } =>
+            f.name !== undefined && f.name !== 'id' && f.name !== 'createdAt' && f.name !== 'updatedAt',
+          )
           .map((f) => ({ name: f.name, type: f.type ?? 'string' }));
         formData = synthSchema.length > 0
           ? buildFormData(synthSchema, linkedEntity, entityFieldsByName)
@@ -351,11 +353,11 @@ function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityField
       const callName = entity.name;
       const callFields = entity.fields;
       if (callName === undefined || callFields === undefined) continue;
-      out[callName] = callFields.filter(hasName).map(toFieldDef);
+      out[callName] = callFields.filter(hasName);
       continue;
     }
 
-    out[entity.name] = entity.fields.filter(hasName).map(toFieldDef);
+    out[entity.name] = entity.fields.filter(hasName);
   }
   return out;
 }
@@ -367,14 +369,6 @@ function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityField
  */
 function hasName<T extends { name?: string }>(f: T): f is T & { name: string } {
   return typeof f.name === 'string' && f.name.length > 0;
-}
-
-function toFieldDef(f: { name: string; type: string; values?: readonly string[] }): EntityFieldDef {
-  return {
-    name: f.name,
-    type: f.type,
-    values: f.values !== undefined ? [...f.values] : undefined,
-  };
 }
 
 /**
