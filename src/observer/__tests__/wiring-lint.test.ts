@@ -129,8 +129,15 @@ describe('lintWiring — client-unbound-state-machine', () => {
       })),
     );
     // `browse` declares REQUEST_REMOVE only in its emits contract — see the
-    // note in the sibling test above.
-    expect(result.findings.filter((f) => f.check !== 'listener-affordance-removed-by-config')).toEqual([]);
+    // note in the sibling test above. `removeConfirm`'s shared MODAL_RENDER
+    // fixture genuinely renders a stack into `modal` with no CLOSE/CANCEL
+    // handled in `confirming` — a real modal-shell-close-deaf finding once
+    // it's bound, orthogonal to this test's binding-closure concern.
+    expect(
+      result.findings.filter(
+        (f) => f.check !== 'listener-affordance-removed-by-config' && f.check !== 'modal-shell-close-deaf',
+      ),
+    ).toEqual([]);
   });
 
   it('skips orbitals with no pages (registry atoms lint at their own page)', () => {
@@ -1518,6 +1525,33 @@ describe('lintWiring — identity-roster-unwritable', () => {
     expect(result.findings.filter((f) => f.check === 'identity-roster-unwritable')).toEqual([]);
   });
 
+  it('stays silent when the only persist is an UPDATE — a roster row seeded by auth, edited via persist update (the std-realtime-chat OnlinePresence shape)', () => {
+    const result = lintWiring(schemaOf([
+      orbital({
+        name: 'StaffOrbital',
+        entity: identityEntity,
+        traits: [
+          trait({
+            name: 'OnlinePresence',
+            stateMachine: {
+              states: [], events: [],
+              transitions: [
+                {
+                  from: 'idle',
+                  event: 'MARK_ONLINE',
+                  to: 'idle',
+                  effects: [['persist', 'update', 'Staff', '@payload.data']],
+                },
+              ],
+            },
+          }),
+        ],
+        pages: [{ name: 'StaffPage', path: '/staff', traits: [{ ref: 'OnlinePresence' }] }],
+      }),
+    ]));
+    expect(result.findings.filter((f) => f.check === 'identity-roster-unwritable')).toEqual([]);
+  });
+
   it('stays silent for an app with no [identity] entity', () => {
     const result = lintWiring(schemaOf([
       orbital({
@@ -1932,5 +1966,471 @@ describe('lintWiring — relation-field-rendered-raw', () => {
       }),
     ]));
     expect(result.findings.filter((f) => f.check === 'relation-field-rendered-raw')).toEqual([]);
+  });
+});
+
+describe('lintWiring — modal-shell-close-deaf', () => {
+  const overlayTrait = (name: string, targetArms: Transition[]): Trait => trait({
+    name,
+    stateMachine: {
+      states: [], events: [],
+      transitions: [
+        { from: 'idle', event: 'OPEN', to: 'open', effects: [MODAL_RENDER] },
+        ...targetArms,
+      ],
+    },
+  });
+
+  it('flags the std-realtime-chat ChatOverlayPanel shape: stack into modal, target state handles neither CLOSE nor CANCEL', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        traits: [overlayTrait('ChatOverlayPanel', [])],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'ChatOverlayPanel' }] }],
+      })),
+    );
+    const found = result.findings.filter((f) => f.check === 'modal-shell-close-deaf');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.trait).toBe('ChatOverlayPanel');
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.message).toContain('CLOSE');
+  });
+
+  it('is silent once the target state handles CLOSE', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        traits: [overlayTrait('ChatOverlayPanel', [{ from: 'open', event: 'CLOSE', to: 'idle', effects: [] }])],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'ChatOverlayPanel' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'modal-shell-close-deaf')).toEqual([]);
+  });
+
+  it('is silent once the target state handles CANCEL', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        traits: [overlayTrait('ChatOverlayPanel', [{ from: 'open', event: 'CANCEL', to: 'idle', effects: [] }])],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'ChatOverlayPanel' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'modal-shell-close-deaf')).toEqual([]);
+  });
+
+  it('is silent for a self-overlay pattern type (modal) — it paints its own chrome', () => {
+    const selfOverlayRender: Effect = ['render-ui', 'modal', { type: 'modal', title: 'Confirm' }];
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        traits: [
+          trait({
+            name: 'ConfirmDialogHost',
+            stateMachine: {
+              states: [], events: [],
+              transitions: [{ from: 'idle', event: 'OPEN', to: 'open', effects: [selfOverlayRender] }],
+            },
+          }),
+        ],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'ConfirmDialogHost' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'modal-shell-close-deaf')).toEqual([]);
+  });
+
+  it('is silent for a render into "main" — only overlay slots (modal/drawer) get the shell', () => {
+    const mainRenderEffect: Effect = ['render-ui', 'main', { type: 'stack', children: [] }];
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        traits: [
+          trait({
+            name: 'MainContent',
+            stateMachine: {
+              states: [], events: [],
+              transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [mainRenderEffect] }],
+            },
+          }),
+        ],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'MainContent' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'modal-shell-close-deaf')).toEqual([]);
+  });
+});
+
+describe('lintWiring — filter-field-never-written', () => {
+  const chatMessageEntity: Entity = {
+    name: 'ChatMessage',
+    collection: 'chat_messages',
+    fields: [
+      { name: 'id', type: 'string', required: true },
+      { name: 'channel', type: 'string' },
+      { name: 'content', type: 'string' },
+      { name: 'threadRootId', type: 'string' },
+    ],
+  };
+
+  const threadFilterFetch: Effect = [
+    'fetch',
+    'ChatMessage',
+    { filter: ['=', ['object/get', '@entity', 'threadRootId'], '@config.threadRootId'] },
+  ];
+
+  const channelThread = trait({
+    name: 'ChannelThread',
+    stateMachine: {
+      states: [], events: [],
+      transitions: [{ from: 'idle', event: 'INIT', to: 'idle', effects: [threadFilterFetch] }],
+    },
+  });
+
+  it('flags the std-realtime-chat ChannelThread shape: filter on a field no persist ever writes', () => {
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        entity: chatMessageEntity,
+        traits: [channelThread],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'ChannelThread' }] }],
+      })),
+    );
+    const found = result.findings.filter((f) => f.check === 'filter-field-never-written');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.message).toContain('threadRootId');
+    expect(found[0]?.severity).toBe('warning');
+  });
+
+  it('is silent once a persist create supplies the filtered key (explicit object-literal data)', () => {
+    const composer = trait({
+      name: 'ChatComposer',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          {
+            from: 'ready',
+            event: 'SEND',
+            to: 'ready',
+            effects: [['persist', 'create', 'ChatMessage', { content: '@entity.draft', threadRootId: '@entity.threadRoot' }]],
+          },
+        ],
+      },
+    });
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        entity: chatMessageEntity,
+        traits: [channelThread, composer],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'ChannelThread' }, { ref: 'ChatComposer' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'filter-field-never-written')).toEqual([]);
+  });
+
+  it('is silent when the persist data argument is bare (@entity — may supply any field)', () => {
+    const composer = trait({
+      name: 'ChatComposer',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          { from: 'ready', event: 'SEND', to: 'ready', effects: [['persist', 'create', 'ChatMessage', '@entity']] },
+        ],
+      },
+    });
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        entity: chatMessageEntity,
+        traits: [channelThread, composer],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'ChannelThread' }, { ref: 'ChatComposer' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'filter-field-never-written')).toEqual([]);
+  });
+
+  it('is silent when the filtered field selector is itself dynamic (std-browse scopeField/?field shape)', () => {
+    // The std-realtime-chat corpus run surfaced this as a real bug: a
+    // config-forwarded field selector (`@config.scopeField`) that resolves
+    // to "" at an unconfigured call site, or a payload-bound selector
+    // (`?field`) left literal, must NOT be read as a literal field name —
+    // either misreads as "field ''" or "field '?field'", not a real finding.
+    const dynamicFieldFetch = trait({
+      name: 'GenericBrowse',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          {
+            from: 'idle',
+            event: 'REFETCH_FILTER',
+            to: 'idle',
+            effects: [
+              ['fetch', 'ChatMessage', { filter: ['=', ['object/get', '@entity', '?field'], '?value'] }],
+              ['fetch', 'ChatMessage', { filter: ['=', ['object/get', '@entity', ''], ''] }],
+            ],
+          },
+        ],
+      },
+    });
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'ChatOrbital',
+        entity: chatMessageEntity,
+        traits: [dynamicFieldFetch],
+        pages: [{ name: 'ChatPage', path: '/chat', traits: [{ ref: 'GenericBrowse' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'filter-field-never-written')).toEqual([]);
+  });
+
+  it('is silent for an [identity] entity — its rows come from the auth roster, not a persist in this program', () => {
+    // The std-realtime-chat corpus run surfaced this as a false-positive
+    // class: OnlineUser is the app's [identity] roster (read-only, per the
+    // sibling identity-roster-unwritable finding) — no persist create/update
+    // ever supplies ANY field on it, by design, so "no persist supplies
+    // `name`" proves nothing here.
+    const onlineUserEntity: Entity = {
+      name: 'OnlineUser',
+      collection: 'online_users',
+      identity: true,
+      fields: [
+        { name: 'id', type: 'string', required: true },
+        { name: 'name', type: 'string' },
+        { name: 'username', type: 'string' },
+      ],
+    };
+    const search = trait({
+      name: 'OnlineUserSearch',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          {
+            from: 'idle',
+            event: 'SEARCH',
+            to: 'idle',
+            effects: [
+              ['fetch', 'OnlineUser', { filter: ['=', ['object/get', '@entity', 'name'], '?term'] }],
+            ],
+          },
+        ],
+      },
+    });
+    const result = lintWiring(
+      schemaWith(orbital({
+        name: 'OnlineUserOrbital',
+        entity: onlineUserEntity,
+        traits: [search],
+        pages: [{ name: 'OnlinePage', path: '/online', traits: [{ ref: 'OnlineUserSearch' }] }],
+      })),
+    );
+    expect(result.findings.filter((f) => f.check === 'filter-field-never-written')).toEqual([]);
+  });
+
+  it('is silent when a DIFFERENT entity sharing the same persistent: collection supplies the field (std-cms HubArticle/Article shape)', () => {
+    // HubArticle is CmsHubOrbital's read-only "view" of the SAME `articles`
+    // collection Article (a sibling orbital's own entity, composed from a
+    // different atom) actually writes — no persist ever targets `HubArticle`
+    // by name, but the collection is provably supplied.
+    const hubArticleEntity: Entity = {
+      name: 'HubArticle',
+      collection: 'articles',
+      fields: [
+        { name: 'id', type: 'string', required: true },
+        { name: 'title', type: 'string' },
+      ],
+    };
+    const articleEntity: Entity = {
+      name: 'Article',
+      collection: 'articles',
+      fields: [
+        { name: 'id', type: 'string', required: true },
+        { name: 'title', type: 'string' },
+      ],
+    };
+    const hubSearch = trait({
+      name: 'CmsHubSearch',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          {
+            from: 'idle',
+            event: 'SEARCH',
+            to: 'idle',
+            effects: [['fetch', 'HubArticle', { filter: ['=', ['object/get', '@entity', 'title'], '?term'] }]],
+          },
+        ],
+      },
+    });
+    const articlePersistor = trait({
+      name: 'ArticlePersistor',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          {
+            from: 'idle',
+            event: 'DO_CREATE_DRAFT',
+            to: 'idle',
+            effects: [['persist', 'create', 'Article', { title: '@config.draftTitle' }]],
+          },
+        ],
+      },
+    });
+    const result = lintWiring(
+      schemaOf([
+        orbital({
+          name: 'CmsHubOrbital',
+          entity: hubArticleEntity,
+          traits: [hubSearch],
+          pages: [{ name: 'HubPage', path: '/cms-hub', traits: [{ ref: 'CmsHubSearch' }] }],
+        }),
+        orbital({
+          name: 'ArticleOrbital',
+          entity: articleEntity,
+          traits: [articlePersistor],
+          pages: [{ name: 'ArticlePage', path: '/articles', traits: [{ ref: 'ArticlePersistor' }] }],
+        }),
+      ]),
+    );
+    expect(result.findings.filter((f) => f.check === 'filter-field-never-written')).toEqual([]);
+  });
+
+  it('still flags a collection-sharing entity when NO entity on that collection writes the field', () => {
+    const hubArticleEntity: Entity = {
+      name: 'HubArticle',
+      collection: 'articles',
+      fields: [
+        { name: 'id', type: 'string', required: true },
+        { name: 'title', type: 'string' },
+      ],
+    };
+    const articleEntity: Entity = {
+      name: 'Article',
+      collection: 'articles',
+      fields: [
+        { name: 'id', type: 'string', required: true },
+        { name: 'title', type: 'string' },
+      ],
+    };
+    const hubSearch = trait({
+      name: 'CmsHubSearch',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          {
+            from: 'idle',
+            event: 'SEARCH',
+            to: 'idle',
+            effects: [['fetch', 'HubArticle', { filter: ['=', ['object/get', '@entity', 'title'], '?term'] }]],
+          },
+        ],
+      },
+    });
+    const articlePersistor = trait({
+      name: 'ArticlePersistor',
+      stateMachine: {
+        states: [], events: [],
+        transitions: [
+          {
+            from: 'idle',
+            event: 'DO_CREATE_DRAFT',
+            to: 'idle',
+            // Supplies `id`, never `title` — the collection mate exists but
+            // still never writes the filtered field.
+            effects: [['persist', 'create', 'Article', { id: '@payload.id' }]],
+          },
+        ],
+      },
+    });
+    const result = lintWiring(
+      schemaOf([
+        orbital({
+          name: 'CmsHubOrbital',
+          entity: hubArticleEntity,
+          traits: [hubSearch],
+          pages: [{ name: 'HubPage', path: '/cms-hub', traits: [{ ref: 'CmsHubSearch' }] }],
+        }),
+        orbital({
+          name: 'ArticleOrbital',
+          entity: articleEntity,
+          traits: [articlePersistor],
+          pages: [{ name: 'ArticlePage', path: '/articles', traits: [{ ref: 'ArticlePersistor' }] }],
+        }),
+      ]),
+    );
+    const found = result.findings.filter((f) => f.check === 'filter-field-never-written');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.message).toContain('title');
+  });
+});
+
+describe('lintWiring — failure-arm-missing / failure-arm-renders-nothing', () => {
+  const persistorTrait = (targetArms: Transition[]): Trait => trait({
+    name: 'CartItemPersistor',
+    stateMachine: {
+      states: [], events: [],
+      transitions: [
+        {
+          from: 'idle',
+          event: 'SAVE',
+          to: 'saving',
+          effects: [['persist', 'create', 'CartItem', { name: '@payload.name' }, { emit: { success: 'CartItemSaved', failure: 'CartItemSaveFailed' } }]],
+        },
+        ...targetArms,
+      ],
+    },
+  });
+
+  const schemaFor = (targetArms: Transition[]): OrbitalSchema => schemaWith(orbital({
+    name: 'CartOrbital',
+    traits: [persistorTrait(targetArms)],
+    pages: [{ name: 'CartPage', path: '/cart', traits: [{ ref: 'CartItemPersistor' }] }],
+  }));
+
+  it('flags failure-arm-missing when no arm anywhere handles the declared failure event', () => {
+    const result = lintWiring(schemaFor([]));
+    const found = result.findings.filter((f) => f.check === 'failure-arm-missing');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.trait).toBe('CartItemPersistor');
+    expect(found[0]?.severity).toBe('error');
+    expect(found[0]?.message).toContain('CartItemSaveFailed');
+    expect(result.findings.filter((f) => f.check === 'failure-arm-renders-nothing')).toEqual([]);
+  });
+
+  it('flags failure-arm-renders-nothing when the arm exists but renders and notifies nothing', () => {
+    const result = lintWiring(schemaFor([
+      { from: 'saving', event: 'CartItemSaveFailed', to: 'idle', effects: [] },
+    ]));
+    expect(result.findings.filter((f) => f.check === 'failure-arm-missing')).toEqual([]);
+    const found = result.findings.filter((f) => f.check === 'failure-arm-renders-nothing');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('warning');
+    expect(found[0]?.message).toContain('CartItemSaveFailed');
+  });
+
+  it('is silent once the arm paints a toast (notify sugar)', () => {
+    const toastEffect: Effect = ['render-ui', 'toast', { type: 'alert', variant: 'error', message: 'Could not save item', dismissible: true }];
+    const result = lintWiring(schemaFor([
+      { from: 'saving', event: 'CartItemSaveFailed', to: 'idle', effects: [toastEffect] },
+    ]));
+    expect(result.findings.filter((f) => f.check === 'failure-arm-missing')).toEqual([]);
+    expect(result.findings.filter((f) => f.check === 'failure-arm-renders-nothing')).toEqual([]);
+  });
+
+  it('is silent once the arm renders a non-null pattern into a slot', () => {
+    const toastRender: Effect = ['render-ui', 'toast', { type: 'alert', message: 'Could not save item' }];
+    const result = lintWiring(schemaFor([
+      { from: 'saving', event: 'CartItemSaveFailed', to: 'idle', effects: [toastRender] },
+    ]));
+    expect(result.findings.filter((f) => f.check === 'failure-arm-missing')).toEqual([]);
+    expect(result.findings.filter((f) => f.check === 'failure-arm-renders-nothing')).toEqual([]);
+  });
+
+  it('is silent for a trait not bound to any page', () => {
+    const schema = schemaWith(orbital({
+      name: 'CartOrbital',
+      traits: [persistorTrait([])],
+      pages: [{ name: 'CartPage', path: '/cart', traits: [] }],
+    }));
+    const result = lintWiring(schema);
+    expect(result.findings.filter((f) => f.check === 'failure-arm-missing')).toEqual([]);
+    expect(result.findings.filter((f) => f.check === 'failure-arm-renders-nothing')).toEqual([]);
   });
 });

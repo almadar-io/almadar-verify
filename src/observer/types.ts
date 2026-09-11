@@ -226,6 +226,64 @@ export interface ReportShape {
      * uncovered in `coverage`; this records why.
      */
     preconditionSkipped?: Verdict;
+    /**
+     * `emit-payload-always-empty` — fails when a trait's declared `emits`
+     * payload field fired at least twice this session and was `''`,
+     * `undefined`, or `null` on EVERY firing: the emit is live and wired
+     * (a listener may even consume it) but never carries the value it
+     * promises (`DirectMessageStarter.AUTO_OPEN`'s `channel: ''` firing 156
+     * times in one session).
+     */
+    emitPayloadAlwaysEmpty?: Verdict;
+    /**
+     * `effect-failure-not-surfaced` — fails when a `persist`/`fetch`/
+     * `call-service` effect's outcome is `denied`/`failed` and either the
+     * effect's declared `emit.failure` never appears in the event log
+     * (`effect-failure-unrouted` — the effect has no failure route at all)
+     * or it fires but no toast/alert mounts in the `toast` portal slot
+     * within the settle window (`effect-failure-not-surfaced` proper) — a
+     * failed write the runtime absorbed with nothing shown to the user.
+     * Guard rejections never produce a finding here: the transition's
+     * effects never ran.
+     */
+    effectFailureNotSurfaced?: Verdict;
+    /**
+     * TRANSIENT-ARM-UNREACHABLE (RV item 27) — informational (`passed:
+     * true`), mirrors `preconditionSkipped`'s shape. Names every
+     * failure-route arm whose `from` state races forward via an
+     * effect-emitted sibling AND for which no denying viewer could be
+     * derived (no policy on the entering persist's target entity, every
+     * declared role satisfies it, or a payload-literal OR-term makes it
+     * unconditionally true) — the arm could never be forced to fire for
+     * real this run, so its portal expectation is excluded from
+     * `portalPerStep` rather than asserted against a dispatch that can
+     * never land there (a false "slot not mounted").
+     */
+    transientArmUnreachable?: Verdict;
+    /**
+     * `listens-edge-never-fired` — the runtime twin of the static
+     * `listens-source-never-emits` lint: a declared listens route whose
+     * source fired ≥2 times this session but the listening trait's own
+     * `triggers` transition was never observed firing — wired on paper,
+     * dead in practice.
+     */
+    listensEdgeNeverFired?: Verdict;
+    /**
+     * `bus-item-cascaded-n-times` — the SAME bus item (`event` +
+     * `payload`) delivered more than once to one listener within a
+     * single dispatch window (`cascadeReceived`'s own "since the last
+     * user dispatch" scope) — a duplicate delivery, not a legitimate
+     * repeat.
+     */
+    busItemCascadedNTimes?: Verdict;
+    /**
+     * `slot-shows-foreign-transition-render` — the runtime twin of
+     * compiler §98's last-writer-per-slot contract: a slot's observed
+     * `data-pattern` (the DOM's own deterministic identity marker)
+     * matches a DIFFERENT declared writer's pattern than the transition
+     * that just fired — a stale/foreign render, not a blank one.
+     */
+    slotShowsForeignTransitionRender?: Verdict;
   };
   /** Aggregate pass/fail/warning counts in core's canonical shape. */
   summary: VerificationSummary;
@@ -240,6 +298,12 @@ export interface ReportShape {
    * already scoped to the walked traits when this block is present.
    */
   frontier?: FrontierSummary;
+  /**
+   * `--trait` scope this walk was restricted to (resolved canonical
+   * names) — absent on a full, unscoped walk. Mirrors `orb verify`'s
+   * `ReportShape.traits` (`orbital-verify::report::Report.traits`).
+   */
+  traits?: ReadonlyArray<string>;
   /**
    * Present only when one or more traits' walk stopped early because a
    * budget (`maxWalkMs`/`maxFrames`) was exceeded, NOT because the plan

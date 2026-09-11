@@ -38,6 +38,7 @@
  */
 
 import type {
+  Effect,
   FieldValue,
   OrbitalSchema,
   SExpr,
@@ -45,6 +46,7 @@ import type {
   TraitEventListener,
   Transition,
 } from '@almadar/core';
+import { SELF_OVERLAY_PATTERN_TYPES } from '@almadar/core';
 import type { ExtendedWalkStep, TestKind } from './types.js';
 import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
 import { findPersistKind, isWholeRowField } from './internal/persist-binding.js';
@@ -52,9 +54,10 @@ import { planGuardPreconditionPreamble } from './internal/guard-precondition.js'
 import { findAffordanceDisabledExpr } from './internal/affordance-disabled.js';
 import { collectEntityFields, hasRequiredPayloadFields } from './internal/payload-synth.js';
 import { buildMinimalPayload, declaredValuesOf, type EntityFieldDef } from '../browser/interaction.js';
-import { configItemActionEvents } from '../observer/wiring-lint.js';
+import { isPortalSlot } from '../browser/portal-slots.js';
+import { configItemActionEvents, renderActionEventsOf } from '../observer/wiring-lint.js';
 import { deriveViewerRequirement } from './internal/viewer-requirement.js';
-import { selfRelationFieldNames } from './internal/self-relation-fields.js';
+import { crossEntityRestrictRelations, selfRelationFieldNames } from './internal/self-relation-fields.js';
 
 export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
   const result: ExtendedWalkStep[] = [];
@@ -124,14 +127,20 @@ export function planUserCrudFlow(orbital: OrbitalSchema): ExtendedWalkStep[] {
           orbital,
         });
         if (step !== null) {
-          // C1-V15 item C: only entities with a restrict-rule self-relation
-          // can legitimately run OUT of unreferenced rows on a real seed
-          // (std-time-tracking's `Employee.seedRow`) — an entity with none
-          // never needs this fallback, and attaching it anyway would just
-          // dispatch a needless extra create on every OTHER entity's delete
-          // step. Needs the entity's OWN declared `create` too — nothing to
-          // fall back to without one.
-          if (create !== undefined && selfRelationFieldNames(orbital, entityName).length > 0) {
+          // C1-V15 item C (widened by C1-V17): an entity with a restrict-
+          // rule relation pointing at it — SELF (`selfRelationFieldNames`)
+          // OR from another entity (`crossEntityRestrictRelations`,
+          // std-realtime-chat's `ChannelMember.channel : Channel`) — can
+          // legitimately run OUT of unreferenced rows on a real seed. An
+          // entity with neither never needs this fallback, and attaching it
+          // anyway would just dispatch a needless extra create on every
+          // OTHER entity's delete step. Needs the entity's OWN declared
+          // `create` too — nothing to fall back to without one.
+          if (
+            create !== undefined &&
+            (selfRelationFieldNames(orbital, entityName).length > 0 ||
+              crossEntityRestrictRelations(orbital, entityName).length > 0)
+          ) {
             const createPayloadSchema = extractPayloadSchema(persistor, create.transition.event);
             const createPayload = createPayloadSchema.length > 0
               ? (buildMinimalPayload(createPayloadSchema, entityFieldsByName[entityName] ?? []) as Record<string, FieldValue>)
@@ -219,6 +228,17 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
 
   const openEvent = openTransition.event;
   const submitEvent = submitOrConfirmTransition.event;
+
+  // C1-V18: "first non-INIT transition off the source trait's initial
+  // state, landing elsewhere" also structurally matches a BROWSE trait's
+  // fetch-success arm (`loading -> browsing`, no user action at all) —
+  // `ChannelRail.BrowseItemLoaded` fired a bogus `crud-edit ChannelMember`
+  // step, `DirectMessagePicker.BrowseItemLoaded` a bogus `crud-create
+  // Channel` step. Only a genuine OVERLAY form (see `isOverlayFormOpen`)
+  // whose submit/confirm event is actually produced by that same render
+  // (or the source trait's own config item actions) is a real CRUD form;
+  // anything else is left to `planDataMutationTests`.
+  if (!isOverlayFormOpen(sourceTrait, openTransition, submitEvent)) return null;
 
   // The DOM affordance that OPENS this modal/confirmation may live
   // upstream when the source trait reaches its open state via a
@@ -471,6 +491,13 @@ function buildCrudStep(input: BuildStepInput): ExtendedWalkStep | null {
     if (avoidReferencedVia.length > 0) {
       step.avoidReferencedVia = avoidReferencedVia;
     }
+    // C1-V17: cross-entity restrict relations block a delete exactly like a
+    // self-relation does — `enforceOnDeleteRules` scans every entity, not
+    // just this one.
+    const crossEntity = crossEntityRestrictRelations(orbital, entityName);
+    if (crossEntity.length > 0) {
+      step.avoidReferencedByOtherEntities = crossEntity;
+    }
   }
 
   return step;
@@ -480,6 +507,48 @@ function deltaFor(kind: 'create' | 'edit' | 'delete'): number {
   if (kind === 'create') return 1;
   if (kind === 'delete') return -1;
   return 0;
+}
+
+/**
+ * C1-V18: is `openTransition` a genuine OVERLAY form's open affordance —
+ * one that renders either into a non-`main` portal slot (`modal` /
+ * `drawer` / `overlay` / `center` / …, `PORTAL_SLOTS` minus `main`/
+ * `sidebar`) OR a SELF-overlay pattern declared in `main`
+ * (`SELF_OVERLAY_PATTERN_TYPES` — `modal`/`confirm-dialog` portal
+ * themselves out of the main flow at render time regardless of the
+ * literal slot the `.lolo` source targets) — AND does `submitEvent`
+ * actually originate from that SAME render, or from the source trait's
+ * own declared `itemActions`/`browseItemActions`-shaped config? A Browse
+ * trait's fetch-success arm (`loading -> browsing`, rendering an
+ * `entity-table` into `main`) structurally matches "first non-INIT
+ * transition off the source trait's initial state" exactly the way a real
+ * modal's OPEN arm does, but fires from a FETCH, not a click —
+ * `submitEvent` there (`UNREAD_CLEARED`, `START_DM`, …) is produced by
+ * some OTHER affordance entirely, never by this transition's own render.
+ */
+function isOverlayFormOpen(sourceTrait: Trait, openTransition: Transition, submitEvent: string): boolean {
+  if (!opensOverlayPattern(openTransition.effects)) return false;
+  if (renderActionEventsOf(openTransition).has(submitEvent)) return true;
+  return configItemActionEvents(sourceTrait).has(submitEvent);
+}
+
+function opensOverlayPattern(effects: ReadonlyArray<Effect> | undefined): boolean {
+  return (effects ?? []).some((effect) => rendersOverlayPattern(effect));
+}
+
+function rendersOverlayPattern(node: Effect | SExpr): boolean {
+  if (!Array.isArray(node)) return false;
+  const nodes = node as readonly SExpr[];
+  if (nodes[0] === 'render-ui' && nodes.length >= 3 && nodes[2] != null) {
+    const slot = nodes[1];
+    if (typeof slot === 'string' && slot !== 'main' && slot !== 'sidebar' && isPortalSlot(slot)) return true;
+    const payload = nodes[2];
+    if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
+      const patternType = (payload as Readonly<Record<string, SExpr>>)['type'];
+      if (typeof patternType === 'string' && SELF_OVERLAY_PATTERN_TYPES.has(patternType)) return true;
+    }
+  }
+  return nodes.some((child) => rendersOverlayPattern(child));
 }
 
 function sourceTraitOf(listener: TraitEventListener): string | null {

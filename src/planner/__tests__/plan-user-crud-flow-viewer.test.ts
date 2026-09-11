@@ -60,8 +60,16 @@ function ownershipPolicedListShape(): OrbitalSchema {
                   from: 'closed',
                   to: 'open',
                   event: 'EDIT',
-                  // Test-only observability hook — see file doc.
-                  effects: [['set', '@entity.lastOpenedBy', '@user.id']],
+                  effects: [
+                    // Test-only observability hook — see file doc.
+                    ['set', '@entity.lastOpenedBy', '@user.id'],
+                    // C1-V18: a genuine overlay-form open affordance —
+                    // see plan-user-crud-flow.ts's isOverlayFormOpen.
+                    ['render-ui', 'modal', {
+                      type: 'stack',
+                      children: [{ type: 'button', action: 'LIST_ITEM_UPDATED', label: 'Save' }],
+                    }],
+                  ],
                 },
                 { from: 'open', to: 'closed', event: 'LIST_ITEM_UPDATED' },
               ],
@@ -83,8 +91,16 @@ function ownershipPolicedListShape(): OrbitalSchema {
                   from: 'idle',
                   to: 'confirming',
                   event: 'DELETE',
-                  // Test-only observability hook — see file doc.
-                  effects: [['set', '@entity.lastOpenedBy', '@user.id']],
+                  effects: [
+                    // Test-only observability hook — see file doc.
+                    ['set', '@entity.lastOpenedBy', '@user.id'],
+                    // C1-V18: a genuine overlay-form open affordance —
+                    // see plan-user-crud-flow.ts's isOverlayFormOpen.
+                    ['render-ui', 'modal', {
+                      type: 'stack',
+                      children: [{ type: 'button', action: 'CONFIRM_DELETE', label: 'Delete' }],
+                    }],
+                  ],
                 },
                 { from: 'confirming', to: 'idle', event: 'CONFIRM_DELETE' },
               ],
@@ -250,5 +266,158 @@ describe('planUserCrudFlow viewer switch, through tick() (C1-V10 item 1)', () =>
     expect(dispatched).toEqual([]);
     expect(frame.accepted).toBe(false);
     expect(frame.errors?.[0]).toMatch(/^no-satisfying-persona:/);
+  });
+});
+
+/**
+ * C1-V19 item 6 — reproduces std-realtime-chat's real shape exactly:
+ * `ChannelMember.@delete = (or (= @user.role moderator) (= @user.role
+ * admin))` — a ROLE-ONLY policy (no owner comparison at all), unlike
+ * `ownershipPolicedListShape` above. `deriveViewerRequirement` must derive
+ * `{role: {field:'role', value:'moderator'}}` with NO `owner` key, and
+ * `tick()` must switch the dispatch persona to that role (not an id) before
+ * the persist runs. Investigated live via `runtime-verify --trait
+ * MembershipPersistor` / `--trait MembershipRemove --full-walk` against the
+ * real `std-realtime-chat.lolo` (2026-09-11): both the data-mutation and
+ * crud-delete paths for `ChannelMember` already pass end to end (0 errors)
+ * — this test locks that mechanism in as a regression guard rather than
+ * fixing a live defect (none reproduced).
+ */
+function roleOnlyDeletePolicedMembershipShape(): OrbitalSchema {
+  const deletePolicy = ['or', ['=', '@user.role', 'moderator'], ['=', '@user.role', 'admin']];
+  return {
+    name: 'channel-member-role-delete-fixture',
+    designTokens: {},
+    customPatterns: {},
+    orbitals: [
+      {
+        name: 'ChannelMembershipOrbital',
+        entity: {
+          name: 'ChannelMember',
+          persistence: 'persistent',
+          fields: [
+            { name: 'id', type: 'string', required: true },
+            { name: 'memberName', type: 'string' },
+          ],
+          delete_policy: deletePolicy,
+        },
+        auxiliaryEntities: [
+          {
+            name: 'OnlineUser',
+            persistence: 'persistent',
+            identity: true,
+            fields: [
+              { name: 'id', type: 'string', required: true },
+              { name: 'role', type: 'string', values: ['member', 'moderator', 'admin'] },
+            ],
+          },
+        ],
+        pages: [],
+        traits: [
+          {
+            name: 'MembershipRemove',
+            scope: 'instance',
+            linkedEntity: 'ChannelMember',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }, { name: 'confirming' }],
+              events: [
+                { key: 'INIT', name: 'Init' },
+                { key: 'DELETE', name: 'Delete' },
+                { key: 'CONFIRM_REMOVE', name: 'Confirm remove' },
+              ],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'confirming',
+                  event: 'DELETE',
+                  effects: [
+                    // Test-only observability hook (see file doc) + a
+                    // genuine overlay-form open affordance (C1-V18's gate).
+                    ['set', '@entity.lastOpenedBy', '@user.role'],
+                    ['render-ui', 'modal', {
+                      type: 'stack',
+                      children: [{ type: 'button', action: 'CONFIRM_REMOVE', label: 'Remove' }],
+                    }],
+                  ],
+                },
+                { from: 'confirming', to: 'idle', event: 'CONFIRM_REMOVE' },
+              ],
+            },
+          },
+          {
+            name: 'MembershipPersistor',
+            scope: 'instance',
+            linkedEntity: 'ChannelMember',
+            listens: [
+              { event: 'CONFIRM_REMOVE', triggers: 'DO_REMOVE', source: { kind: 'trait', trait: 'MembershipRemove' } },
+            ],
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [
+                { key: 'INIT', name: 'Init' },
+                { key: 'DO_REMOVE', name: 'Do remove', payloadSchema: [{ name: 'id', type: 'string' }] },
+              ],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'idle',
+                  event: 'DO_REMOVE',
+                  effects: [['persist', 'delete', 'ChannelMember', '@payload.id', { emit: { success: 'MEMBERSHIP_CHANGED' } }]],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe('planUserCrudFlow viewer switch, role-only OR policy (C1-V19 item 6)', () => {
+  it('crud-delete: switches persona to the role literal (never an owner id) and the persist succeeds', async () => {
+    const schema = roleOnlyDeletePolicedMembershipShape();
+    const steps = planUserCrudFlow(schema);
+    const del = steps.find((s) => s.testKind === 'crud-delete');
+    expect(del).toBeDefined();
+    expect(del?.viewerRequirement).toEqual({ role: { field: 'role', value: 'moderator' } });
+
+    const traits = extractTraitWalkConfigs(schema);
+    let capturedPersona: RawUserClaims | null = null;
+    const { driver, runtime } = createFakeDriver(traits, {
+      executeEffects: (effects, { persona }) => {
+        capturedPersona = persona;
+        const traces: EffectTrace[] = [];
+        for (const effect of effects) {
+          if (!Array.isArray(effect)) continue;
+          if (effect[0] === 'set') traces.push({ type: 'set', args: [], status: 'executed' });
+        }
+        return { effects: traces, emitted: [] };
+      },
+    });
+
+    const ctx: FakeDriverContext = { outputDir: '', trait: traits.find((t) => t.traitName === 'MembershipRemove')!, runtime };
+    await driver.reset(ctx);
+    runtime.seed('ChannelMember', [{ id: 'member-1', memberName: 'Ari' }]);
+
+    const initFrame = await tick(driver, ctx, null, {
+      from: 'idle',
+      event: 'INIT',
+      to: 'idle',
+      guardCase: null,
+      payload: {},
+      isRepositioning: false,
+      traitName: 'MembershipRemove',
+      triggerKind: 'auto-init',
+      coverageKey: 'MembershipRemove:auto-init',
+    });
+
+    const frame = await tick(driver, ctx, initFrame, del!, undefined, undefined, { id: 'default-viewer', role: '' });
+
+    // No `id` in the captured persona — a role-only policy must never
+    // synthesize a spurious owner requirement.
+    expect(capturedPersona).toEqual({ id: 'default-viewer', role: 'moderator' });
+    expect(runtime.getPersona()).toEqual({ id: 'default-viewer', role: '' });
+    expect(frame.errors ?? []).toEqual([]);
+    expect(frame.accepted).toBe(true);
   });
 });

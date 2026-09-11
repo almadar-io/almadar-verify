@@ -32,7 +32,7 @@ import { planGuardPreconditionPreamble } from './internal/guard-precondition.js'
 import { collectEntityFields } from './internal/payload-synth.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
 import { deriveViewerRequirement, type ViewerRequirement } from './internal/viewer-requirement.js';
-import { selfRelationFieldNames } from './internal/self-relation-fields.js';
+import { crossEntityRestrictRelations, selfRelationFieldNames } from './internal/self-relation-fields.js';
 import { extractTraitWalkConfigs } from './extract-trait-walk-configs.js';
 import { planReplayTo } from './plan-replay-to.js';
 
@@ -159,6 +159,13 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
       const selfRelationFields = selfBinding !== null && persist.kind === 'delete'
         ? selfRelationFieldNames(orbital, entityName)
         : [];
+      // C1-V17: the cross-entity counterpart — a row referenced only by
+      // ANOTHER entity's restrict-rule relation (`ChannelMember.channel`,
+      // `ChatMessage.channel` both pointing at `Channel`) is exactly as
+      // undeletable as a self-referenced one.
+      const crossEntityRelationFields = selfBinding !== null && persist.kind === 'delete'
+        ? crossEntityRestrictRelations(orbital, entityName)
+        : [];
 
       result.push({
         from: transition.from,
@@ -181,6 +188,7 @@ export function planDataMutationTests(orbital: OrbitalSchema): ExtendedWalkStep[
             payloadField: selfBinding.payloadField,
             wholeRow: selfBinding.wholeRow,
             ...(selfRelationFields.length > 0 && { avoidReferencedVia: selfRelationFields }),
+            ...(crossEntityRelationFields.length > 0 && { avoidReferencedByOtherEntities: crossEntityRelationFields }),
           },
         }),
         ...(viewerRequirement !== undefined && { viewerRequirement }),

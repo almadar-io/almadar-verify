@@ -94,6 +94,12 @@ export interface FrameCause {
    */
   testKind?: TestKind;
   /**
+   * RV item 27: the nominal failure arm a forced-failure probe's dispatch
+   * is trying to prove — carried from `ExtendedWalkStep.verifiesPortalFor`
+   * verbatim. See that field's doc.
+   */
+  verifiesPortalFor?: { traitName: string; from: string; event: string; to: string };
+  /**
    * I-23: set when the kernel deliberately SKIPPED the bare bus fallback
    * because the step's open event requires payload fields a `{}` dispatch
    * cannot supply (`ExtendedWalkStep.requiresRowContext`). Carries the
@@ -253,6 +259,16 @@ export interface DomSnapshot {
     slot: PortalSlot;
     mounted: boolean;
     childCount: number;
+    /**
+     * The slot's top child's own `data-pattern` attribute — the runtime's
+     * own deterministic identity marker for whatever pattern is currently
+     * mounted there (`UISlotRenderer` stamps it on every top-level
+     * render). `undefined` when unmounted/childless, or when the driver
+     * doesn't probe it (older drivers). Feeds
+     * `assertSlotShowsForeignTransitionRender` — the runtime twin of
+     * compiler §98's last-writer-per-slot contract.
+     */
+    pattern?: string;
   }>;
   /** Bounded sample (256 chars) of visible text — used for fast diffing without full DOM serialization. */
   visibleTextSample: string;

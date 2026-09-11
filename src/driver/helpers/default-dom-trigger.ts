@@ -88,6 +88,18 @@ function actionSelector(event: string, suffix = ''): string {
   return `${exact}, ${qualified}`;
 }
 
+/**
+ * Selector for a slot-shell dismiss control — the `CompiledPortal`
+ * (`@almadar/ui` `UISlotRenderer.tsx`) Modal/Drawer shell's X / overlay-click
+ * mechanism, which stamps `data-event="<EVENT>"` (Modal.tsx's close button:
+ * `data-event="CLOSE"`), never an `action-<EVENT>` testid. Exported for the
+ * fallback-selector unit test; production callers reach it only through
+ * {@link createDefaultDomTrigger}'s fallback, never directly.
+ */
+export function shellDismissSelector(event: string): string {
+  return `[data-event="${event}"]`;
+}
+
 export function createDefaultDomTrigger(
   options: DefaultDomTriggerOptions = {},
 ): (page: Page, step: ExtendedWalkStep, traitScope?: string) => Promise<DomTriggerResult> {
@@ -170,6 +182,42 @@ export function createDefaultDomTrigger(
       clicked,
       ...(clickError !== undefined && { clickError }),
     });
+
+    // Slot-shell dismiss controls (Modal/Drawer X — `CompiledPortal`'s
+    // `UISlotRenderer.tsx` shell) carry no `data-testid`; they stamp
+    // `data-event="<EVENT>"` instead (`@almadar/ui` Modal.tsx: the X button
+    // renders `data-event="CLOSE"`). No pattern ever renders an
+    // `action-CLOSE`/`action-CANCEL` testid, so the primary selector above
+    // always misses on them — try the shell's own attribute next, for ANY
+    // event the action-testid selector missed (not name-gated to CLOSE/
+    // CANCEL: a call site could route a different local dismiss event
+    // through the same shell mechanism). Existing selector order stays
+    // first; this is strictly a fallback.
+    if (!clicked) {
+      const shellSelector = shellDismissSelector(affordanceEvent);
+      const shellLocator = page.locator(shellSelector).first();
+      try {
+        const shellVisible = await shellLocator.isVisible({ timeout: 250 });
+        if (shellVisible) {
+          await shellLocator.click({ timeout: clickTimeoutMs });
+          clicked = true;
+        }
+        domLog.debug('dom:fill:trigger-click-shell-event', {
+          step: step.coverageKey,
+          selector: shellSelector,
+          visibleProbe: shellVisible,
+          clicked,
+        });
+      } catch (err) {
+        domLog.debug('dom:fill:trigger-click-shell-event', {
+          step: step.coverageKey,
+          selector: shellSelector,
+          visibleProbe: false,
+          clicked: false,
+          clickError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // Row-scoped miss on crud-edit/delete: retry with the unscoped
     // first-match selector — but ONLY when this action is rendered

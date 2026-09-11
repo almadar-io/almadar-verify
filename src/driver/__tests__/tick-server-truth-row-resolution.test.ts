@@ -60,7 +60,17 @@ function noteSchema(): OrbitalSchema {
                 { key: 'CONFIRM_DELETE', name: 'Confirm' },
               ],
               transitions: [
-                { from: 'idle', to: 'confirming', event: 'DELETE' },
+                {
+                  from: 'idle',
+                  to: 'confirming',
+                  event: 'DELETE',
+                  // C1-V18: a genuine overlay-form open affordance — see
+                  // plan-user-crud-flow.ts's isOverlayFormOpen.
+                  effects: [['render-ui', 'modal', {
+                    type: 'stack',
+                    children: [{ type: 'button', action: 'CONFIRM_DELETE', label: 'Delete' }],
+                  }]],
+                },
                 { from: 'confirming', to: 'idle', event: 'CONFIRM_DELETE' },
               ],
             },

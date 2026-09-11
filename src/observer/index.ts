@@ -25,16 +25,19 @@ export type {
 
 export { coverage } from './coverage.js';
 export { assertMutation } from './assert-mutation.js';
-export { assertCascade } from './assert-cascade.js';
+export { assertCascade, assertBusItemCascadedNTimes } from './assert-cascade.js';
 export { assertPortalSlots } from './assert-portal.js';
 export { probeBindings } from './probe-bindings.js';
 export { assertRefTraitInvariantOverFrames } from './assert-ref-trait-invariant.js';
 export { assertClickPathSample } from './assert-click-path-sample.js';
 export { assertContractEventFired } from './assert-contract-event-fired.js';
 export { assertDataMutation } from './assert-data-mutation.js';
-export { assertPortalPerStep } from './assert-portal-per-step.js';
+export { assertPortalPerStep, assertTransientFailureArmPortals, assertSlotShowsForeignTransitionRender } from './assert-portal-per-step.js';
 export { assertInteractionPattern } from './assert-interaction-pattern.js';
 export { assertClickNoListener } from './assert-click-no-listener.js';
+export { assertEmitPayloadAlwaysEmpty } from './emit-payload-always-empty.js';
+export { assertListensEdgeNeverFired } from './listens-edge-never-fired.js';
+export { assertEffectFailureNotSurfaced } from './effect-failure-not-surfaced.js';
 export { report, type ReportInput } from './report.js';
 export {
   probeListenCascades,

@@ -272,4 +272,34 @@ describe('auditListens', () => {
       },
     ]);
   });
+
+  // RV item 27 (New runtime observers ... audit_listens fix): an emit
+  // declared in the contract but backed ONLY by an itemActions/
+  // browseItemActions config array the resolved call site narrowed away
+  // can never fire at all — reporting `missing` ("add a listens line")
+  // would invent a defect nothing could ever deliver.
+  it('excludes a config-gated itemActions event the resolved call site narrowed away from missing', () => {
+    const browse = trait({
+      name: 'Browse',
+      emits: [{ event: 'EDIT_ROW', scope: 'internal' }],
+      stateMachine: machine([{ from: 'browsing', event: 'INIT', to: 'browsing' }]),
+      config: { itemActions: { type: 'array', default: [{ event: 'VIEW', label: 'View' }] } },
+    });
+
+    const result = auditListens(schema([browse]));
+    expect(result.missing).toEqual([]);
+    expect(result.emitters).toEqual([]);
+  });
+
+  it('still reports missing once the itemActions config DOES include the event but nothing listens', () => {
+    const browse = trait({
+      name: 'Browse',
+      emits: [{ event: 'EDIT_ROW', scope: 'internal' }],
+      stateMachine: machine([{ from: 'browsing', event: 'INIT', to: 'browsing' }]),
+      config: { itemActions: { type: 'array', default: [{ event: 'VIEW', label: 'View' }, { event: 'EDIT_ROW', label: 'Edit' }] } },
+    });
+
+    const result = auditListens(schema([browse]));
+    expect(result.missing).toEqual([{ trait: 'Browse', event: 'EDIT_ROW', suggestion: 'listens { Browse.EDIT_ROW -> EDIT_ROW }' }]);
+  });
 });

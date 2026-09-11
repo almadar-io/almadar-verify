@@ -111,7 +111,10 @@ describe('tick — crud-delete establish-through-create fallback (C1-V15 item C)
 
     expect(frame.accepted).toBe(false);
     expect(frame.errors).toHaveLength(1);
-    expect(frame.errors[0]).toContain('no-target-row');
+    // C1-V17: 'all-referenced' (every row exists but the restrict rule
+    // blocks deleting any of them) gets its own `no-deletable-row:` prefix,
+    // distinct from `no-target-row:`'s "nothing to pick from at all".
+    expect(frame.errors[0]).toContain('no-deletable-row');
     expect(frame.cause.targetRowId).toBeUndefined();
   });
 });

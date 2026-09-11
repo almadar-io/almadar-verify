@@ -70,6 +70,76 @@
  *    handled in `browsing`, wedging every subsequent walk step in `loading`).
  *    Self-transitions (`from === to`) are excluded — the machine stays in an
  *    interactive state, a different (render-drop) class, not a wedge.
+ *  - `failure-arm-missing` (error) / `failure-arm-renders-nothing` (warning)
+ *    — the FAILURE-specific pair `async-result-deaf-target` doesn't
+ *    distinguish (that check only asks whether SOME arm — success or
+ *    failure — handles the result event at all). For every client-bound
+ *    transition's `fetch`/`persist`/`call-service` effect declaring
+ *    `emit.failure: X`: no transition in the target state (or `*`) handling
+ *    `X` at all is `failure-arm-missing` — a failed write has nowhere to
+ *    land, strictly worse than a stray success miss because nothing tells
+ *    the user their write vanished. An arm exists but its effects neither
+ *    `render-ui` (into any slot, non-null — `notify` is retired sugar for a
+ *    `render-ui toast` and no longer a separate check) is
+ *    `failure-arm-renders-nothing` — the failure is caught and silently
+ *    absorbed. Rung-3 runtime twin: `assertEffectFailureNotSurfaced`
+ *    (`effect-failure-not-surfaced.ts`) proves the same contract actually
+ *    held at walk time (declared route fired, toast mounted); this lint is
+ *    the static, pre-walk gate for the same class.
+ *  - `modal-shell-close-deaf` (warning) — a client-bound trait's transition
+ *    writes `['render-ui', 'modal'|'drawer', payload]` where `payload` is a
+ *    pattern config (not `null`, not a `RenderBinding` string) whose `type` is
+ *    not in `SELF_OVERLAY_PATTERN_TYPES` (`@almadar/core`: `modal`,
+ *    `confirm-dialog` — patterns that paint their own backdrop/chrome), while
+ *    the TARGET state's handled events (`transitions.filter(t => t.from ===
+ *    to || t.from === '*')`) contain neither `CLOSE` nor `CANCEL`. Everything
+ *    else painted into an overlay slot gets `UISlotRenderer`'s `CompiledPortal`
+ *    shell (`SELF_OVERLAY_PATTERN_TYPES` gates which patterns it wraps), whose
+ *    X / Escape / overlay-click dismiss emits `UI:<Orbital>.<Trait>.CLOSE`
+ *    then `.CANCEL` — a target state handling neither leaves that control
+ *    dead (std-realtime-chat `ChatOverlayPanel`: a `stack` painted into
+ *    `modal` with no `CLOSE`/`CANCEL` arm, so the shell's X did nothing next
+ *    to the panel's own working dismiss).
+ *  - `filter-field-never-written` (warning) — a client-bound trait's `fetch`
+ *    effect (found anywhere in a transition's effects, including through `if`
+ *    branches) carries a `filter` S-expression referencing `(object/get
+ *    @entity <f>)` for the fetched entity `E`, where NO `persist
+ *    create`/`update` of `E` anywhere in the schema supplies key `f` — scanning
+ *    only EXPLICIT object-literal data keys; a bare/computed data argument
+ *    (`@entity`, `@payload.data`, an `object/merge` call, …) may supply any
+ *    field, so it exempts the whole entity rather than being read further.
+ *    Conservative by construction: silent unless `E` resolves to an inline
+ *    entity definition (an opaque/imported entity proves nothing either way),
+ *    silent when `f` is a declared field carrying a `default` or `@intrinsic`
+ *    (seeded without an explicit writer), and silent once ANY persist for `E`
+ *    uses a bare data argument. What remains is exactly: `f` is not declared
+ *    on `E` at all, or is declared but written by nothing and read only by
+ *    this filter — the filter can never match a real row (the std-realtime-chat
+ *    `ChannelThread`/`threadRootId` class: a fetch filtered on a field no
+ *    `persist create ChatMessage` ever set, so the thread panel always reads
+ *    zero rows). `<f>` itself must be a LITERAL field name — a config-
+ *    forwarded or payload-bound field selector (`@config.scopeField`,
+ *    `?field`) is dynamic, and by resolve time may have inlined to the
+ *    call site's literal value (often `""`, an unset std-browse
+ *    `scopeField`/`initialFilterField`) or stayed a bare `?field`/
+ *    `@payload.field` token — either reads as a bogus finding rather than a
+ *    real one, so both sigils are excluded from `f` entirely. `E` itself is
+ *    exempt when it is `[identity]`-tagged (`identityEntityNames`,
+ *    `@almadar/core/mock` — the same marker `identity-roster-unwritable`
+ *    consults, shadowed copies included): an identity roster's rows come
+ *    from the auth provider, never a `persist create`/`update` inside the
+ *    program, so "no persist supplies this field" proves nothing for any
+ *    field on it (the std-realtime-chat `OnlineUser`/`name`/`username`
+ *    false-positive: a read-only `[identity]` roster, already flagged
+ *    unwritable in its entirety by `identity-roster-unwritable`). `E` is also
+ *    exempt on a per-FIELD basis when another entity sharing its declared
+ *    `persistent:` collection (`entityAccessTable`'s collection-inheritance
+ *    idiom, `@almadar/core/access/entityAccess.ts`) DOES supply `f` — a
+ *    std-atom's own entity writes real rows a sibling organism's
+ *    differently-named "view" entity only reads (the std-cms `HubArticle`/
+ *    `Article` and std-nonprofit-donations `DonorBroadcast`/`BroadcastDraft`
+ *    shapes, both `[persistent: articles]`/`[persistent: broadcastdrafts]`
+ *    respectively — measured live 2 of 5 in a random corpus sample).
  *  - `listens-source-never-emits` — a `listens { A.EVENT -> X }` route whose
  *    source trait exists but never produces EVENT (not in its emits
  *    contract, no effect `emit:` option, no `action:`/`itemActions`
@@ -223,15 +293,16 @@ import type {
   OrbitalPage,
   OrbitalSchema,
   RenderBinding,
+  RenderUiPayload,
   ResolvedPatternProps,
   SExpr,
   Trait,
   TraitConfigValue,
   Transition,
 } from '@almadar/core';
-import { identityEntityName, ownerFieldsFromSchema } from '@almadar/core/mock';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, getPatternFieldsContract, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
-import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
+import { identityEntityName, identityEntityNames, ownerFieldsFromSchema } from '@almadar/core/mock';
+import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, getPatternFieldsContract, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, SELF_OVERLAY_PATTERN_TYPES, traitDeclaresConfigForward } from '@almadar/core';
+import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFailureEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
 import { embedHostsOf } from './click-wiring-audit.js';
 import { traitOrEmbedHostProduces } from './probe-listen-cascades.js';
 
@@ -256,8 +327,14 @@ export interface WiringLintFinding {
     | 'client-unbound-state-machine'
     | 'steady-state-no-init-reentry'
     | 'async-result-deaf-target'
+    | 'failure-arm-missing'
+    | 'failure-arm-renders-nothing'
+    | 'modal-shell-close-deaf'
+    | 'self-overlay-inside-modal-shell'
+    | 'filter-field-never-written'
     | 'groupby-enum-column-gap'
     | 'listens-source-never-emits'
+    | 'listens-target-unreachable-state'
     | 'listener-affordance-removed-by-config'
     | 'payload-starved-route'
     | 'unclaimed-main-writer'
@@ -731,13 +808,6 @@ export function configItemActionEvents(trait: Trait): Set<string> {
   return out;
 }
 
-/** Every event a LIVE mechanism on the trait currently produces — effects,
- *  rendered affordances, and config-driven item actions. Deliberately
- *  EXCLUDES the trait's own `emits[]` contract: that array declares what the
- *  trait is PERMITTED to emit under some configuration, not what a specific
- *  resolved call site actually wires up. Split out of {@link producibleEvents}
- *  as the building block `listener-affordance-removed-by-config` needs — a
- *  contract entry with no live producer behind it. */
 /** Literal `['emit', eventName, payload?]` effect tuples — the form
  *  `collectEffectEmittedEvents` doesn't cover (it only reads the
  *  `{emit: {success, failure}}` fetch/persist options-object shape). Shared
@@ -751,6 +821,13 @@ function explicitEmitEvents(effects: ReadonlyArray<Effect> | undefined): Set<str
   return out;
 }
 
+/** Every event a LIVE mechanism on the trait currently produces — effects,
+ *  rendered affordances, and config-driven item actions. Deliberately
+ *  EXCLUDES the trait's own `emits[]` contract: that array declares what the
+ *  trait is PERMITTED to emit under some configuration, not what a specific
+ *  resolved call site actually wires up. Split out of {@link producibleEvents}
+ *  as the building block `listener-affordance-removed-by-config` needs — a
+ *  contract entry with no live producer behind it. */
 function liveProducibleEvents(trait: Trait): Set<string> {
   const out = new Set<string>();
   // `TraitTick.effects` fires on a scheduler, not a state-machine transition
@@ -840,6 +917,114 @@ function writesContentMain(effects: ReadonlyArray<Effect> | undefined): boolean 
   return (effects ?? []).some((effect) => scanNode(effect));
 }
 
+/** True for a {@link RenderUiPayload} that is an actual pattern config —
+ *  excludes `null` and `RenderBinding` marker strings (`@…`). Narrows the
+ *  union so `.type` is safe to read. */
+function isPatternPayload(payload: RenderUiPayload): payload is AnyPatternConfig {
+  return payload !== null && typeof payload !== 'string';
+}
+
+/** Every `['render-ui', 'modal'|'drawer', payload]` effect anywhere in an
+ *  effect list, including through `if` branches — same traversal shape as
+ *  {@link writesContentMain}, scoped to the two OVERLAY slots the
+ *  `CompiledPortal` shell wraps. Feeds `modal-shell-close-deaf`. */
+function overlaySlotRenderUiPayloads(effects: ReadonlyArray<Effect> | undefined): RenderUiPayload[] {
+  const out: RenderUiPayload[] = [];
+  const scanNode = (node: unknown): void => {
+    if (!Array.isArray(node)) return;
+    if (node[0] === 'render-ui' && (node[1] === 'modal' || node[1] === 'drawer')) {
+      out.push(node[2] as RenderUiPayload);
+      return;
+    }
+    for (const child of node) scanNode(child);
+  };
+  for (const effect of effects ?? []) scanNode(effect);
+  return out;
+}
+
+/** True when `payload` — or ANY pattern node nested inside it (a layout
+ *  container's `children`, or any other nested field) — carries `slideOver:
+ *  true`: a pattern that self-manages its own overlay chrome. Recurses
+ *  through the whole payload tree rather than just the top-level node,
+ *  since a self-overlaying pattern usually arrives wrapped in a layout
+ *  `Stack` (`overlaySlotRenderUiPayloads` only returns that outer node).
+ *  Feeds `self-overlay-inside-modal-shell`. */
+function containsSelfOverlayNode(payload: unknown): boolean {
+  if (payload === null || typeof payload !== 'object') return false;
+  if (Array.isArray(payload)) return payload.some(containsSelfOverlayNode);
+  const record = payload as Readonly<Record<string, unknown>>;
+  if (record['slideOver'] === true) return true;
+  return Object.values(record).some(containsSelfOverlayNode);
+}
+
+/** True when an effect list, anywhere including through `if`/`do`
+ *  branches, contains a `render-ui` with a non-null pattern (any slot —
+ *  including the `toast` slot, the one feedback surface now that `notify`
+ *  is retired sugar for it). Feeds `failure-arm-renders-nothing` — the arm
+ *  must actually paint something, not merely exist. */
+function armPaintsSomething(effects: ReadonlyArray<Effect> | undefined): boolean {
+  let paints = false;
+  const scanNode = (node: unknown): void => {
+    if (paints || !Array.isArray(node)) return;
+    if (node[0] === 'render-ui' && node.length >= 3 && node[2] !== null) {
+      paints = true;
+      return;
+    }
+    for (const child of node) scanNode(child);
+  };
+  for (const effect of effects ?? []) scanNode(effect);
+  return paints;
+}
+
+/** Every `['fetch', entityName, { filter, … }]` occurrence anywhere in an
+ *  effect list, including through `if` branches, that carries a `filter`
+ *  S-expression. Feeds `filter-field-never-written`. */
+function fetchFiltersOf(effects: ReadonlyArray<Effect> | undefined): Array<{ entity: string; filter: SExpr }> {
+  const out: Array<{ entity: string; filter: SExpr }> = [];
+  const scanNode = (node: unknown): void => {
+    if (!Array.isArray(node)) return;
+    if (node[0] === 'fetch' && typeof node[1] === 'string') {
+      const options = node[2];
+      if (options !== null && typeof options === 'object' && !Array.isArray(options)) {
+        const filter = (options as Readonly<{ filter?: SExpr }>).filter;
+        if (filter !== undefined) out.push({ entity: node[1], filter });
+      }
+      return;
+    }
+    for (const child of node) scanNode(child);
+  };
+  for (const effect of effects ?? []) scanNode(effect);
+  return out;
+}
+
+/** Field names referenced as `(object/get @entity <f>)` anywhere in a filter
+ *  S-expression — the fetched-entity fields a `fetch`'s `filter` compares
+ *  against, regardless of how deep in `and`/`or`/`=` nesting the comparison
+ *  sits. `<f>` must be a LITERAL field name: a config-forwarded or
+ *  payload-bound field selector (`@config.scopeField`, `?field`) is itself
+ *  dynamic — by the time the schema is resolved it may have inlined to
+ *  today's call-site value (often `""`, the std-browse `scopeField`/
+ *  `initialFilterField` unset default) or stayed a literal `?field`/
+ *  `@payload.field` token, and either reads as a bogus "field ''" or
+ *  "field '@payload.field'" finding rather than a real one — the same
+ *  literal-vs-binding guard `unclaimed-main-writer`'s label check already
+ *  applies (`!value.startsWith('@') && !value.startsWith('?')`). */
+function objectGetEntityFields(node: unknown, out: Set<string>): void {
+  if (!Array.isArray(node)) return;
+  if (
+    node[0] === 'object/get' &&
+    node[1] === '@entity' &&
+    typeof node[2] === 'string' &&
+    node[2].length > 0 &&
+    !node[2].startsWith('@') &&
+    !node[2].startsWith('?')
+  ) {
+    out.add(node[2]);
+    return;
+  }
+  for (const child of node) objectGetEntityFields(child, out);
+}
+
 export function lintWiring(schema: OrbitalSchema): WiringLintResult {
   const findings: WiringLintFinding[] = [];
   // Whole-schema embed-host map — `listener-affordance-removed-by-config`
@@ -847,6 +1032,90 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
   // the same contract `probe-listen-cascades.ts` and `click-wiring-audit.ts`
   // already share.
   const embedHosts = embedHostsOf(schema);
+
+  // Schema-wide index for `filter-field-never-written` — cross-orbital
+  // because the persistor that supplies a field routinely lives in a
+  // sibling orbital (the modal + persistor idiom).
+  // `[identity]`-tagged entities are exempt entirely: their rows come from
+  // the auth roster, never a `persist create`/`update` inside the program
+  // (the same fact `identity-roster-unwritable` already encodes for the
+  // whole entity) — "no persist supplies this field" proves nothing for a
+  // roster no persist ever writes AT ALL. Shadowed-copy aware, same as
+  // `identity-roster-unwritable`'s own lookup.
+  const identityNames = new Set(identityEntityNames(schema));
+  const entityDefsByName = new Map<string, OrbitalEntity>();
+  // Entities sharing a `persistent:` collection are the SAME table under
+  // different names (`entityAccessTable`'s collection-inheritance idiom,
+  // `@almadar/core/access/entityAccess.ts` — "36 of 54 app organisms share a
+  // collection this way"): a std-atom's own entity name writes real rows a
+  // sibling organism's differently-named "view" entity (`HubArticle` next to
+  // `Article`, both `[persistent: articles]`) only READS. A persist under
+  // the writer's name must count as supplying the field for every entity
+  // sharing its collection, or every such view entity's filters read as
+  // permanently dead. Same collection-key convention as `entityAccessTable`
+  // — explicit `def.collection` only, never the derived default.
+  const collectionOf = new Map<string, string>();
+  const entitiesByCollection = new Map<string, string[]>();
+  for (const orb of schema.orbitals) {
+    for (const ref of [orb.entity, ...(orb.auxiliaryEntities ?? [])]) {
+      if (typeof ref !== 'object' || ref === null || !('fields' in ref)) continue;
+      const def = ref as OrbitalEntity;
+      if (typeof def.name !== 'string') continue;
+      entityDefsByName.set(def.name, def);
+      if (typeof def.collection === 'string') {
+        collectionOf.set(def.name, def.collection);
+        const mates = entitiesByCollection.get(def.collection) ?? [];
+        mates.push(def.name);
+        entitiesByCollection.set(def.collection, mates);
+      }
+    }
+  }
+  // Fields an explicit object-literal `persist create`/`update` data
+  // argument supplies, per entity. An entity with any BARE data argument
+  // (`@entity`, `@payload.data`, a computed `SExpr[]`) goes into
+  // `anyDataEntities` instead — that call may supply any field, so the whole
+  // entity is exempted rather than contributing specific keys.
+  const writtenFieldsByEntity = new Map<string, Set<string>>();
+  const anyDataEntities = new Set<string>();
+  const notePersistWrite = (entityName: string, data: unknown): void => {
+    if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+      const set = writtenFieldsByEntity.get(entityName) ?? new Set<string>();
+      for (const key of Object.keys(data as Readonly<Record<string, unknown>>)) set.add(key);
+      writtenFieldsByEntity.set(entityName, set);
+    } else {
+      anyDataEntities.add(entityName);
+    }
+  };
+  const scanForPersistWrites = (node: unknown): void => {
+    if (!Array.isArray(node)) return;
+    if (node[0] === 'persist' && (node[1] === 'create' || node[1] === 'update') && typeof node[2] === 'string') {
+      notePersistWrite(node[2], node[3]);
+    }
+    for (const child of node) scanForPersistWrites(child);
+  };
+  for (const orb of schema.orbitals) {
+    for (const traitRef of orb.traits ?? []) {
+      if (!isInlineTrait(traitRef)) continue;
+      for (const arm of traitRef.stateMachine?.transitions ?? []) {
+        for (const effect of arm.effects ?? []) scanForPersistWrites(effect);
+      }
+    }
+  }
+  /** True when SOME persist for `entityName`, or for another entity sharing
+   *  its `persistent:` collection, supplies `field` — directly, or via a
+   *  bare data argument (may supply anything). The collection-mate lookup
+   *  is what makes a "view" entity's filter provably safe: `HubArticle`
+   *  (`[persistent: articles]`) never sees a `persist create HubArticle`,
+   *  but `Article` — the SAME table under its writer's own name — does. */
+  const fieldSuppliedForEntity = (entityName: string, field: string): boolean => {
+    if (anyDataEntities.has(entityName)) return true;
+    if (writtenFieldsByEntity.get(entityName)?.has(field) === true) return true;
+    const collection = collectionOf.get(entityName);
+    if (collection === undefined) return false;
+    return (entitiesByCollection.get(collection) ?? []).some(
+      (mate) => mate !== entityName && (anyDataEntities.has(mate) || writtenFieldsByEntity.get(mate)?.has(field) === true),
+    );
+  };
 
   for (const orb of schema.orbitals) {
     const traits = new Map<string, Trait>();
@@ -1334,6 +1603,207 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
             `handle ${deaf.map((e) => `'${e}'`).join(', ')} in '${transition.to}' (mirror the arms the source state ` +
             `declares for them), or route the effect's emit to an event '${transition.to}' already handles`,
         });
+      }
+    }
+
+    // --- listens-target-unreachable-state -----------------------------------
+    // A cross-trait `listens { Source.EVENT -> triggers }` can fire while the
+    // listening trait sits in ANY of its own declared states — unlike a
+    // same-trait dispatch, there's no single known `from` to check reachability
+    // against. `triggers` is genuinely unreachable only when NO state the
+    // trait can ever be in (its own declared states, `handledIn` unioned
+    // across all of them — which already folds in wildcard `*`-sourced arms)
+    // has an arm for it: the cascade lands with nothing to receive it,
+    // wherever the trait happened to be.
+    for (const [name, trait] of traits) {
+      const transitions = trait.stateMachine?.transitions ?? [];
+      const states = trait.stateMachine?.states ?? [];
+      if (transitions.length === 0 || states.length === 0) continue;
+      const handledIn = (state: string): Set<string> =>
+        new Set(transitions.filter((t) => t.from === state || t.from === '*').map((t) => t.event));
+      const everHandled = new Set<string>();
+      for (const state of states) {
+        for (const event of handledIn(state.name)) everHandled.add(event);
+      }
+      for (const listen of trait.listens ?? []) {
+        if (typeof listen.triggers !== 'string' || listen.triggers.length === 0) continue;
+        if (everHandled.has(listen.triggers)) continue;
+        findings.push({
+          check: 'listens-target-unreachable-state',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: name,
+          message:
+            `${name} listens for '${listen.event}' -> '${listen.triggers}', but no state ${name} can be in has ` +
+            `an arm for '${listen.triggers}' — the cascade lands with nothing to receive it`,
+          suggestion:
+            `add a '${listen.triggers}' arm reachable from every state ${name} can be in (or from '*'), or point ` +
+            `the listen at an event ${name} actually handles`,
+        });
+      }
+    }
+
+    // --- failure-arm-missing / failure-arm-renders-nothing -----------------
+    // The FAILURE-specific pair `async-result-deaf-target` doesn't
+    // distinguish: that check only asks whether SOME arm (success or
+    // failure) handles the result event. Scoped to client-bound traits only
+    // — an unbound trait's arms never mount, so nothing is "rendered" there
+    // either way.
+    for (const [name, trait] of traits) {
+      if (!bound.has(name)) continue;
+      const transitions = trait.stateMachine?.transitions ?? [];
+      if (transitions.length === 0) continue;
+      const armsIn = (state: string): Transition[] =>
+        transitions.filter((t) => t.from === state || t.from === '*');
+      for (const transition of transitions) {
+        const failureEvents = collectFailureEvents(transition.effects ?? []);
+        if (failureEvents.size === 0) continue;
+        const armsAtTarget = armsIn(transition.to);
+        for (const failureEvent of failureEvents) {
+          const handlingArms = armsAtTarget.filter((t) => t.event === failureEvent);
+          if (handlingArms.length === 0) {
+            findings.push({
+              check: 'failure-arm-missing',
+              severity: 'error',
+              orbital: orb.name,
+              trait: name,
+              message:
+                `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' declares emit.failure ` +
+                `'${failureEvent}', but no arm in '${transition.to}' (or '*') handles it — a failed write has ` +
+                `nowhere to land`,
+              suggestion:
+                `add '${failureEvent} -> <state> (render-ui toast ...)' (or any render-ui into a visible slot) in ` +
+                `'${transition.to}'`,
+            });
+            continue;
+          }
+          if (handlingArms.some((t) => armPaintsSomething(t.effects))) continue;
+          findings.push({
+            check: 'failure-arm-renders-nothing',
+            severity: 'warning',
+            orbital: orb.name,
+            trait: name,
+            message:
+              `${name}: '${transition.to} + ${failureEvent}' handles the declared failure route from ` +
+              `'${transition.from} + ${transition.event}' but its effects render nothing — ` +
+              `the failure is absorbed silently`,
+            suggestion:
+              `paint a toast (render-ui toast, or any render-ui into a visible slot) in the '${failureEvent}' arm ` +
+              `so the failure reaches the user`,
+          });
+        }
+      }
+    }
+
+    // --- modal-shell-close-deaf ---------------------------------------------
+    // Only a render into an OVERLAY slot (`modal`/`drawer`) whose pattern is
+    // NOT self-overlaying gets `UISlotRenderer`'s `CompiledPortal` shell — see
+    // `SELF_OVERLAY_PATTERN_TYPES` (`@almadar/core`). That shell's X / Escape /
+    // overlay-click dismiss emits `CLOSE` then `CANCEL`; a target state
+    // handling neither leaves the control dead.
+    for (const [name, trait] of traits) {
+      if (!bound.has(name)) continue; // an unbound trait's shell never mounts
+      const transitions = trait.stateMachine?.transitions ?? [];
+      if (transitions.length === 0) continue;
+      const handledIn = (state: string): Set<string> =>
+        new Set(transitions.filter((t) => t.from === state || t.from === '*').map((t) => t.event));
+      for (const transition of transitions) {
+        const shellWrapped = overlaySlotRenderUiPayloads(transition.effects)
+          .filter(isPatternPayload)
+          .filter((payload) => !SELF_OVERLAY_PATTERN_TYPES.has(payload.type));
+        if (shellWrapped.length === 0) continue;
+        const handled = handledIn(transition.to);
+        if (handled.has('CLOSE') || handled.has('CANCEL')) continue;
+        findings.push({
+          check: 'modal-shell-close-deaf',
+          severity: 'warning',
+          orbital: orb.name,
+          trait: name,
+          message:
+            `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' renders '${shellWrapped[0]?.type}' ` +
+            `into the overlay slot, but '${transition.to}' handles neither CLOSE nor CANCEL — the slot shell's X / ` +
+            `Escape / overlay-click emits UI:${orb.name}.${name}.CLOSE then .CANCEL, and with no arm for either the ` +
+            `dismiss control does nothing`,
+          suggestion:
+            `add \`CLOSE -> ${transition.to} (render-ui modal null)\` or \`CANCEL -> ${transition.to} (render-ui modal null)\`, ` +
+            `or render a 'modal'/'confirm-dialog' pattern instead so the content paints its own chrome and the slot ` +
+            `shell adds none`,
+        });
+      }
+    }
+
+    // --- self-overlay-inside-modal-shell -------------------------------------
+    // The inverse defect from `modal-shell-close-deaf`: a pattern that
+    // manages its OWN overlay chrome (declares `slideOver: true` — today
+    // only `DetailPanel`'s own slide-over mode, not a named-pattern special
+    // case: any pattern carrying this prop true self-manages its overlay)
+    // rendered into `modal`/`drawer` ANYWHERE in the payload tree (a
+    // `DetailPanel` nested inside a layout `Stack`, the shape
+    // `overlaySlotRenderUiPayloads` alone doesn't see since it only returns
+    // the top-level payload). `UISlotRenderer` only skips its
+    // `CompiledPortal` wrap for `SELF_OVERLAY_PATTERN_TYPES` members
+    // (`modal`/`confirm-dialog`) — a self-overlaying pattern outside that
+    // set still gets wrapped, so the render ends up with TWO overlay
+    // chromes stacked (the generic shell's backdrop/dismiss plus the
+    // pattern's own) — live in the corpus (`std-blaz-klemenc`'s exercise/
+    // photos DetailPanels, rendered into `modal` with `slideOver: true`).
+    for (const [name, trait] of traits) {
+      if (!bound.has(name)) continue; // an unbound trait's shell never mounts
+      for (const transition of trait.stateMachine?.transitions ?? []) {
+        for (const payload of overlaySlotRenderUiPayloads(transition.effects)) {
+          if (!containsSelfOverlayNode(payload)) continue;
+          findings.push({
+            check: 'self-overlay-inside-modal-shell',
+            severity: 'warning',
+            orbital: orb.name,
+            trait: name,
+            message:
+              `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' renders a self-overlaying ` +
+              `pattern (\`slideOver: true\`) into the overlay slot — the pattern paints its own chrome AND the slot ` +
+              `shell's \`CompiledPortal\` wraps it again (it isn't a SELF_OVERLAY_PATTERN_TYPES member), producing ` +
+              `two stacked overlays`,
+            suggestion:
+              `set \`slideOver: false\` (or drop the prop) so the slot shell is the only chrome, or move this render ` +
+              `into \`main\`/another non-overlay slot where the pattern's own overlay mode is the only one painted`,
+          });
+        }
+      }
+    }
+
+    // --- filter-field-never-written ------------------------------------------
+    // A fetch filtered on a field no persist anywhere ever writes can never
+    // match a real row. See the header doc block for the exact predicate
+    // (declared-with-default/@intrinsic, any bare persist data argument, and
+    // an unresolved fetched entity all keep this silent).
+    for (const [name, trait] of traits) {
+      if (!bound.has(name)) continue;
+      for (const transition of trait.stateMachine?.transitions ?? []) {
+        for (const { entity: fetchedEntity, filter } of fetchFiltersOf(transition.effects)) {
+          if (identityNames.has(fetchedEntity)) continue; // [identity] roster — rows come from outside the program
+          const entityDef = entityDefsByName.get(fetchedEntity);
+          if (entityDef === undefined) continue; // unresolved entity — cannot prove absence, stay quiet
+          const fields = new Set<string>();
+          objectGetEntityFields(filter, fields);
+          if (fields.size === 0) continue;
+          for (const field of fields) {
+            if (fieldSuppliedForEntity(fetchedEntity, field)) continue;
+            const declared = (entityDef.fields ?? []).find((f) => f.name === field);
+            if (declared !== undefined && (declared.default !== undefined || declared.intrinsic === true)) continue;
+            findings.push({
+              check: 'filter-field-never-written',
+              severity: 'warning',
+              orbital: orb.name,
+              trait: name,
+              message:
+                `${name} fetches ${fetchedEntity} filtered on \`${field}\`, but no \`persist create\`/\`update\` of ` +
+                `${fetchedEntity} anywhere in the schema supplies \`${field}\`${declared === undefined ? ' (not even a declared field)' : ''} — ` +
+                `the filter can never match a real row, so the fetch always returns empty`,
+              suggestion:
+                `supply \`${field}\` in the \`persist create\`/\`update ${fetchedEntity}\` data that produces the rows ` +
+                `this filter targets, or drop \`${field}\` from the filter if it is dead`,
+            });
+          }
+        }
       }
     }
 
@@ -1845,32 +2315,43 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
 
   // --- identity-roster-unwritable ------------------------------------------
   // The `[identity]` entity is the app's persona roster. A roster no
-  // transition can `persist create` into has no write path: users can never
-  // be added from inside the app, even though every read surface looks
-  // complete. Effects are scanned recursively so persists nested in `if`
-  // branches count.
+  // transition ever `persist`s (create, update, OR delete) has no write
+  // path at all: users can never be added, edited, or removed from inside
+  // the app, even though every read surface looks complete. Narrower than
+  // "no `persist create`" alone — a roster row is always seeded by auth
+  // first, so a legitimate write path may be `persist update` ONLY
+  // (std-realtime-chat's `OnlinePresence` writes `OnlineUser` — the
+  // viewer's own row — via `persist update`, never `create`; a `create`
+  // there would collide with the auth-seeded row). Effects are scanned
+  // recursively so persists nested in `if` branches count.
   const identityName = identityEntityName(schema);
   if (identityName !== undefined) {
-    const createsIdentity = (node: unknown): boolean => {
+    const touchesIdentity = (node: unknown): boolean => {
       if (!Array.isArray(node)) return false;
-      if (node[0] === 'persist' && node[1] === 'create' && node[2] === identityName) return true;
-      return node.some(createsIdentity);
+      if (
+        node[0] === 'persist'
+        && (node[1] === 'create' || node[1] === 'update' || node[1] === 'delete')
+        && node[2] === identityName
+      ) {
+        return true;
+      }
+      return node.some(touchesIdentity);
     };
-    let hasCreatePath = false;
+    let hasWritePath = false;
     for (const orb of schema.orbitals) {
       for (const trait of orb.traits ?? []) {
         if (!isInlineTrait(trait)) continue;
         for (const arm of trait.stateMachine?.transitions ?? []) {
-          if ((arm.effects ?? []).some(createsIdentity)) {
-            hasCreatePath = true;
+          if ((arm.effects ?? []).some(touchesIdentity)) {
+            hasWritePath = true;
             break;
           }
         }
-        if (hasCreatePath) break;
+        if (hasWritePath) break;
       }
-      if (hasCreatePath) break;
+      if (hasWritePath) break;
     }
-    if (!hasCreatePath) {
+    if (!hasWritePath) {
       const owner =
         schema.orbitals.find(
           (orb) =>
@@ -1887,13 +2368,15 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
           trait: identityName,
           entity: identityName,
           message:
-            `${identityName} is the app's [identity] roster but no transition reaches a ` +
-            `\`persist create ${identityName}\` — the roster is read-only, so users can never ` +
-            `be added from inside the app`,
+            `${identityName} is the app's [identity] roster but no transition ever ` +
+            `\`persist\`s it (create, update, or delete) — the roster is read-only, so a ` +
+            `signed-in user's own row can never change from inside the app`,
           suggestion:
-            `compose the app's create mechanism into the ${identityName} orbital: an Add ` +
-            `affordance emitting CREATE, a \`Modal.traits.ModalRecordModal\` create modal, and a ` +
-            `persistor trait whose DO_CREATE arm runs \`(persist create ${identityName} ?data)\``,
+            `compose a write path into the ${identityName} orbital: an Add affordance emitting ` +
+            `CREATE with a \`Modal.traits.ModalRecordModal\` create modal and a persistor trait ` +
+            `whose DO_CREATE arm runs \`(persist create ${identityName} ?data)\`, or — when rows are ` +
+            `always seeded by auth first — a self-service edit path whose persistor runs ` +
+            `\`(persist update ${identityName} ?data)\` against the viewer's own row`,
         });
       }
     }

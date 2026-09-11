@@ -27,8 +27,11 @@ import type { DriverContext } from '../driver/types.js';
 import { pickTargetRow } from '../planner/internal/self-relation-fields.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
+import { resolveTraitNames } from '../planner/trait-scope.js';
 import { collectEntityFields } from '../planner/internal/payload-synth.js';
 import { eachInlineTrait, findInitialState, traitBootRenderSlots } from '../planner/internal/orbital-walk.js';
+import { scanRenderUiEffect } from '../planner/internal/render-ui-scan.js';
+import { planTransientFailureProbes, type TransientFailureProbeResult } from '../planner/plan-transient-failure-probes.js';
 import { isUiFactoryBoard } from './ui-factory-board.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
 import { planContractEvents } from '../planner/plan-contract-events.js';
@@ -56,9 +59,13 @@ import { assertOrbitalIsolation } from '../observer/assert-orbital-isolation.js'
 import { assertContractEventFired } from '../observer/assert-contract-event-fired.js';
 import { assertDataMutation } from '../observer/assert-data-mutation.js';
 import { assertCrudFlow } from '../observer/assert-crud-flow.js';
-import { assertPortalPerStep } from '../observer/assert-portal-per-step.js';
+import { assertPortalPerStep, assertTransientFailureArmPortals, assertSlotShowsForeignTransitionRender } from '../observer/assert-portal-per-step.js';
+import { assertListensEdgeNeverFired } from '../observer/listens-edge-never-fired.js';
+import { assertBusItemCascadedNTimes } from '../observer/assert-cascade.js';
 import { assertInteractionPattern } from '../observer/assert-interaction-pattern.js';
 import { assertClickNoListener } from '../observer/assert-click-no-listener.js';
+import { assertEmitPayloadAlwaysEmpty } from '../observer/emit-payload-always-empty.js';
+import { assertEffectFailureNotSurfaced } from '../observer/effect-failure-not-surfaced.js';
 import { report } from '../observer/report.js';
 import type { ReportShape, Verdict, WalkBudgetEntry } from '../observer/types.js';
 import type { RunVerificationInput, RunVerificationOutput } from './types.js';
@@ -132,6 +139,21 @@ export async function runVerification<Ctx extends DriverContext>(
   // dispatch FROM that trait's own boot state, same as `trait.initialState`
   // is for the same-trait C1-V8/V14 shape).
   const traitWalkConfigsByName = new Map(traits.map((t) => [t.traitName, t]));
+
+  // `--trait` scope (owner ruling 2026-09-11): resolved ONCE against the
+  // full trait set above — `traitWalkConfigsByName` and every sibling
+  // map built below stay UNSCOPED (a scoped step's hermetic preamble may
+  // still need to establish a precondition via a sibling trait outside
+  // the named set), only the per-trait WALK LOOP below is restricted to
+  // `walkTraits`. `resolveTraitNames` throws (rejecting this call) on an
+  // unknown name, listing every available trait — never a silent no-op.
+  const traitScope = opts.traits !== undefined && opts.traits.length > 0
+    ? resolveTraitNames(input.orbital, opts.traits)
+    : null;
+  const walkTraits = traitScope === null ? traits : traits.filter((t) => traitScope.includes(t.traitName));
+  if (traitScope !== null) {
+    log(`[runVerification] [trait ${traitScope.join(', ')}] scoped walk: ${walkTraits.length}/${traits.length} trait(s)`);
+  }
 
   // Frontier scope: traits cloned from a `uses[]` import carry the
   // resolve/inline phase's `sourceBehavior` stamp — their topology is
@@ -257,6 +279,35 @@ export async function runVerification<Ctx extends DriverContext>(
     }
   }
 
+  // RV item 27: transient failure-route arms (a `from` state that races
+  // forward via an effect-emitted sibling before the walker's own
+  // preamble can hold it for a manual dispatch of the failure event).
+  // Computed from the SAME schema-derived portal expectations the
+  // end-of-walk portal check reads below — `portalExpectations` is
+  // reused there verbatim, so both stay in sync by construction. A
+  // forced-failure probe step is planned per forceable arm; every
+  // unforceable one becomes a `TransientArmFinding` instead of a step
+  // that could never succeed.
+  const embeddedTraits = new Set(collectEmbeddedTraitReferrers(input.orbital).keys());
+  const vesselBoard = isUiFactoryBoard(input.orbital);
+  const portalExpectations = derivePortalExpectations(input.orbital)
+    .filter((e) => !embeddedTraits.has(e.traitName))
+    .filter((e) => !(vesselBoard && e.event === 'INIT'));
+  let transientFailureProbes: TransientFailureProbeResult = { steps: [], findings: [] };
+  const transientArmKeys = new Set<string>();
+  if (opts.enablePortalPerStep !== false) {
+    const walkConfigsByName = new Map(walkTraits.map((t) => [t.traitName, t]));
+    transientFailureProbes = planTransientFailureProbes(input.orbital, portalExpectations, walkConfigsByName);
+    collectExtension(transientFailureProbes.steps);
+    for (const step of transientFailureProbes.steps) {
+      const v = step.verifiesPortalFor;
+      if (v !== undefined) transientArmKeys.add(`${v.traitName}:${v.from}+${v.event}->${v.to}`);
+    }
+    for (const f of transientFailureProbes.findings) {
+      transientArmKeys.add(`${f.traitName}:${f.from}+${f.event}->${f.to}`);
+    }
+  }
+
   // ── Walk every trait through the same tick loop ───────────────────
   const frames: Frame[] = [];
   const wholePlan: ExtendedWalkStep[] = [];
@@ -281,7 +332,7 @@ export async function runVerification<Ctx extends DriverContext>(
   // says WHY.
   const walkBudgetEntries: WalkBudgetEntry[] = [];
 
-  for (const trait of traits) {
+  for (const trait of walkTraits) {
     const importedSource = frontier ? importedTopology.get(trait.traitName) : undefined;
     if (importedSource !== undefined) {
       frontierSkipped.push({
@@ -301,6 +352,7 @@ export async function runVerification<Ctx extends DriverContext>(
       : extensionSteps.length > 0
         ? planWalk({ trait, entityFieldsByName }).filter((s) => s.triggerKind === 'auto-init')
         : [];
+    attachRowContextFromDataMutation(baseSteps, extensionSteps);
     const plan = [...baseSteps, ...extensionSteps];
 
     // An imported trait with no wiring steps has nothing to dispatch —
@@ -458,34 +510,97 @@ export async function runVerification<Ctx extends DriverContext>(
           const establishTraitName = preamble.traitName ?? trait.traitName;
           const establishTraitConfig = traitWalkConfigsByName.get(establishTraitName);
           const establishInitialState = establishTraitConfig?.initialState ?? trait.initialState;
-          let entitiesBeforePreamble: EntityData = {};
-          if (preamble.bindRowFrom !== undefined) {
-            entitiesBeforePreamble = (await input.driver.snapshot(ctx, null)).entityData;
+          // C1-V16: `establishAtState` (guard-precondition.ts) may name a
+          // state PAST the establishing trait's own initial state — a
+          // setter arm that only exists once the trait has moved on
+          // (std-thread's `EDIT_REPLY` at `browsing`, not `idle`). Firing
+          // the preamble straight off `driver.reset` (the pre-existing
+          // behavior, always dispatching AT `establishInitialState`) would
+          // silently no-op: no arm for that event exists at the boot
+          // state. Replay to it first, as its own reconcile frames — same
+          // machinery the real step's own `from`-precondition replay uses
+          // below, just walking the ESTABLISHING trait instead.
+          const establishTargetState = preamble.establishAtState ?? establishInitialState;
+          let establishReplayFailed = false;
+          if (establishTargetState !== establishInitialState) {
+            if (establishTraitConfig === undefined) {
+              preconditionUnreachable = true;
+              preconditionReason =
+                `precondition '${step.from}' unreachable — establishing trait '${establishTraitName}' has no ` +
+                `walk config to replay to '${establishTargetState}'`;
+              establishReplayFailed = true;
+            } else {
+              const establishReplayPath = planReplayTo(
+                { trait: establishTraitConfig, targetState: establishTargetState },
+                entityFieldsByName,
+              );
+              if (establishReplayPath === null) {
+                preconditionUnreachable = true;
+                preconditionReason =
+                  `precondition '${step.from}' unreachable — establishing trait '${establishTraitName}' cannot ` +
+                  `reach '${establishTargetState}' from its initial state '${establishInitialState}'`;
+                establishReplayFailed = true;
+              } else {
+                for (const replayStep of establishReplayPath) {
+                  if (frames.length >= maxFrames) break;
+                  const establishReconcileStep: ExtendedWalkStep = {
+                    ...replayStep,
+                    triggerKind: 'reconcile',
+                    coverageKey: `${establishTraitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[establish-reconcile]`,
+                  };
+                  const establishReconcileFrame: Frame = await tick(
+                    input.driver, ctx, prev, establishReconcileStep, orbitalsByTrait, allowStateless, defaultPersona,
+                  );
+                  frames.push(establishReconcileFrame);
+                  log(`  [${stepIdx + 1}/${plan.length}] establish-reconcile (${establishTraitName}) ${establishReconcileStep.from} --${establishReconcileStep.event}--> ${establishReconcileStep.to}`);
+                  prev = establishReconcileFrame;
+                  const establishReconcileAccepted = establishReconcileStep.acceptStates ?? [establishReconcileStep.to];
+                  if (
+                    establishReconcileFrame.stateAfter !== null &&
+                    !establishReconcileAccepted.includes(establishReconcileFrame.stateAfter)
+                  ) {
+                    preconditionUnreachable = true;
+                    preconditionReason =
+                      `precondition '${step.from}' unreachable — establish-reconcile ${establishReconcileStep.from} ` +
+                      `--${establishReconcileStep.event}--> expected ${establishReconcileStep.to}, runtime reached ` +
+                      `${establishReconcileFrame.stateAfter}`;
+                    establishReplayFailed = true;
+                    break;
+                  }
+                }
+              }
+            }
           }
-          const resolved = resolveEstablishRowPayload(preamble, establishTraitName, entitiesBeforePreamble, undefined);
-          const establishStep: ExtendedWalkStep = {
-            from: establishInitialState,
-            event: preamble.event,
-            to: establishInitialState,
-            guardCase: null,
-            payload: 'payload' in resolved ? resolved.payload : {},
-            // Mirrors `planReplayTo`'s own reconcile hops: not a scored
-            // test step, so guard-parity / portal-per-step observers skip
-            // it exactly like a replay hop.
-            isRepositioning: true,
-            traitName: establishTraitName,
-            triggerKind: 'reconcile',
-            coverageKey: `${establishTraitName}:${establishInitialState}+${preamble.event}->${establishInitialState}[establish-row]`,
-            ...('unreachableRow' in resolved && { unreachableRowReason: resolved.unreachableRow }),
-            ...(preamble.viewerRequirement !== undefined && { viewerRequirement: preamble.viewerRequirement }),
-          };
-          const establishFrame: Frame = await tick(input.driver, ctx, prev, establishStep, orbitalsByTrait, allowStateless, defaultPersona);
-          frames.push(establishFrame);
-          log(`  [${stepIdx + 1}/${plan.length}] establish-row (${establishTraitName}) ${establishStep.from} --${establishStep.event}--> ${establishStep.to}`);
-          prev = establishFrame;
-          if ('unreachableRow' in resolved) {
-            preconditionUnreachable = true;
-            preconditionReason = `precondition '${step.from}' unreachable — row-establishing preamble '${preamble.event}' failed: ${resolved.unreachableRow}`;
+          if (!establishReplayFailed) {
+            let entitiesBeforePreamble: EntityData = {};
+            if (preamble.bindRowFrom !== undefined) {
+              entitiesBeforePreamble = (await input.driver.snapshot(ctx, null)).entityData;
+            }
+            const resolved = resolveEstablishRowPayload(preamble, establishTraitName, entitiesBeforePreamble, undefined);
+            const establishStep: ExtendedWalkStep = {
+              from: establishTargetState,
+              event: preamble.event,
+              to: establishTargetState,
+              guardCase: null,
+              payload: 'payload' in resolved ? resolved.payload : {},
+              // Mirrors `planReplayTo`'s own reconcile hops: not a scored
+              // test step, so guard-parity / portal-per-step observers skip
+              // it exactly like a replay hop.
+              isRepositioning: true,
+              traitName: establishTraitName,
+              triggerKind: 'reconcile',
+              coverageKey: `${establishTraitName}:${establishTargetState}+${preamble.event}->${establishTargetState}[establish-row]`,
+              ...('unreachableRow' in resolved && { unreachableRowReason: resolved.unreachableRow }),
+              ...(preamble.viewerRequirement !== undefined && { viewerRequirement: preamble.viewerRequirement }),
+            };
+            const establishFrame: Frame = await tick(input.driver, ctx, prev, establishStep, orbitalsByTrait, allowStateless, defaultPersona);
+            frames.push(establishFrame);
+            log(`  [${stepIdx + 1}/${plan.length}] establish-row (${establishTraitName}) ${establishStep.from} --${establishStep.event}--> ${establishStep.to}`);
+            prev = establishFrame;
+            if ('unreachableRow' in resolved) {
+              preconditionUnreachable = true;
+              preconditionReason = `precondition '${step.from}' unreachable — row-establishing preamble '${preamble.event}' failed: ${resolved.unreachableRow}`;
+            }
           }
         }
 
@@ -739,7 +854,6 @@ export async function runVerification<Ctx extends DriverContext>(
   // shared with @almadar/runtime's own config-forward resolution) is the
   // single source of truth for "is this trait embedded" — reused here
   // rather than re-walking `@trait.` references locally.
-  const embeddedTraits = new Set(collectEmbeddedTraitReferrers(input.orbital).keys());
   for (const name of embeddedTraits) noRenderTraits.add(name);
 
   // `main` blank-portal exemption: derived from the schema, not a name
@@ -787,6 +901,40 @@ export async function runVerification<Ctx extends DriverContext>(
     verdicts.clickNoListener = combineVerdicts(clickNoListenerVerdicts, 'click-no-listener');
   }
 
+  // emit-payload-always-empty — a declared emit payload field that fired
+  // ≥2 times this session and was empty on every firing: live and wired,
+  // never carries the value it promises.
+  const emitPayloadAlwaysEmptyVerdicts = assertEmitPayloadAlwaysEmpty(frames, input.orbital);
+  if (emitPayloadAlwaysEmptyVerdicts.length > 0) {
+    verdicts.emitPayloadAlwaysEmpty = combineVerdicts(emitPayloadAlwaysEmptyVerdicts, 'emit-payload-always-empty');
+  }
+
+  // listens-edge-never-fired — the runtime twin of the static
+  // listens-source-never-emits lint: a declared listens route whose
+  // source fired repeatedly this session but the listener's own trigger
+  // was never observed firing — wired on paper, dead in practice.
+  const listensEdgeNeverFiredVerdicts = assertListensEdgeNeverFired(frames, input.orbital);
+  if (listensEdgeNeverFiredVerdicts.length > 0) {
+    verdicts.listensEdgeNeverFired = combineVerdicts(listensEdgeNeverFiredVerdicts, 'listens-edge-never-fired');
+  }
+
+  // bus-item-cascaded-n-times — the SAME bus item delivered more than
+  // once to one listener within a single dispatch window.
+  const busItemCascadedNTimesVerdicts = assertBusItemCascadedNTimes(frames);
+  if (busItemCascadedNTimesVerdicts.length > 0) {
+    verdicts.busItemCascadedNTimes = combineVerdicts(busItemCascadedNTimesVerdicts, 'bus-item-cascaded-n-times');
+  }
+
+  // effect-failure-not-surfaced — a denied/failed persist/fetch/call-service
+  // whose declared emit.failure never reaches the event log
+  // (effect-failure-unrouted) or fires with no toast/alert ever mounted
+  // (effect-failure-not-surfaced): a failed write with no consequence a
+  // user can see.
+  const effectFailureVerdicts = assertEffectFailureNotSurfaced(frames, input.orbital);
+  if (effectFailureVerdicts.length > 0) {
+    verdicts.effectFailureNotSurfaced = combineVerdicts(effectFailureVerdicts, 'effect-failure-not-surfaced');
+  }
+
   // Phase 4c — contract event coverage.
   const contractVerdicts = assertContractEventFired(frames);
   if (contractVerdicts.length > 0) {
@@ -821,16 +969,51 @@ export async function runVerification<Ctx extends DriverContext>(
     // defaults it may legitimately collapse to nothing (e.g. simple-grid
     // with no children returns null). Boot INIT expectations are therefore
     // contractually soft there; non-INIT expectations stay strict.
-    const vesselBoard = isUiFactoryBoard(input.orbital);
-    const portalExpectations = derivePortalExpectations(input.orbital)
-      .filter((e) => !embeddedTraits.has(e.traitName))
-      .filter((e) => !(vesselBoard && e.event === 'INIT'));
-    if (portalExpectations.length > 0) {
-      const v = assertPortalPerStep(frames, portalExpectations);
-      if (v.length > 0) {
-        verdicts.portalPerStep = combineVerdicts(v, 'portal');
-      }
+    //
+    // RV item 27: a transient failure-route arm (`transientArmKeys`,
+    // computed up front alongside `planTransientFailureProbes`) is
+    // excluded from the plain cause-matching check — its own dispatch
+    // never literally lands on `(from, event, to)` by construction — and
+    // routed to `assertTransientFailureArmPortals` instead, which reads
+    // the forced probe's `verifiesPortalFor` + the runtime's own
+    // cascade trace.
+    const normalPortalExpectations = portalExpectations.filter(
+      (e) => !transientArmKeys.has(`${e.traitName}:${e.from}+${e.event}->${e.to}`),
+    );
+    const transientPortalExpectations = portalExpectations.filter(
+      (e) => transientArmKeys.has(`${e.traitName}:${e.from}+${e.event}->${e.to}`),
+    );
+    const portalVerdicts = [
+      ...assertPortalPerStep(frames, normalPortalExpectations),
+      ...assertTransientFailureArmPortals(frames, transientPortalExpectations),
+    ];
+    if (portalVerdicts.length > 0) {
+      verdicts.portalPerStep = combineVerdicts(portalVerdicts, 'portal');
     }
+
+    // slot-shows-foreign-transition-render — the runtime twin of compiler
+    // §98's last-writer-per-slot contract: the DOM's own `data-pattern`
+    // marker disagrees with the firing transition's declared pattern AND
+    // matches a DIFFERENT known writer's — a stale/foreign render.
+    const foreignRenderVerdicts = assertSlotShowsForeignTransitionRender(frames, normalPortalExpectations);
+    if (foreignRenderVerdicts.length > 0) {
+      verdicts.slotShowsForeignTransitionRender = combineVerdicts(foreignRenderVerdicts, 'slot-shows-foreign-transition-render');
+    }
+  }
+
+  // TRANSIENT-ARM-UNREACHABLE (RV item 27) — informational, not a
+  // failure: every transient failure-route arm for which no denying
+  // viewer could be derived, so its portal expectation was excluded
+  // above rather than asserted against a dispatch that could never land
+  // there.
+  if (transientFailureProbes.findings.length > 0) {
+    verdicts.transientArmUnreachable = {
+      passed: true,
+      detail: `transient-arm-unreachable: ${transientFailureProbes.findings.length} arm(s) — ${transientFailureProbes.findings
+        .map((f) => `${f.traitName}:${f.from}+${f.event}->${f.to} — ${f.reason}`)
+        .join('; ')}`,
+      evidence: { frameIndices: [] },
+    };
   }
 
   // Emit-sweep and data-mutation frames are planned above and asserted by
@@ -849,6 +1032,9 @@ export async function runVerification<Ctx extends DriverContext>(
   const schemaTransitionKeys: string[] = [];
   for (const { trait } of eachInlineTrait(input.orbital)) {
     if (frontier && importedTopology.has(trait.name)) continue;
+    // `--trait` scope: the coverage denominator counts only the selected
+    // trait(s) — an unscoped run (`traitScope === null`) keeps every trait.
+    if (traitScope !== null && !traitScope.includes(trait.name)) continue;
     for (const t of trait.stateMachine?.transitions ?? []) {
       schemaTransitions += 1;
       schemaTransitionKeys.push(`${trait.name}:${t.from}+${t.event}->${t.to}`);
@@ -859,7 +1045,7 @@ export async function runVerification<Ctx extends DriverContext>(
   if (frontier) {
     const importedTransitionsSkipped = frontierSkipped.reduce((sum, s) => sum + s.transitions, 0);
     frontierSummary = {
-      authoredTraits: traits.length - frontierSkipped.length,
+      authoredTraits: walkTraits.length - frontierSkipped.length,
       importedTraits: frontierSkipped.length,
       importedTransitionsSkipped,
       skipped: frontierSkipped,
@@ -878,6 +1064,7 @@ export async function runVerification<Ctx extends DriverContext>(
     schemaTransitionKeys,
     ...(frontierSummary !== undefined && { frontier: frontierSummary }),
     ...(walkBudgetEntries.length > 0 && { walkBudget: walkBudgetEntries }),
+    ...(traitScope !== null && { traits: traitScope }),
   });
 }
 
@@ -997,6 +1184,45 @@ function siblingGuardSatisfiable(
     return evaluateGuard(sibling.guard, ctx);
   } catch {
     return false;
+  }
+}
+
+/**
+ * RV item 25/27 (Verification_Runtime ledger item 25): `planWalk`'s base
+ * "dispatch every declared transition once" step carries neither a
+ * `viewerRequirement` nor a real seeded row id, so an access-policed or
+ * by-id persist is denied there BY CONSTRUCTION — a spurious
+ * `effect-failure-not-surfaced`/`effect-failure-unrouted` finding on a
+ * transition `planDataMutationTests`'s OWN sibling step (SAME `(from,
+ * event, to)`) already proves works with a real row/viewer. Rather than
+ * re-deriving that analysis a second time, copy the already-computed
+ * `viewerRequirement`/`establishesRow`/`bindRowFrom`/`unreachableRowReason`
+ * fields from the matching data-mutation step onto the base step's own
+ * `success`-variant — one owner (`planDataMutationTests`'s `planRowEstablishPreamble`
+ * / `deriveViewerRequirement`), reused rather than reimplemented. Only the
+ * `success` variant is touched: `malformed`/`guard-fail` are validator/guard
+ * rejection tests whose effects never run, so a viewer/row context has
+ * nothing to attach to. Mutates `baseSteps` in place.
+ */
+function attachRowContextFromDataMutation(
+  baseSteps: ExtendedWalkStep[],
+  extensionSteps: ReadonlyArray<ExtendedWalkStep>,
+): void {
+  const dataMutationByKey = new Map<string, ExtendedWalkStep>();
+  for (const step of extensionSteps) {
+    if (step.testKind !== 'data-mutation') continue;
+    dataMutationByKey.set(`${step.from}+${step.event}->${step.to}`, step);
+  }
+  if (dataMutationByKey.size === 0) return;
+
+  for (const step of baseSteps) {
+    if (step.payloadCase !== 'success') continue;
+    const match = dataMutationByKey.get(`${step.from}+${step.event}->${step.to}`);
+    if (match === undefined) continue;
+    if (match.viewerRequirement !== undefined) step.viewerRequirement = match.viewerRequirement;
+    if (match.establishesRow !== undefined) step.establishesRow = match.establishesRow;
+    if (match.bindRowFrom !== undefined) step.bindRowFrom = match.bindRowFrom;
+    if (match.unreachableRowReason !== undefined) step.unreachableRowReason = match.unreachableRowReason;
   }
 }
 
@@ -1126,29 +1352,3 @@ export function derivePortalExpectations(
   return result;
 }
 
-/**
- * Project one effect node into `{ slot, pattern }`, or `null` when the
- * node is not a scannable render-ui effect. `pattern: null` means the
- * transition explicitly clears the slot (no payload / no `type` key).
- * A payload whose `type` is present but NOT a literal string is a
- * reactive binding — the pattern is unknown, so the effect is skipped
- * entirely rather than asserted as a cleared slot.
- */
-function scanRenderUiEffect(effect: import('@almadar/core').Effect | import('@almadar/core').SExpr): { slot: string; pattern: string | null } | null {
-  if (!Array.isArray(effect)) return null;
-  if (effect[0] !== 'render-ui') return null;
-  const slot = typeof effect[1] === 'string' ? effect[1] : null;
-  if (slot === null) return null;
-  const payload = effect[2];
-  if (payload !== null && payload !== undefined && typeof payload === 'object' && !Array.isArray(payload)) {
-    const t = (payload as Readonly<Record<string, import('@almadar/core').SExpr>>)['type'];
-    // A reactive binding — string form (`'@config.x'`) or an S-expr —
-    // resolves at runtime; the pattern is UNKNOWN, so skip the effect
-    // rather than assert anything (pre-fix this fell through to
-    // `pattern: null`, which asserts the slot was CLEARED).
-    if (typeof t === 'string' && t.startsWith('@')) return null;
-    if (t !== undefined && typeof t !== 'string') return null;
-    if (typeof t === 'string') return { slot, pattern: t };
-  }
-  return { slot, pattern: null };
-}

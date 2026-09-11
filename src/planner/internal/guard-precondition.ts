@@ -21,9 +21,11 @@
  * @packageDocumentation
  */
 
-import { collectBindings } from '@almadar/core';
+import { collectBindings, isFieldValue } from '@almadar/core';
 import type { Effect, FieldValue, OrbitalSchema, SExpr, Trait, Transition } from '@almadar/core';
+import { createMinimalContext, evaluate, evaluateGuard } from '@almadar/evaluator';
 import { eachInlineTrait, findInitialState } from './orbital-walk.js';
+import { collectEffectEmittedEvents } from './effect-emits.js';
 import { findPersistKind } from './persist-binding.js';
 import { synthesizeSuccessPayload } from './payload-synth.js';
 import type { EntityFieldDef } from '../../browser/interaction.js';
@@ -44,6 +46,19 @@ export interface GuardEstablishPreamble {
    *  shape). Undefined means "the same trait as the step" (back-compat
    *  with the pre-existing `@entity.id` preambles, which never set this). */
   traitName?: string;
+  /**
+   * The state `traitName` must be at before `event` is dispatched — the
+   * selected candidate's own anchor state (a same-trait self-loop's
+   * `atState`, or a sibling's initial state). Equal to the establishing
+   * trait's initial state in the common case, so most preambles still
+   * dispatch straight off `driver.reset`; `run-verification.ts`'s
+   * `beforeReplay` handling replays the establishing trait to this state
+   * FIRST (via `planReplayTo`) when it differs from that trait's initial
+   * state — a setter arm that only exists past it (std-thread's
+   * `EDIT_REPLY` at `browsing`, not the trait's boot state) must be
+   * reached before it can fire, or the dispatch is a silent no-op.
+   */
+  establishAtState?: string;
 }
 
 /**
@@ -78,6 +93,13 @@ export interface EntityFieldSetInfo {
    *  has no single payload slot to inject a real value into — same "no
    *  single slot" rule `persist-binding.ts`'s id-binding finders apply). */
   payloadPath: string | null;
+  /** The raw value expression the effect assigns to `@entity.<field>`,
+   *  when {@link sets} is true — the literal/computed/binding node found by
+   *  {@link findEntityFieldSetInExpr}. Lets a caller test whether the
+   *  written value would satisfy a guard reading this field before
+   *  committing to this setter as the establishing preamble. Undefined
+   *  when `sets` is false. */
+  value?: SExpr;
 }
 
 const PAYLOAD_PREFIX = '@payload.';
@@ -90,9 +112,9 @@ export function findEntityFieldSet(effects: ReadonlyArray<Effect>, field: string
     if (value === undefined) continue;
     if (typeof value === 'string' && value.startsWith(PAYLOAD_PREFIX)) {
       const path = value.slice(PAYLOAD_PREFIX.length);
-      return { sets: true, payloadPath: path.includes('.') ? null : path };
+      return { sets: true, payloadPath: path.includes('.') ? null : path, value };
     }
-    return { sets: true, payloadPath: null };
+    return { sets: true, payloadPath: null, value };
   }
   return { sets: false, payloadPath: null };
 }
@@ -122,10 +144,16 @@ function findEntityFieldSetInExpr(node: SExpr, targetPath: string): SExpr | unde
 export interface FieldSettingCandidate {
   trait: Trait;
   transition: Transition;
+  /** The concrete state `trait` must be at before dispatching
+   *  `transition.event` — `atState` for a same-trait self-loop, or the
+   *  sibling's own initial state otherwise. Always concrete, even when
+   *  `transition.from === '*'` (a wildcard arm is still safely dispatched
+   *  from this state). */
+  establishAtState: string;
 }
 
 /**
- * Find a transition — on `guardedTraitName` itself OR any SIBLING trait
+ * Find every transition — on `guardedTraitName` itself OR any SIBLING trait
  * sharing `linkedEntity` — that sets `@entity.<field>` and can legitimately
  * be dispatched as a one-off preamble BEFORE the guarded step:
  *
@@ -139,30 +167,80 @@ export interface FieldSettingCandidate {
  *     are different state machines that merely share the entity.
  *
  * `INIT` is excluded on both arms — it fires automatically on mount, not
- * via a re-dispatchable `sendEvent`.
+ * via a re-dispatchable `sendEvent`. So is any event the trait's OWN
+ * effects emit (`collectEffectEmittedEvents`) — a `fetch`/`persist`
+ * `emit.success`/`emit.failure` callback fires automatically once the
+ * runtime settles, so manually dispatching it as a preamble either no-ops
+ * (the runtime is already past the state that accepts it) or double-fires
+ * an effect a real user action never triggers directly.
+ *
+ * Returns ALL matching candidates in declaration order — the caller picks
+ * among them by guard satisfiability (see `planGuardPreconditionPreamble`);
+ * the first declared setter is not necessarily the one whose written value
+ * satisfies the guard (std-thread: `ThreadPostCreated`'s effect-emitted
+ * clearer sets the field to `""` and is declared before `EDIT_REPLY`'s real
+ * setter, but is excluded here anyway as effect-emitted).
  */
-export function findFieldSettingCandidate(
+export function findFieldSettingCandidates(
   orbital: OrbitalSchema,
   linkedEntity: string,
   field: string,
   guardedTraitName: string,
   atState: string,
-): FieldSettingCandidate | null {
+): FieldSettingCandidate[] {
+  const out: FieldSettingCandidate[] = [];
   for (const { trait } of eachInlineTrait(orbital)) {
     if (trait.linkedEntity !== linkedEntity) continue;
     if (trait.stateMachine === undefined) continue;
     const isSameTrait = trait.name === guardedTraitName;
     const requiredFrom = isSameTrait ? atState : findInitialState(trait.stateMachine);
     if (requiredFrom === null) continue;
+    const effectEmitted = collectEffectEmittedEvents(trait.stateMachine.transitions);
     for (const transition of trait.stateMachine.transitions) {
       if (transition.event === 'INIT') continue;
+      if (effectEmitted.has(transition.event)) continue;
       if (transition.from !== requiredFrom && transition.from !== '*') continue;
       if (isSameTrait && transition.to !== atState) continue;
       if (!findEntityFieldSet(transition.effects ?? [], field).sets) continue;
-      return { trait, transition };
+      out.push({ trait, transition, establishAtState: requiredFrom });
     }
   }
+  return out;
+}
+
+/**
+ * Pick the first candidate whose written value would satisfy the guarded
+ * transition's guard, evaluated with the SAME `@almadar/evaluator` the
+ * runtime uses. A candidate whose value can't be resolved to a concrete
+ * `FieldValue` (a `@payload.<x>` reference with no real payload at plan
+ * time, or an evaluator error) is KEPT rather than discarded — the same
+ * fail-open doctrine `tick.ts`'s `buildAffordanceEnabledFilter` applies to
+ * a guard it can't statically disprove: false negatives here would report
+ * a real precondition as unreachable, which is worse than dispatching a
+ * setter whose effect can't be proven wrong ahead of time.
+ */
+function selectSatisfyingCandidate(
+  candidates: ReadonlyArray<FieldSettingCandidate>,
+  field: string,
+  guard: SExpr,
+): FieldSettingCandidate | null {
+  for (const candidate of candidates) {
+    const info = findEntityFieldSet(candidate.transition.effects ?? [], field);
+    if (!info.sets || info.value === undefined) continue;
+    if (candidateSatisfiesGuard(info.value, field, guard, candidate.establishAtState)) return candidate;
+  }
   return null;
+}
+
+function candidateSatisfiesGuard(valueExpr: SExpr, field: string, guard: SExpr, atState: string): boolean {
+  try {
+    const runtimeValue = evaluate(valueExpr, createMinimalContext({}, {}, atState));
+    if (!isFieldValue(runtimeValue)) return true;
+    const ctx = createMinimalContext({ [field]: runtimeValue }, {}, atState);
+    return evaluateGuard(guard, ctx) === true;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -236,13 +314,14 @@ export function planGuardPreconditionPreamble(
   if (fields.length === 0) return {};
 
   const field = fields[0];
-  const candidate = findFieldSettingCandidate(orbital, trait.linkedEntity, field, trait.name, atState);
+  const candidates = findFieldSettingCandidates(orbital, trait.linkedEntity, field, trait.name, atState);
+  const candidate = selectSatisfyingCandidate(candidates, field, transition.guard);
   if (candidate === null) {
     return {
       guardPreconditionUnreachable:
         `guard-precondition-unreachable: trait '${trait.name}' transition '${transition.from}+${transition.event}` +
         `->${transition.to}' reads '@entity.${field}' in its guard, but no transition on this trait or any ` +
-        `sibling trait linked to '${trait.linkedEntity}' ever sets it`,
+        `sibling trait linked to '${trait.linkedEntity}' ever sets it to a value that satisfies the guard`,
     };
   }
 
@@ -278,6 +357,7 @@ export function planGuardPreconditionPreamble(
       payload,
       traitName: candidate.trait.name,
       beforeReplay: true,
+      establishAtState: candidate.establishAtState,
       ...(bindRowFrom !== undefined && { bindRowFrom }),
       ...(viewerRequirement !== undefined && { viewerRequirement }),
     },

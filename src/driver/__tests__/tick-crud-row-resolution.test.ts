@@ -67,11 +67,19 @@ function selfRelatingOwnedNoteSchema(): OrbitalSchema {
                   from: 'idle',
                   to: 'confirming',
                   event: 'DELETE',
-                  // Test-only observability hook, mirrors
-                  // plan-user-crud-flow-viewer.test.ts: lets
-                  // `executeEffects` capture the ACTIVE persona at
-                  // dispatch time.
-                  effects: [['set', '@entity.lastOpenedBy', '@user.id']],
+                  effects: [
+                    // Test-only observability hook, mirrors
+                    // plan-user-crud-flow-viewer.test.ts: lets
+                    // `executeEffects` capture the ACTIVE persona at
+                    // dispatch time.
+                    ['set', '@entity.lastOpenedBy', '@user.id'],
+                    // C1-V18: a genuine overlay-form open affordance —
+                    // see plan-user-crud-flow.ts's isOverlayFormOpen.
+                    ['render-ui', 'modal', {
+                      type: 'stack',
+                      children: [{ type: 'button', action: 'CONFIRM_DELETE', label: 'Delete' }],
+                    }],
+                  ],
                 },
                 { from: 'confirming', to: 'idle', event: 'CONFIRM_DELETE' },
               ],
@@ -125,6 +133,162 @@ async function runAutoInit(
   });
 }
 
+/**
+ * C1-V17: `Channel` declares NO self-relation at all — only
+ * `ChannelMember.channel` restrict-relates to it (a DIFFERENT entity). A
+ * self-relation-only reader would never know a `Channel` delete can be
+ * blocked at all, let alone by which rows.
+ */
+function crossEntityRestrictedChannelSchema(): OrbitalSchema {
+  return {
+    name: 'channel-cross-entity-restrict-fixture',
+    designTokens: {},
+    customPatterns: {},
+    orbitals: [
+      {
+        name: 'ChannelOrbital',
+        entity: { name: 'Channel', persistence: 'persistent', fields: [{ name: 'id', type: 'string', required: true }] },
+        auxiliaryEntities: [
+          {
+            name: 'ChannelMember',
+            persistence: 'persistent',
+            fields: [
+              { name: 'id', type: 'string', required: true },
+              { name: 'channel', type: 'relation', relation: { entity: 'Channel', cardinality: 'one' } },
+            ],
+          },
+        ],
+        pages: [],
+        traits: [
+          {
+            name: 'ChannelDelete',
+            scope: 'instance',
+            linkedEntity: 'Channel',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }, { name: 'confirming' }],
+              events: [
+                { key: 'INIT', name: 'Init' },
+                { key: 'DELETE', name: 'Delete' },
+                { key: 'CONFIRM_DELETE', name: 'Confirm' },
+              ],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'confirming',
+                  event: 'DELETE',
+                  // C1-V18: a genuine overlay-form open affordance — see
+                  // plan-user-crud-flow.ts's isOverlayFormOpen.
+                  effects: [['render-ui', 'modal', {
+                    type: 'stack',
+                    children: [{ type: 'button', action: 'CONFIRM_DELETE', label: 'Delete' }],
+                  }]],
+                },
+                { from: 'confirming', to: 'idle', event: 'CONFIRM_DELETE' },
+              ],
+            },
+          },
+          {
+            name: 'ChannelPersistor',
+            scope: 'instance',
+            linkedEntity: 'Channel',
+            listens: [
+              { event: 'CONFIRM_DELETE', triggers: 'DO_DELETE', source: { kind: 'trait', trait: 'ChannelDelete' } },
+            ],
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [
+                { key: 'INIT', name: 'Init' },
+                { key: 'DO_DELETE', name: 'Do Delete' },
+              ],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'idle',
+                  event: 'DO_DELETE',
+                  effects: [['persist', 'delete', 'Channel', { id: '@payload.id', emit: { success: 'CHANNEL_DELETED' } }]],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe('tick — crud row resolution, cross-entity restrict relation (C1-V17)', () => {
+  it('planUserCrudFlow attaches avoidReferencedByOtherEntities for a cross-entity (non-self) restrict relation', () => {
+    const schema = crossEntityRestrictedChannelSchema();
+    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    expect(del?.avoidReferencedVia).toBeUndefined();
+    expect(del?.avoidReferencedByOtherEntities).toEqual([{ entityName: 'ChannelMember', fieldName: 'channel' }]);
+  });
+
+  it('picks the Channel row NOT referenced by any ChannelMember, never row 0 just because it has no SELF-relation', async () => {
+    const schema = crossEntityRestrictedChannelSchema();
+    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    expect(del).toBeDefined();
+
+    const traits = extractTraitWalkConfigs(schema);
+    const { driver, runtime } = createFakeDriver(traits, {
+      executeEffects: () => ({ effects: [{ type: 'set', args: [], status: 'executed' }], emitted: [] }),
+    });
+
+    const ctx: FakeDriverContext = { outputDir: '', trait: traits.find((t) => t.traitName === 'ChannelDelete')!, runtime };
+    await driver.reset(ctx);
+    // Row 0 ('chan-a') IS referenced by a ChannelMember row — the correct
+    // pick is 'chan-b', the one no OTHER entity's row references.
+    runtime.seed('Channel', [{ id: 'chan-a' }, { id: 'chan-b' }]);
+    runtime.seed('ChannelMember', [{ id: 'mem-1', channel: 'chan-a' }]);
+
+    const initFrame = await runAutoInit(driver, ctx, 'idle', 'ChannelDelete');
+    const frame = await tick(driver, ctx, initFrame, del!, undefined, undefined, { id: 'default-viewer' });
+
+    expect(del?.targetRowId).toBe('chan-b');
+    expect(frame.cause.targetRowId).toBe('chan-b');
+    expect(frame.payload).toEqual({ id: 'chan-b' });
+    expect(frame.errors ?? []).toEqual([]);
+    expect(frame.accepted).toBe(true);
+  });
+
+  it('fails closed with a no-deletable-row finding (not no-target-row) when EVERY row is cross-entity referenced', async () => {
+    const schema = crossEntityRestrictedChannelSchema();
+    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+
+    const traits = extractTraitWalkConfigs(schema);
+    const dispatched: string[] = [];
+    const { driver, runtime } = createFakeDriver(traits, {
+      executeEffects: (_effects, { event }) => {
+        dispatched.push(event);
+        return { effects: [], emitted: [] };
+      },
+    });
+
+    const ctx: FakeDriverContext = { outputDir: '', trait: traits.find((t) => t.traitName === 'ChannelDelete')!, runtime };
+    await driver.reset(ctx);
+    // Both Channel rows have at least one ChannelMember referencing them —
+    // both are genuinely undeletable, not merely a row-0 quirk.
+    runtime.seed('Channel', [{ id: 'chan-a' }, { id: 'chan-b' }]);
+    runtime.seed('ChannelMember', [
+      { id: 'mem-1', channel: 'chan-a' },
+      { id: 'mem-2', channel: 'chan-b' },
+    ]);
+
+    const initFrame = await runAutoInit(driver, ctx, 'idle', 'ChannelDelete');
+    const frame = await tick(driver, ctx, initFrame, del!, undefined, undefined, { id: 'default-viewer' });
+
+    expect(dispatched).toEqual([]);
+    expect(del?.targetRowId).toBeUndefined();
+    expect(frame.accepted).toBe(false);
+    expect(frame.errors).toHaveLength(1);
+    // Distinct prefix from the self-relation `no-target-row:` case — every
+    // candidate IS a real, existing row; the restrict rule is what blocks
+    // deleting any of them.
+    expect(frame.errors?.[0]).toMatch(/^no-deletable-row:/);
+    expect(frame.errors?.[0]).toContain('every candidate row is referenced');
+  });
+});
+
 describe('tick — crud row resolution (C1-V11)', () => {
   it('picks an unreferenced owned row, sets targetRowId, switches the viewer to its owner, and dispatches against it', async () => {
     const schema = selfRelatingOwnedNoteSchema();
@@ -166,7 +330,7 @@ describe('tick — crud row resolution (C1-V11)', () => {
     expect(frame.accepted).toBe(true);
   });
 
-  it('fails the frame closed with a no-target-row finding when every row is referenced, and never dispatches', async () => {
+  it('fails the frame closed with a no-deletable-row finding when every row is referenced, and never dispatches', async () => {
     const schema = selfRelatingOwnedNoteSchema();
     const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
     expect(del?.avoidReferencedVia).toEqual(['parentId']);
@@ -196,8 +360,10 @@ describe('tick — crud row resolution (C1-V11)', () => {
     expect(del?.targetRowId).toBeUndefined();
     expect(frame.accepted).toBe(false);
     expect(frame.errors).toHaveLength(1);
-    expect(frame.errors?.[0]).toMatch(/^no-target-row:/);
-    expect(frame.errors?.[0]).toContain('parentId');
+    // C1-V17: 'all-referenced' now gets its own prefix — every candidate
+    // IS a real row, but the restrict rule blocks deleting any of them
+    // (distinct from `no-target-row`'s "nothing to pick from at all").
+    expect(frame.errors?.[0]).toMatch(/^no-deletable-row:/);
     // The trait never actually advanced — the dispatch was skipped, not
     // attempted-and-rejected.
     expect(await driver.getState(ctx, 'NoteDelete')).toBe('idle');

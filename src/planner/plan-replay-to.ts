@@ -139,17 +139,27 @@ export function planReplayTo(
  * BFS shortest path from `source` to `target`. Skips INIT events from
  * the source (those are auto-fired by the runtime, not walk-fired),
  * wildcard-source pseudostates, and effect-emitted events as HOPS (a
- * reconcile step can't dispatch one deterministically). A landing state
- * satisfies `target` either literally or via its transient closure —
- * `loading --Loaded--> reviewing` means a hop landing on `loading`
- * reaches `reviewing` on its own once the mocked effect settles, so BFS
- * stops there instead of treating `reviewing` as unreachable. The SOURCE
- * itself is checked the same way before any hop is taken — a target
- * already in the source's own closure (std-data-erasure's `idle
- * --(tick)ExecScanLoaded--> execScanning`, no manually-dispatchable edge
- * in between at all) needs zero dispatches, not "unreachable". Returns
- * `[]` for that zero-hop case, `null` only when neither the target nor
- * its precondition is reachable by any manually-dispatchable hop.
+ * reconcile step can't dispatch one deterministically).
+ *
+ * RV item 26: a transiently-reached state (`loading --Loaded-->
+ * reviewing`, no manual dispatch in between) costs ZERO extra dispatches
+ * to be "at" — so `flood` puts the WHOLE transient closure of wherever a
+ * hop lands onto the BFS frontier, with the SAME path, not just the
+ * literal landing state. This matters when the transient member is
+ * itself a genuine BFS launch point: `loading` →(transient settle)→
+ * `browsing` →(real, dispatchable `REPLY`)→ `replying` has NO real edge
+ * INTO `browsing` at all (the only path there is the transient settle),
+ * so `browsing`'s own further real edges are unreachable by ordinary
+ * edge traversal — they only become explorable once `browsing` itself
+ * enters the frontier via closure-flooding. The SOURCE gets the same
+ * treatment (`flood(source, [])`), which subsumes the old "target
+ * already in source's own closure" zero-hop special case (std-data-
+ * erasure's `idle --(tick)ExecScanLoaded--> execScanning`) — dequeuing
+ * `target` with an empty path returns `[]` exactly the same way.
+ *
+ * Returns `[]` when `target` needs zero dispatches, `null` when neither
+ * `target` nor its precondition is reachable by any manually-dispatchable
+ * hop (directly or via a transiently-reached launch point).
  */
 function bfsShortestPath(
   trait: PlanReplayInput['trait'],
@@ -157,7 +167,6 @@ function bfsShortestPath(
   target: string,
 ): ReadonlyArray<ReplayHop> | null {
   if (source === target) return [];
-  if (transientClosure(source, trait).includes(target)) return [];
   const excludeEvents = trait.effectEmittedEvents;
 
   // Build adjacency list from filtered transitions.
@@ -174,18 +183,24 @@ function bfsShortestPath(
     }
   }
 
-  const visited = new Set<string>([source]);
-  const queue: QueueNode[] = [{ state: source, path: [] }];
+  const visited = new Set<string>();
+  const queue: QueueNode[] = [];
+  const flood = (state: string, path: ReadonlyArray<ReplayHop>): void => {
+    for (const member of transientClosure(state, trait)) {
+      if (visited.has(member)) continue;
+      visited.add(member);
+      queue.push({ state: member, path });
+    }
+  };
+  flood(source, []);
 
   while (queue.length > 0) {
     const { state, path } = queue.shift() as QueueNode;
-    const edges = adjacency.get(state) ?? [];
-    for (const edge of edges) {
+    if (state === target) return path;
+    for (const edge of adjacency.get(state) ?? []) {
       if (visited.has(edge.to)) continue;
       const newPath = [...path, { from: state, event: edge.event, to: edge.to, edge }];
-      if (edge.to === target || transientClosure(edge.to, trait).includes(target)) return newPath;
-      visited.add(edge.to);
-      queue.push({ state: edge.to, path: newPath });
+      flood(edge.to, newPath);
     }
   }
 

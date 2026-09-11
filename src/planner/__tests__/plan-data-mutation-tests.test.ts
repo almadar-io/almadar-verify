@@ -192,4 +192,80 @@ describe('planDataMutationTests', () => {
     expect(steps[0].event).toBe('CANCEL');
   });
 
+  it('C1-V18 cross-check: a persist behind a Browse fetch-success arm (excluded from planUserCrudFlow) still gets covered here', () => {
+    // Same shape as plan-user-crud-flow.test.ts's C1-V18 negative fixture
+    // (ChannelRail/ChannelMemberPersistor) — the fix must not silently drop
+    // the persist from EVERY planner, only from the crud-flow's bogus
+    // modal-shaped reading of it. `planDataMutationTests` reads the
+    // persistor's OWN transitions directly (never `sourceTrait`/
+    // `openTransition`), so it is unaffected by that gate either way —
+    // this test locks that in.
+    const channelRail: OrbitalSchema = {
+      name: 'channel-rail-data-mutation-fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'ChannelOrbital',
+          entity: {
+            name: 'ChannelMember',
+            persistence: 'persistent',
+            fields: [{ name: 'id', type: 'string', required: true }, { name: 'unread', type: 'boolean' }],
+          },
+          pages: [],
+          traits: [
+            {
+              name: 'ChannelRail',
+              scope: 'collection',
+              linkedEntity: 'ChannelMember',
+              stateMachine: {
+                states: [{ name: 'loading', isInitial: true }, { name: 'browsing' }],
+                events: [
+                  { key: 'INIT', name: 'Init' },
+                  { key: 'BrowseItemLoaded', name: 'Loaded' },
+                  { key: 'UNREAD_CLEARED', name: 'Unread cleared' },
+                ],
+                transitions: [
+                  { from: 'loading', to: 'loading', event: 'INIT' },
+                  {
+                    from: 'loading',
+                    to: 'browsing',
+                    event: 'BrowseItemLoaded',
+                    effects: [['render-ui', 'main', { type: 'entity-table', columns: ['name'] }]],
+                  },
+                  { from: 'browsing', to: 'browsing', event: 'UNREAD_CLEARED' },
+                ],
+              },
+            },
+            {
+              name: 'ChannelMemberPersistor',
+              scope: 'instance',
+              linkedEntity: 'ChannelMember',
+              listens: [
+                { event: 'UNREAD_CLEARED', triggers: 'DO_UPDATE', source: { kind: 'trait', trait: 'ChannelRail' } },
+              ],
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'INIT', name: 'Init' }, { key: 'DO_UPDATE', name: 'Do update' }],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'idle',
+                    event: 'DO_UPDATE',
+                    effects: [['persist', 'update', 'ChannelMember', { data: '@payload.data' }, { emit: { success: 'MEMBER_UPDATED' } }]],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const steps = planDataMutationTests(channelRail);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].traitName).toBe('ChannelMemberPersistor');
+    expect(steps[0].event).toBe('DO_UPDATE');
+    expect(steps[0].testKind).toBe('data-mutation');
+  });
 });

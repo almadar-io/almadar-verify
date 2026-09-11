@@ -189,6 +189,55 @@ describe('planReplayTo', () => {
       };
       expect(planReplayTo({ trait: erasureTrait, targetState: 'execScanning' })).toEqual([]);
     });
+
+    // RV item 26: `browsing` has NO real incoming edge at all — the ONLY
+    // way there is `loading`'s transient settle — so it can only enter the
+    // BFS frontier via closure-flooding, never ordinary edge traversal.
+    // Pre-fix this made `replying` (and `SUBMIT_REPLY`'s own target)
+    // unreachable (`null`), silently excluding ChannelThread's whole
+    // `replying`-sourced arm set from the walk.
+    it("chains a transient settle into a further REAL hop (std-realtime-chat's ChannelThread shape: loading -(transient)-> browsing -REPLY-> replying)", () => {
+      const channelThreadTrait: TraitWalkConfig = {
+        traitName: 'ChannelThread',
+        initialState: 'loading',
+        transitions: [
+          transition('loading', 'ThreadPostLoaded', 'browsing'),
+          transition('browsing', 'SELECT', 'browsing'),
+          transition('browsing', 'REPLY', 'replying'),
+          transition('replying', 'EDIT_REPLY', 'replying'),
+          transition('replying', 'SUBMIT_REPLY', 'browsing'),
+          transition('replying', 'CANCEL_REPLY', 'browsing'),
+        ],
+        effectEmittedEvents: new Set(['ThreadPostLoaded']),
+      };
+
+      const toReplying = expectPath(planReplayTo({ trait: channelThreadTrait, targetState: 'replying' }));
+      expect(toReplying).toHaveLength(1);
+      expect(toReplying[0].from).toBe('browsing');
+      expect(toReplying[0].event).toBe('REPLY');
+      expect(toReplying[0].to).toBe('replying');
+
+      // `browsing` sits in `loading`'s OWN transient closure — zero hops,
+      // the pre-existing (already-working) zero-hop case.
+      expect(planReplayTo({ trait: channelThreadTrait, targetState: 'browsing' })).toEqual([]);
+    });
+
+    it('chains a transient settle into TWO further real hops (the target itself only reachable by dispatching through the transiently-reached launch point)', () => {
+      const trait: TraitWalkConfig = {
+        traitName: 'X',
+        initialState: 'loading',
+        transitions: [
+          transition('loading', 'Loaded', 'browsing'),
+          transition('browsing', 'REPLY', 'replying'),
+          transition('replying', 'EDIT_REPLY', 'editing'),
+        ],
+        effectEmittedEvents: new Set(['Loaded']),
+      };
+      const toEditing = expectPath(planReplayTo({ trait, targetState: 'editing' }));
+      expect(toEditing.map((s) => s.event)).toEqual(['REPLY', 'EDIT_REPLY']);
+      expect(toEditing[0].from).toBe('browsing');
+      expect(toEditing[1].from).toBe('replying');
+    });
   });
 
   describe('navigates (item D generalization)', () => {

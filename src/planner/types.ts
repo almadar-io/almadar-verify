@@ -395,6 +395,20 @@ export interface ExtendedWalkStep extends WalkStep {
      * preamble dispatch, never `tick()`'s in-step one.
      */
     traitName?: string;
+
+    /**
+     * C1-V16 (`guard-precondition.ts`): the state `traitName` must be at
+     * before `event` is dispatched — the selected setter's own anchor state
+     * (a same-trait self-loop's `atState`, or a sibling's initial state).
+     * Equal to the establishing trait's initial state in the common case;
+     * when it differs (std-thread's `EDIT_REPLY`, only an arm at
+     * `browsing`, not the trait's boot state `idle`), `runVerification`
+     * replays the establishing trait to it FIRST (`planReplayTo`, its own
+     * reconcile frames) before dispatching this preamble — dispatching
+     * straight at the trait's boot state would silently no-op for an arm
+     * that doesn't exist there.
+     */
+    establishAtState?: string;
   };
 
   /**
@@ -424,6 +438,17 @@ export interface ExtendedWalkStep extends WalkStep {
      * self-relation (nothing to avoid).
      */
     avoidReferencedVia?: readonly string[];
+    /**
+     * C1-V17: `(entityName, fieldName)` pairs on OTHER entities whose
+     * restrict-rule relation field targets THIS `entityName`
+     * (`crossEntityRestrictRelations`) — `enforceOnDeleteRules` blocks a
+     * delete referenced from any entity, not just a self-relation.
+     * `tick()` resolves each `entityName` to its live rows
+     * (`serverRowsFor`) and folds them into the same referential-safety
+     * check `avoidReferencedVia` drives. Empty/undefined when nothing
+     * outside the entity itself ever restricts its delete.
+     */
+    avoidReferencedByOtherEntities?: ReadonlyArray<{ entityName: string; fieldName: string }>;
   };
 
   /**
@@ -440,6 +465,22 @@ export interface ExtendedWalkStep extends WalkStep {
    * never a silent dispatch under the wrong viewer.
    */
   viewerRequirement?: ViewerRequirement;
+
+  /**
+   * RV item 27 (`plan-transient-failure-probes.ts`): the NOMINAL failure
+   * arm this step's forced dispatch is trying to prove, when it differs
+   * from the step's own literal `(from, event, to)` — a transient
+   * failure-route arm can only be observed by dispatching the transition
+   * that ENTERS its `from` state under a denying viewer, so the actual
+   * bus dispatch is that entering transition, not the failure arm
+   * itself. `assertTransientFailureArmPortals` reads this (via
+   * `frame.cause.verifiesPortalFor`) to know which portal expectation
+   * the resulting cascade should be checked against, and scans
+   * `frame.runtimeSnapshot.transitions` for the arm actually firing
+   * (the same "server cascade credit" the coverage observer already
+   * uses) rather than trusting the frame's own dispatched tuple.
+   */
+  verifiesPortalFor?: { traitName: string; from: string; event: string; to: string };
 
   /**
    * C1-V9 item C: for `crud-edit`/`crud-delete` steps (`planUserCrudFlow`),
@@ -477,20 +518,34 @@ export interface ExtendedWalkStep extends WalkStep {
    * an edit, so edit only needs SOME owned row, not an unreferenced one).
    *
    * `tick()` resolves the actual target row ONCE, before dispatch, via
-   * `pickBindableRow(entitiesBefore[expectedRowDelta.entityName],
-   * avoidReferencedVia, {requireUnreferenced: true when this is set and
-   * non-empty})` and threads the SAME row into three places: `targetRowId`
+   * `pickTargetRow(…, avoidReferencedVia, {requireUnreferenced: true when
+   * this (or `avoidReferencedByOtherEntities`) is set and non-empty})` and
+   * threads the SAME row into three places: `targetRowId`
    * (drives the DOM's row-scoped click), the viewer-switch `rowOverride`
    * (so the persona switched to is THAT row's owner), and `step.payload`
    * (so a bus-fallback dispatch carries a real id/row instead of `{}`).
-   * No candidate found (every row referenced, or none seeded) fails the
-   * frame closed with a `no-target-row` finding — same family as
-   * `unreachableRowReason` — instead of clicking the mock seeder's
+   * No candidate found fails the frame closed — `no-target-row` when none
+   * are seeded, `no-deletable-row` when every seeded row IS referenced
+   * (`PickTargetRowFailureCode`) — same family as `unreachableRowReason` —
+   * instead of clicking the mock seeder's
    * self-referential tree's row 0, which is a root with children EVERY
    * time and would be rejected by the runtime's own `onDelete: restrict`
    * rule regardless of viewer.
    */
   avoidReferencedVia?: readonly string[];
+
+  /**
+   * C1-V17: the cross-entity counterpart of {@link avoidReferencedVia}
+   * (`crossEntityRestrictRelations`) — `(entityName, fieldName)` pairs on
+   * OTHER entities whose restrict-rule relation targets this step's own
+   * entity. `tick()` resolves each to its live rows the same way it does
+   * for `bindRowFrom`'s copy of this field, and folds them into the SAME
+   * `pickTargetRow` call `avoidReferencedVia` drives — a row referenced
+   * only cross-entity (`ChannelMember.channel`, `ChatMessage.channel` both
+   * pointing at `Channel`) is exactly as undeletable as a self-referenced
+   * one, and the planner previously had no way to tell `tick()` about it.
+   */
+  avoidReferencedByOtherEntities?: ReadonlyArray<{ entityName: string; fieldName: string }>;
 
   /**
    * C1-V15 item B (`affordance-disabled.ts`): for `crud-edit`/`crud-delete`

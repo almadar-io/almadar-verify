@@ -103,6 +103,20 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
      */
     walkScope?: 'full' | 'frontier';
     /**
+     * Owner ruling 2026-09-11: verification is one trait at a time — a
+     * full walk only on explicit request. Restricts `planWalk` +
+     * every extension planner (data-mutation, CRUD flow, click-path,
+     * interaction, contract events, ticks, emit sweep) to the named
+     * trait(s)' steps, and scopes the schema coverage denominator to
+     * the same set. Accepts either spelling a trait can carry
+     * post-resolve (see `resolveTraitNames`/`traitMatchesName`); a name
+     * matching no trait in the resolved schema throws, listing every
+     * available trait name — never a silent no-op. Mirrors `orb verify
+     * --trait` (`orbital-verify::planner::resolve_trait_names`).
+     * Undefined/empty → today's unscoped full walk.
+     */
+    traits?: readonly string[];
+    /**
      * Storage tier for the CRUD-proof phase (`assertCrudFlow`). Default
      * `'strict'`. Set `'mock'` when the runtime under test is the
      * standalone playground's MockPersistenceAdapter: its persist acks

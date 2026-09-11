@@ -40,36 +40,80 @@ function inlineEntities(schema: OrbitalSchema): OrbitalEntity[] {
   return out;
 }
 
+/** One `(entityName, fieldName)` relation field, ANYWHERE in the schema,
+ *  whose target is the entity a delete is being planned for and whose own
+ *  `onDelete` rule actually blocks that delete. */
+export interface InboundRestrictRelation {
+  /** The entity DECLARING the relation field (the one whose rows reference
+   *  the delete target — may be the target entity itself, the self-
+   *  relation case, or any other entity in the schema). */
+  entityName: string;
+  fieldName: string;
+}
+
 /**
- * Every field on `entityName` whose declared relation target IS
- * `entityName` itself AND whose delete rule actually blocks a delete —
- * `onDelete` defaults to `'restrict'` when undeclared (mirrors
- * `OrbitalServerRuntime.enforceOnDeleteRules`'s own `field.relation.onDelete
- * || 'restrict'` default EXACTLY — C1-V10 item 2 — the previous version
- * unconditionally avoided every self-relation field, including a
- * `cascade`/`nullify` one that never blocks a delete at all: a NEEDLESS
- * avoidance that could exhaust genuinely-deletable rows in
- * {@link pickBindableRow}'s search). Empty when the entity declares no
- * (restrict-rule) self-relation (the common case) — callers treat that as
- * "no avoidance needed."
+ * Every `(entityName, fieldName)` relation field in the WHOLE schema whose
+ * declared relation target is `targetEntityName` AND whose delete rule
+ * actually blocks a delete — the ONE owner mirroring
+ * `OrbitalServerRuntime.enforceOnDeleteRules`'s own scan EXACTLY: that
+ * function loops over every REGISTERED entity's fields looking for
+ * `field.relation.entity === entityType` (the entity being deleted), not
+ * just `targetEntityName`'s own fields — a cross-entity inbound restrict
+ * (`ChatMessage.channel : Channel`, blocking a `Channel` delete) is just as
+ * real a block as a self-relation (`Note.parentId : Note`) is, and the
+ * planner previously only ever knew about the latter. `onDelete` defaults
+ * to `'restrict'` when undeclared, same default `enforceOnDeleteRules`
+ * applies (C1-V10 item 2, preserved here).
  */
-export function selfRelationFieldNames(schema: OrbitalSchema, entityName: string): string[] {
-  const out: string[] = [];
+export function inboundRestrictRelations(
+  schema: OrbitalSchema,
+  targetEntityName: string,
+): InboundRestrictRelation[] {
+  const out: InboundRestrictRelation[] = [];
   for (const def of inlineEntities(schema)) {
-    if (def.name !== entityName) continue;
     for (const field of def.fields ?? []) {
       if (
         field.type === 'relation' &&
-        field.relation.entity === entityName &&
+        field.relation.entity === targetEntityName &&
         field.name !== undefined &&
-        (field.relation.onDelete ?? 'restrict') === 'restrict' &&
-        !out.includes(field.name)
+        (field.relation.onDelete ?? 'restrict') === 'restrict'
       ) {
-        out.push(field.name);
+        out.push({ entityName: def.name, fieldName: field.name });
       }
     }
   }
   return out;
+}
+
+/**
+ * The SELF-relation slice of {@link inboundRestrictRelations} — field names
+ * on `entityName` that relate back to `entityName` itself (`Note.parentId`,
+ * the record-detail generic's rewritten `seedRow`). Empty when the entity
+ * declares no (restrict-rule) self-relation (the common case) — callers
+ * treat that as "no avoidance needed."
+ */
+export function selfRelationFieldNames(schema: OrbitalSchema, entityName: string): string[] {
+  const out: string[] = [];
+  for (const rel of inboundRestrictRelations(schema, entityName)) {
+    if (rel.entityName === entityName && !out.includes(rel.fieldName)) out.push(rel.fieldName);
+  }
+  return out;
+}
+
+/**
+ * The CROSS-entity slice of {@link inboundRestrictRelations} — every
+ * `(entityName, fieldName)` pair belonging to some OTHER entity that
+ * references `targetEntityName` with a restrict rule (`ChannelMember.channel
+ * : Channel`, `ChatMessage.channel : Channel` both blocking a `Channel`
+ * delete). Excludes the self-relation slice `selfRelationFieldNames` already
+ * owns. Empty when nothing outside the entity itself ever restricts its
+ * delete — the common case.
+ */
+export function crossEntityRestrictRelations(
+  schema: OrbitalSchema,
+  targetEntityName: string,
+): InboundRestrictRelation[] {
+  return inboundRestrictRelations(schema, targetEntityName).filter((rel) => rel.entityName !== targetEntityName);
 }
 
 /**
@@ -113,85 +157,71 @@ function directlyReferencedRowIds(
   return referenced;
 }
 
-/**
- * The row `tick()` should target: the FIRST row (stable structural
- * position, the existing convention every row-picker in this package
- * uses) that no OTHER row in the same set references through any of
- * `avoidReferencedVia`'s fields — a proper reachability check over the
- * self-relation edges (see {@link directlyReferencedRowIds}), not just a
- * single scalar field read. Falls back to the first row outright when
- * `avoidReferencedVia` is empty (the entity has no restrict-rule self-
- * relation — nothing to avoid) or every row is referenced by some other
- * row (a fully-connected seed; picking the first is no worse than before,
- * and still surfaces the SAME restrict-rule rejection as a genuine finding
- * rather than silently retrying) — UNLESS `options.requireUnreferenced` is
- * `true`, in which case the fully-connected case returns `undefined`
- * instead of that fallback.
- *
- * `requireUnreferenced` exists for callers (C1-V11: `tick()`'s crud-edit/
- * crud-delete row resolution) that must fail a frame CLOSED rather than
- * knowingly click a row the runtime's own `onDelete: restrict` rule will
- * reject — silently falling back to row 0 there reproduces the exact bug
- * this module exists to fix. `bindRowFrom`'s existing call site (C1-V9/V10)
- * keeps the old "last resort, no worse than before" behavior by omitting
- * `options` — its contract is locked in by the tests below and is
- * unaffected by this addition.
- */
-export function pickBindableRow(
-  rows: ReadonlyArray<EntityRow>,
-  avoidReferencedVia: ReadonlyArray<string> | undefined,
-  options?: { requireUnreferenced?: boolean },
-): EntityRow | undefined {
-  if (rows.length === 0) return undefined;
-  if (avoidReferencedVia === undefined || avoidReferencedVia.length === 0) return rows[0];
-
-  const referencedIds = directlyReferencedRowIds(rows, avoidReferencedVia);
-  const unreferenced = rows.find((row) => typeof row['id'] === 'string' && !referencedIds.has(row['id'] as string));
-  if (unreferenced !== undefined) return unreferenced;
-  return options?.requireUnreferenced === true ? undefined : rows[0];
+/** One OTHER entity's rows plus the field on them that may reference the
+ *  row being picked — {@link pickTargetRow}'s cross-entity input, one entry
+ *  per {@link crossEntityRestrictRelations} pair the caller resolved to
+ *  live rows (`tick()`'s `serverRowsFor`). */
+export interface CrossEntityReferenceRows {
+  field: string;
+  rows: ReadonlyArray<EntityRow>;
 }
 
+/** Why {@link pickTargetRow} returned no row — folded into `tick()`'s
+ *  finding message: `'no-rows'` (the base set itself is empty), `'all-
+ *  disabled'` (every candidate's affordance is disabled), `'all-referenced'`
+ *  (every candidate is referenced — self-relation or cross-entity — and
+ *  `requireUnreferenced` was set). */
+export type PickTargetRowFailureCode = 'no-rows' | 'all-disabled' | 'all-referenced';
+
 /**
- * C1-V12 (rung 3): server-truth-aware generalization of
- * {@link pickBindableRow}. `entitiesBefore` (what every caller above used
- * to pass as `rows`) is the BROWSER's previous-frame snapshot of a
- * trait's fetched `data` — a filtered/paged SUBSET of the runtime's real
- * mock store — so computing referential safety over it alone can miss an
- * edge from a row the page never rendered (a hidden sibling referencing
- * a visible candidate via `avoidReferencedVia`), or flag a visible row as
- * "referenced" by a row that, on the full graph, doesn't exist. Both
- * misjudge exactly the `onDelete: restrict` check the runtime itself
- * enforces over its COMPLETE store.
+ * The row `tick()` should target: the FIRST row (stable structural
+ * position, the existing convention every row-picker in this package uses)
+ * that no OTHER row references through any of `avoidReferencedVia`'s
+ * SELF-relation fields, nor any row of a DIFFERENT entity references
+ * through one of `options.crossEntity`'s fields — a proper reachability
+ * check over every restrict-rule edge `OrbitalServerRuntime.
+ * enforceOnDeleteRules` would enforce (see {@link directlyReferencedRowIds}
+ * and {@link inboundRestrictRelations}), not just a same-entity scalar
+ * field read.
  *
- * `serverRows` is the driver's `listEntityRows` result (the full store);
- * `visibleRows` is the existing browser-snapshot subset. When
- * `options.requireVisible` is true (a DOM-driven crud step — the click
- * can only ever land on a row the current page actually rendered) the
- * PICK is restricted to `visibleRows`, but the referential-safety check
- * is still computed over `serverRows`; otherwise (a bus-dispatched
- * `bindRowFrom` preamble, whose payload carries the id directly and
- * needs no rendered affordance) the pick draws from `serverRows`
- * outright, so a page with ZERO visible rows of the entity still
- * resolves a real target instead of the old "no row key" failure.
+ * `entitiesBefore` (what a caller may pass as `visibleRows`) is the
+ * BROWSER's previous-frame snapshot of a trait's fetched `data` — a
+ * filtered/paged SUBSET of the runtime's real mock store — so computing
+ * referential safety over it alone can miss an edge from a row the page
+ * never rendered, or flag a visible row as "referenced" by a row that, on
+ * the full graph, doesn't exist. `serverRows` (the driver's
+ * `listEntityRows` result, the full store) is what the referential-safety
+ * check is always computed over; `serverRows === visibleRows` (a driver
+ * with no `listEntityRows`) is the degenerate case, not a special one.
  *
- * `serverRows === visibleRows` (a driver with no `listEntityRows` — the
- * caller passes the same browser-snapshot array for both) reproduces
- * `pickBindableRow`'s exact pre-existing behavior; this function is a
- * strict generalization; never a behavior change for that fallback.
+ * `options.requireVisible` restricts the PICK itself to `visibleRows` (a
+ * DOM-driven crud step — the click can only ever land on a row the current
+ * page actually rendered); otherwise (a bus-dispatched `bindRowFrom`
+ * preamble, whose payload carries the id directly and needs no rendered
+ * affordance) the pick draws from `serverRows` outright, so a page with
+ * ZERO visible rows of the entity still resolves a real target instead of a
+ * "no row key" failure.
  *
- * Returns the row on success, or a `reason` string identifying which
- * constraint emptied the candidate set — folded into `tick()`'s
- * `no-target-row` finding instead of a bare "no row available".
- *
- * `options.isEnabled` (C1-V15 item B): a DOM-driven crud step must target
- * a row whose affordance is actually clickable — a row for which the
+ * `options.isEnabled` (C1-V15 item B): a DOM-driven crud step must target a
+ * row whose affordance is actually clickable — a row for which the
  * predicate returns `false` (the affordance's own `disabled` expression
  * evaluated `true` for that row, `tick()`'s job via `@almadar/evaluator`)
  * is dropped from the candidate set BEFORE the referential-safety check
- * runs, using the SAME message-emitting contract as every other exhausted-
- * candidate case here. Referential safety itself is unaffected — it is
- * always computed over the full `serverRows`, an affordance being disabled
- * has no bearing on whether some OTHER row references this one.
+ * runs. Referential safety itself is unaffected — it is always computed
+ * over the full `serverRows` (+ `options.crossEntity`'s rows), an
+ * affordance being disabled has no bearing on whether some OTHER row
+ * references this one.
+ *
+ * Falls back to the first (enabled) candidate outright when NEITHER
+ * `avoidReferencedVia` nor `options.crossEntity` names anything to avoid,
+ * or when every candidate is referenced (a fully-connected seed; picking
+ * the first is no worse than before, and still surfaces the SAME
+ * restrict-rule rejection as a genuine finding rather than silently
+ * retrying) — UNLESS `options.requireUnreferenced` is `true`, in which case
+ * the fully-connected case returns a `'all-referenced'`-coded failure
+ * instead of that fallback (C1-V11: `tick()`'s crud-edit/crud-delete row
+ * resolution must fail a frame CLOSED rather than knowingly click a row the
+ * runtime's own `onDelete: restrict` rule will reject).
  */
 export function pickTargetRow(
   serverRows: ReadonlyArray<EntityRow>,
@@ -202,11 +232,16 @@ export function pickTargetRow(
     requireVisible?: boolean;
     isEnabled?: (row: EntityRow) => boolean;
     disabledReason?: string;
+    /** C1-V17: OTHER entities' rows whose relation fields point at THIS
+     *  pick's entity with a restrict rule (`crossEntityRestrictRelations`,
+     *  resolved to live rows by the caller). */
+    crossEntity?: ReadonlyArray<CrossEntityReferenceRows>;
   },
-): { row: EntityRow } | { reason: string } {
+): { row: EntityRow } | { reason: string; code: PickTargetRowFailureCode } {
   const base = options?.requireVisible === true ? visibleRows : serverRows;
   if (base.length === 0) {
     return {
+      code: 'no-rows',
       reason: options?.requireVisible === true
         ? 'no row is rendered on the current page for this entity'
         : 'no row exists in the server-truth store for this entity',
@@ -216,25 +251,40 @@ export function pickTargetRow(
   const candidates = options?.isEnabled !== undefined ? base.filter(options.isEnabled) : base;
   if (candidates.length === 0) {
     return {
+      code: 'all-disabled',
       reason: options?.disabledReason ?? "every visible row's affordance is disabled",
     };
   }
 
-  if (avoidReferencedVia === undefined || avoidReferencedVia.length === 0) {
+  const hasSelfAvoidance = avoidReferencedVia !== undefined && avoidReferencedVia.length > 0;
+  const crossEntity = options?.crossEntity;
+  const hasCrossEntityAvoidance = crossEntity !== undefined && crossEntity.length > 0;
+  if (!hasSelfAvoidance && !hasCrossEntityAvoidance) {
     return { row: candidates[0] as EntityRow };
   }
 
   // Referential safety is always computed over the FULL server-truth set
   // (never just `candidates`) — a row referenced only by a row outside
   // `candidates` (a sibling this page never rendered) still blocks a
-  // delete the runtime's own onDelete: restrict rule enforces.
-  const referencedIds = directlyReferencedRowIds(serverRows, avoidReferencedVia);
+  // delete the runtime's own onDelete: restrict rule enforces. Cross-entity
+  // references are checked against THEIR OWN entity's rows, not
+  // `serverRows` (which only ever holds the pick's own entity).
+  const referencedIds = new Set<string>(
+    hasSelfAvoidance ? directlyReferencedRowIds(serverRows, avoidReferencedVia as ReadonlyArray<string>) : [],
+  );
+  if (hasCrossEntityAvoidance) {
+    for (const ref of crossEntity as ReadonlyArray<CrossEntityReferenceRows>) {
+      for (const id of directlyReferencedRowIds(ref.rows, [ref.field])) referencedIds.add(id);
+    }
+  }
+
   const safe = candidates.find((row) => typeof row['id'] === 'string' && !referencedIds.has(row['id'] as string));
   if (safe !== undefined) return { row: safe };
   if (options?.requireUnreferenced === true) {
     return {
-      reason: `every candidate row is referenced via ${JSON.stringify(avoidReferencedVia)} (checked against the ` +
-        'full server-truth row set) — the runtime\'s own onDelete: restrict rule would reject every one',
+      code: 'all-referenced',
+      reason: 'every candidate row is referenced (checked against the full server-truth row set, including any '
+        + "restrict-rule relation from another entity) — the runtime's own onDelete: restrict rule would reject every one",
     };
   }
   return { row: candidates[0] as EntityRow };

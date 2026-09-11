@@ -231,6 +231,7 @@ export {
 } from './planner/plan-dom-decoration.js';
 export { planClickPathSamples } from './planner/plan-click-path-samples.js';
 export { extractTraitWalkConfigs } from './planner/extract-trait-walk-configs.js';
+export { resolveTraitNames, traitMatchesName } from './planner/trait-scope.js';
 export {
   planContractEvents,
   type ContractRegistry,
@@ -258,7 +259,7 @@ export type {
 } from './observer/types.js';
 export { coverage } from './observer/coverage.js';
 export { assertMutation } from './observer/assert-mutation.js';
-export { assertCascade } from './observer/assert-cascade.js';
+export { assertCascade, assertBusItemCascadedNTimes } from './observer/assert-cascade.js';
 export { assertGuardParity } from './observer/assert-guard-parity.js';
 export { assertPortalSlots } from './observer/assert-portal.js';
 export { probeBindings as probeBindingsFromFrame } from './observer/probe-bindings.js';
@@ -267,7 +268,8 @@ export { assertClickPathSample } from './observer/assert-click-path-sample.js';
 export { assertContractEventFired } from './observer/assert-contract-event-fired.js';
 export { assertDataMutation } from './observer/assert-data-mutation.js';
 export { assertCrudFlow } from './observer/assert-crud-flow.js';
-export { assertPortalPerStep } from './observer/assert-portal-per-step.js';
+export { assertPortalPerStep, assertTransientFailureArmPortals, assertSlotShowsForeignTransitionRender } from './observer/assert-portal-per-step.js';
+export { assertListensEdgeNeverFired } from './observer/listens-edge-never-fired.js';
 export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { auditListens, embedHostChain, embedHostsOf, type ListensAuditResult } from './observer/click-wiring-audit.js';
 export { lintWiring, producibleEvents, renderActionEventsOf, suppliedPayloadFields, type WiringLintFinding, type WiringLintResult, type WiringLintSeverity } from './observer/wiring-lint.js';

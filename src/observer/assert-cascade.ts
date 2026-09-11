@@ -81,3 +81,42 @@ export function assertCascade(
     evidence: { frameIndices: indices },
   };
 }
+
+/**
+ * `assertBusItemCascadedNTimes` — one bus item cascaded MORE THAN ONCE
+ * into one listener within a single dispatch window. `cascadeReceived`
+ * (`TraitStateSnapshot`, core) resets "since the last user dispatch", so
+ * two entries in ONE frame's list for the SAME `(event, payload)` pair on
+ * the SAME trait is a genuine duplicate delivery, not two distinct real
+ * firings — a bus double-dispatch / double-subscription bug, not a
+ * legitimately-repeated event (which would carry a DIFFERENT payload).
+ * Matched by `(event, JSON.stringify(payload))` — never by event name
+ * alone, so a route that fires the same event twice with different data
+ * in one window stays silent.
+ */
+export function assertBusItemCascadedNTimes(frames: ReadonlyArray<Frame>): Verdict[] {
+  const verdicts: Verdict[] = [];
+  for (const frame of frames) {
+    for (const traitSnapshot of frame.runtimeSnapshot.traits) {
+      const counts = new Map<string, { event: string; count: number }>();
+      for (const item of traitSnapshot.cascadeReceived) {
+        const key = `${item.event}::${JSON.stringify(item.payload ?? {})}`;
+        const entry = counts.get(key) ?? { event: item.event, count: 0 };
+        entry.count += 1;
+        counts.set(key, entry);
+      }
+      for (const { event, count } of counts.values()) {
+        if (count <= 1) continue;
+        verdicts.push({
+          passed: false,
+          detail:
+            `bus-item-cascaded-n-times: ${traitSnapshot.traitName} received the SAME bus item ('${event}') ` +
+            `${count} times in one dispatch window (frame ${frame.index}) — a duplicate delivery, not ${count} ` +
+            `distinct firings`,
+          evidence: { frameIndices: [frame.index] },
+        });
+      }
+    }
+  }
+  return verdicts;
+}

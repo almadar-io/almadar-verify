@@ -92,6 +92,93 @@ function helpdeskSchema(withSetter: boolean): { schema: OrbitalSchema; persistor
   return { schema, persistor };
 }
 
+/**
+ * C1-V16 — mirrors std-thread's REAL shape: `browsing` declares an
+ * EFFECT-EMITTED clearer (`ThreadPostCreated -> browsing (set
+ * @entity.replyDraft "")`) BEFORE the real user-driven setter
+ * (`EDIT_REPLY -> browsing (set @entity.replyDraft ?value)`). The old
+ * first-in-declaration-order picker chose the clearer, whose written value
+ * (`""`) fails `SUBMIT_REPLY`'s guard every time. The fix must skip the
+ * effect-emitted clearer entirely and land on `EDIT_REPLY`.
+ */
+function threadSchema(): { schema: OrbitalSchema; thread: Trait } {
+  const thread: Trait = {
+    name: 'ChannelThread',
+    scope: 'instance',
+    linkedEntity: 'ChatMessage',
+    stateMachine: {
+      states: [{ name: 'browsing', isInitial: true }],
+      events: [
+        { key: 'INIT', name: 'Init' },
+        { key: 'ThreadPostCreated', name: 'Thread Post Created' },
+        { key: 'EDIT_REPLY', name: 'Edit Reply', payloadSchema: [{ name: 'value', type: 'string', required: true }] },
+        { key: 'SUBMIT_REPLY', name: 'Submit Reply' },
+      ],
+      transitions: [
+        { from: 'browsing', to: 'browsing', event: 'INIT' },
+        {
+          from: 'browsing',
+          to: 'browsing',
+          event: 'ThreadPostCreated',
+          effects: [['set', '@entity.replyDraft', '']],
+        },
+        {
+          from: 'browsing',
+          to: 'browsing',
+          event: 'EDIT_REPLY',
+          effects: [['set', '@entity.replyDraft', '@payload.value']],
+        },
+        {
+          from: 'browsing',
+          to: 'browsing',
+          event: 'SUBMIT_REPLY',
+          guard: ['not', ['=', ['str/default', '@entity.replyDraft', ''], '']],
+          effects: [
+            ['persist', 'update', 'ChatMessage', '@payload.data', { emit: { success: 'ThreadPostCreated' } }],
+          ],
+        },
+      ],
+    },
+  };
+
+  const schema: OrbitalSchema = {
+    name: 'thread-guard-precondition-fixture',
+    designTokens: {},
+    customPatterns: {},
+    orbitals: [
+      {
+        name: 'ChannelOrbital',
+        entity: {
+          name: 'ChatMessage',
+          persistence: 'persistent',
+          fields: [
+            { name: 'id', type: 'string', required: true },
+            { name: 'replyDraft', type: 'string' },
+          ],
+        },
+        pages: [],
+        traits: [thread],
+      },
+    ],
+  };
+  return { schema, thread };
+}
+
+describe('planGuardPreconditionPreamble (C1-V16 — effect-emitted clearer vs. real setter)', () => {
+  it('skips the effect-emitted clearer and establishes via EDIT_REPLY', () => {
+    const { schema, thread } = threadSchema();
+    const submitReply = thread.stateMachine!.transitions.find((t) => t.event === 'SUBMIT_REPLY')!;
+
+    const result = planGuardPreconditionPreamble(schema, thread, submitReply, 'browsing', {});
+
+    expect(result.guardPreconditionUnreachable).toBeUndefined();
+    expect(result.establishesRow).toBeDefined();
+    expect(result.establishesRow?.event).toBe('EDIT_REPLY');
+    expect(result.establishesRow?.traitName).toBe('ChannelThread');
+    expect(result.establishesRow?.establishAtState).toBe('browsing');
+  });
+});
+
 describe('planGuardPreconditionPreamble (C1-V15 item A)', () => {
   it('attaches the sibling SELECT_TICKET preamble when the setter exists', () => {
     const { schema, persistor } = helpdeskSchema(true);

@@ -92,6 +92,33 @@ function collectAsyncResultFromNode(node: Effect | SExpr, out: Set<string>): voi
   for (const child of nodes) collectAsyncResultFromNode(child, out);
 }
 
+/** Collect just the `emit.failure` event of every `fetch`/`persist`/
+ *  `call-service` effect in one transition's effects — narrower than
+ *  {@link collectAsyncResultEvents} (which merges success+failure and
+ *  skips `call-service`), for checks that care about the FAILURE route
+ *  specifically (`failure-arm-missing`/`failure-arm-renders-nothing`). */
+export function collectFailureEvents(effects: ReadonlyArray<Effect>): Set<string> {
+  const out = new Set<string>();
+  for (const eff of effects) collectFailureFromNode(eff, out);
+  return out;
+}
+
+function collectFailureFromNode(node: Effect | SExpr, out: Set<string>): void {
+  if (!Array.isArray(node)) return;
+  const nodes = node as readonly SExpr[];
+  if (nodes[0] === 'fetch' || nodes[0] === 'persist' || nodes[0] === 'call-service') {
+    for (const child of nodes) {
+      if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+      const emit = (child as Readonly<Record<string, SExpr>>)['emit'];
+      if (emit === null || typeof emit !== 'object' || Array.isArray(emit)) continue;
+      const failure = (emit as Readonly<Record<string, SExpr>>)['failure'];
+      if (typeof failure === 'string' && failure !== '') out.add(failure);
+    }
+  }
+  // fetch/persist/call-service can sit inside an `(if …)` wrapper, so keep descending.
+  for (const child of nodes) collectFailureFromNode(child, out);
+}
+
 function collectFromNode(node: Effect | SExpr, out: Set<string>): void {
   if (Array.isArray(node)) {
     // Effect tuples are structurally SExpr arrays — iterate under that shape

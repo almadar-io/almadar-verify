@@ -70,9 +70,11 @@ import type { OrbitalServerRuntime } from '@almadar/runtime/OrbitalServerRuntime
 import { collectEntityFields, synthesizeSuccessPayload } from '../planner/internal/payload-synth.js';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
 import { findPersistKind, findPersistWholeRowField } from '../planner/internal/persist-binding.js';
+import { crossEntityRestrictRelations, pickTargetRow, selfRelationFieldNames } from '../planner/internal/self-relation-fields.js';
 import { producibleEvents } from './wiring-lint.js';
 import { embedHostChain, embedHostsOf } from './click-wiring-audit.js';
 import { declaredEntityRow } from '../driver/declared-entity-row.js';
+import { resolveTraitNames } from '../planner/trait-scope.js';
 
 /**
  * Stable id for the ONE row seeded into a source trait's `linkedEntity`
@@ -351,7 +353,21 @@ export async function probeListenCascades(
    *  id nothing was ever created for. Omitted → unchanged behavior (a
    *  by-id fetch inside the probed dispatch will miss). */
   persistence?: InMemoryPersistence,
+  /**
+   * `--trait` scope (owner ruling 2026-09-11: verification is one trait
+   * at a time). When supplied, only listens routes whose LISTENER (target)
+   * OR SOURCE trait resolves into this set are probed — a scoped trait's
+   * cascades still get probed even when the counterpart end's own walk is
+   * skipped. Accepts either spelling a trait can carry post-resolve (see
+   * `resolveTraitNames`); a name matching no trait in `schema` throws,
+   * listing every available trait name. Undefined/empty → every
+   * source-qualified listen is probed (today's behavior).
+   */
+  traits?: readonly string[],
 ): Promise<CascadeProbeResult> {
+  const traitScope = traits !== undefined && traits.length > 0
+    ? new Set(resolveTraitNames(schema, traits))
+    : null;
   const findings: CascadeProbeFinding[] = [];
   let probed = 0;
   const entityFieldsByName = collectEntityFields(schema);
@@ -368,6 +384,11 @@ export async function probeListenCascades(
         // wildcard subscription (every trait, every orbital) and `undefined`
         // is a local payload declaration with no bus subscription at all.
         if (source === undefined || source.kind === 'any') continue;
+
+        // `--trait` scope: probe only when the LISTENER (target) or the
+        // SOURCE trait is named — a scoped trait's cascades are probed on
+        // either end, even when the counterpart's own walk was skipped.
+        if (traitScope !== null && !traitScope.has(listenerName) && !traitScope.has(source.trait)) continue;
 
         const sourceOrbitalName = source.kind === 'orbital' ? source.orbital : orb.name;
         const sourceOrb = schema.orbitals.find((o) => o.name === sourceOrbitalName);
@@ -530,6 +551,37 @@ export async function probeListenCascades(
             await persistence.seed({ [linkedEntity]: [row] });
           }
 
+          // C1-V19 (item 5b): a `persist delete` target must pick a row the
+          // runtime's own `onDelete: restrict` rules won't already block —
+          // this probe shares ONE persistence store across every listen in
+          // the whole schema, so an earlier iteration's seeded row on a
+          // DIFFERENT entity can legitimately reference the row this
+          // dispatch is about to try to delete. A fixed synthetic id (the
+          // pre-existing `effectiveSeedId` behavior) has no way to notice
+          // that — the resulting `denied` read as a broken cascade instead
+          // of the honest "no deletable row exists yet" case. Reuse item 3's
+          // OWN picker (`pickTargetRow` + `inboundRestrictRelations`'s self/
+          // cross-entity slices) against the LIVE store instead of guessing.
+          let deleteTargetId: string | undefined;
+          if (persistTarget !== null && persistTarget.kind === 'delete' && persistence !== undefined) {
+            const entityRows = await persistence.list(persistTarget.entity);
+            if (entityRows.length === 0) {
+              const seeded = declaredEntityRow(schema, persistTarget.entity, {
+                id: effectiveSeedId(schema, runtime, persistTarget.entity),
+              });
+              await persistence.seed({ [persistTarget.entity]: [seeded] });
+              deleteTargetId = typeof seeded['id'] === 'string' ? seeded['id'] : undefined;
+            } else {
+              const selfFields = selfRelationFieldNames(schema, persistTarget.entity);
+              const crossRels = crossEntityRestrictRelations(schema, persistTarget.entity);
+              const crossEntity = crossRels.length > 0
+                ? await Promise.all(crossRels.map(async (rel) => ({ field: rel.fieldName, rows: await persistence.list(rel.entityName) })))
+                : undefined;
+              const picked = pickTargetRow(entityRows, entityRows, selfFields.length > 0 ? selfFields : undefined, { crossEntity });
+              if ('row' in picked && typeof picked.row['id'] === 'string') deleteTargetId = picked.row['id'];
+            }
+          }
+
           const eventDecl = sourceTrait.stateMachine?.events?.find((e) => e.key === transition.event);
           const successPayload = synthesizeSuccessPayload(
             eventDecl?.payloadSchema,
@@ -551,7 +603,7 @@ export async function probeListenCascades(
           // above so a by-id fetch this dispatch triggers actually hits,
           // AFTER the merge so it wins regardless of which piece produced it.
           if (persistence !== undefined && sourceTrait.linkedEntity !== undefined && 'id' in payload) {
-            payload['id'] = effectiveSeedId(schema, runtime, sourceTrait.linkedEntity);
+            payload['id'] = deleteTargetId ?? effectiveSeedId(schema, runtime, sourceTrait.linkedEntity);
           }
           // A `persist create|update <Entity> @payload.<field>` effect writes
           // the ENTIRE dispatched `<field>` object as the row — `id`/owner
@@ -573,7 +625,7 @@ export async function probeListenCascades(
             if (wholeRowField !== null) {
               const current = payload[wholeRowField];
               const row: EventPayload = isPlainEventPayload(current) ? { ...current } : {};
-              row['id'] = effectiveSeedId(schema, runtime, linkedEntity);
+              row['id'] = deleteTargetId ?? effectiveSeedId(schema, runtime, linkedEntity);
               if (viewerId !== undefined) {
                 for (const field of ownerFieldNames(schema, linkedEntity)) {
                   if (field === 'id') continue;
@@ -592,11 +644,30 @@ export async function probeListenCascades(
 
           const sourceEmitted = response.success && response.emittedEvents.some((e) => e.event === listen.event);
           if (!sourceEmitted) {
-            // The chosen arm didn't fire from the trait's live state this run
-            // (payload validation failed, or a supposedly-steerable guard
-            // still rejected the synthesized payload) — structurally the same
-            // "the probe found nothing to exercise" gap as the
-            // empty-emittingTransitions case above.
+            // C1-V19 (item 5): the chosen arm didn't fire — report the REAL
+            // cause instead of blindly blaming the guard. `response.
+            // effectResults` (unread until this fix) carries the actual
+            // outcome of any `persist`/`set`/`call-service` effect the arm
+            // ran: `denied: true` means an access policy rejected the
+            // synthesized payload/viewer, a `success: false` entry with its
+            // own `error` means the effect itself failed (e.g. no row key) —
+            // neither is a guard problem at all. `response.error` (API-
+            // boundary payload validation) is checked next. Only when NONE
+            // of those fired AND the dispatched transition actually
+            // DECLARES a guard is "guard rejected" an honest explanation;
+            // otherwise say so plainly rather than naming a mechanism that
+            // isn't even present.
+            const deniedEffect = response.effectResults?.find((e) => e.denied === true);
+            const failedEffect = response.effectResults?.find((e) => e.success === false && e.denied !== true);
+            const cause = deniedEffect !== undefined
+              ? `denied by access policy (${deniedEffect.entityType ?? persistTarget?.entity ?? 'entity'}${deniedEffect.action !== undefined ? ` ${deniedEffect.action}` : ''})`
+              : failedEffect !== undefined
+                ? `failed: ${failedEffect.error ?? 'effect did not succeed'}`
+                : response.error !== undefined
+                  ? response.error
+                  : transition.guard !== undefined && transition.guard !== null
+                    ? 'guard rejected the synthesized payload'
+                    : 'the transition did not fire for an unknown reason (no guard declared, no reported effect failure)';
             findings.push({
               check: 'listen-source-cannot-emit',
               severity: 'error',
@@ -609,7 +680,7 @@ export async function probeListenCascades(
               message:
                 `${listenerName} listens for ${source.trait}.${listen.event} -> ${listen.triggers}; probed ` +
                 `${source.trait}.${transition.event} from state '${liveState?.currentState ?? 'unknown'}' but it ` +
-                `did not emit ${listen.event}${response.error ? ` (${response.error})` : ' (guard rejected the synthesized payload)'}`,
+                `did not emit ${listen.event} (${cause})`,
               suggestion:
                 `verify the guard/state preconditions for the arm on ${source.trait} that should emit ` +
                 `${listen.event}, or drive it into the reachable state before relying on this cascade`,

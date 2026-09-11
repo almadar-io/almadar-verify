@@ -107,7 +107,20 @@ const stdListShape: OrbitalSchema = {
               { key: 'CONFIRM_DELETE', name: 'Confirm' },
             ],
             transitions: [
-              { from: 'idle', to: 'confirming', event: 'DELETE' },
+              {
+                from: 'idle',
+                to: 'confirming',
+                event: 'DELETE',
+                // Mirrors std-confirmation's real shape: a confirm-dialog
+                // rendered into the `modal` portal slot, whose own
+                // CONFIRM button carries the submit/confirm event.
+                effects: [
+                  ['render-ui', 'modal', {
+                    type: 'stack',
+                    children: [{ type: 'button', action: 'CONFIRM_DELETE', label: 'Delete' }],
+                  }],
+                ],
+              },
               { from: 'confirming', to: 'idle', event: 'CONFIRM_DELETE' },
             ],
           },
@@ -496,7 +509,17 @@ describe('planUserCrudFlow — isRowAction classification (C1-V9 item C)', () =>
                   { key: 'SAVE', name: 'Save', payloadSchema: [{ name: 'data', type: 'object', required: true }] },
                 ],
                 transitions: [
-                  { from: 'closed', to: 'open', event: 'EDIT' },
+                  {
+                    from: 'closed',
+                    to: 'open',
+                    event: 'EDIT',
+                    effects: [
+                      ['render-ui', 'modal', {
+                        type: 'stack',
+                        children: [{ type: 'button', action: 'SAVE', label: 'Save' }],
+                      }],
+                    ],
+                  },
                   { from: 'open', to: 'closed', event: 'SAVE' },
                 ],
               },
@@ -516,7 +539,17 @@ describe('planUserCrudFlow — isRowAction classification (C1-V9 item C)', () =>
                   { key: 'SAVE', name: 'Save', payloadSchema: [{ name: 'data', type: 'object', required: true }] },
                 ],
                 transitions: [
-                  { from: 'closed', to: 'open', event: 'RATE' },
+                  {
+                    from: 'closed',
+                    to: 'open',
+                    event: 'RATE',
+                    effects: [
+                      ['render-ui', 'modal', {
+                        type: 'stack',
+                        children: [{ type: 'button', action: 'SAVE', label: 'Save' }],
+                      }],
+                    ],
+                  },
                   { from: 'open', to: 'closed', event: 'SAVE' },
                 ],
               },
@@ -652,5 +685,94 @@ describe('planUserCrudFlow — viewer requirement (C1-V10 item 1)', () => {
     for (const step of steps) {
       expect(step.viewerRequirement).toBeUndefined();
     }
+  });
+});
+
+/**
+ * C1-V18 — mirrors std-realtime-chat's real defect: `ChannelRail` (a Browse
+ * trait) reaches its `browsing` state via a fetch-success arm
+ * (`BrowseItemLoaded`, effect-emitted, rendering an `entity-table` into
+ * `main`) — structurally identical to "first non-INIT transition off the
+ * source trait's initial state, landing elsewhere", exactly what a real
+ * modal's OPEN transition looks like. `ChannelMemberPersistor` listens for
+ * ChannelRail's OWN `UNREAD_CLEARED` broadcast (fired from `browsing`) to
+ * dispatch its persist — before this fix, `buildCrudStep` had no way to
+ * tell this apart from a genuine modal/confirmation open+submit pair, and
+ * planned a bogus `crud-edit ChannelMember` step no user action ever
+ * drives (the fetch fires on mount, not a click).
+ */
+describe('planUserCrudFlow — C1-V18 negative gate (a Browse fetch-success arm is not an overlay-form open)', () => {
+  function channelRailSchema(): OrbitalSchema {
+    return {
+      name: 'channel-rail-fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'ChannelOrbital',
+          entity: {
+            name: 'ChannelMember',
+            persistence: 'persistent',
+            fields: [{ name: 'id', type: 'string', required: true }, { name: 'unread', type: 'boolean' }],
+          },
+          pages: [],
+          traits: [
+            {
+              name: 'ChannelRail',
+              scope: 'collection',
+              linkedEntity: 'ChannelMember',
+              stateMachine: {
+                states: [{ name: 'loading', isInitial: true }, { name: 'browsing' }],
+                events: [
+                  { key: 'INIT', name: 'Init' },
+                  { key: 'BrowseItemLoaded', name: 'Loaded' },
+                  { key: 'UNREAD_CLEARED', name: 'Unread cleared' },
+                ],
+                transitions: [
+                  { from: 'loading', to: 'loading', event: 'INIT' },
+                  {
+                    from: 'loading',
+                    to: 'browsing',
+                    event: 'BrowseItemLoaded',
+                    effects: [['render-ui', 'main', { type: 'entity-table', columns: ['name'] }]],
+                  },
+                  { from: 'browsing', to: 'browsing', event: 'UNREAD_CLEARED' },
+                ],
+              },
+            },
+            {
+              name: 'ChannelMemberPersistor',
+              scope: 'instance',
+              linkedEntity: 'ChannelMember',
+              listens: [
+                { event: 'UNREAD_CLEARED', triggers: 'DO_UPDATE', source: { kind: 'trait', trait: 'ChannelRail' } },
+              ],
+              stateMachine: {
+                states: [{ name: 'idle', isInitial: true }],
+                events: [{ key: 'INIT', name: 'Init' }, { key: 'DO_UPDATE', name: 'Do update' }],
+                transitions: [
+                  {
+                    from: 'idle',
+                    to: 'idle',
+                    event: 'DO_UPDATE',
+                    effects: [['persist', 'update', 'ChannelMember', { data: '@payload.data' }, { emit: { success: 'MEMBER_UPDATED' } }]],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('produces zero crud steps for ChannelMember — the fetch-success arm never opens an overlay', () => {
+    const steps = planUserCrudFlow(channelRailSchema());
+    expect(steps.filter((s) => s.expectedRowDelta?.entityName === 'ChannelMember')).toEqual([]);
+  });
+
+  it('a std-modal-shaped fixture (stdListShape) is still planned — the gate does not over-exclude', () => {
+    const steps = planUserCrudFlow(stdListShape);
+    expect(steps.map((s) => s.testKind).sort()).toEqual(['crud-create', 'crud-delete', 'crud-edit']);
   });
 });

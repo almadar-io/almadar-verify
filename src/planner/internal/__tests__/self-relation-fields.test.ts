@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
-import { pickBindableRow, pickTargetRow, selfRelationFieldNames } from '../self-relation-fields.js';
+import { crossEntityRestrictRelations, pickTargetRow, selfRelationFieldNames } from '../self-relation-fields.js';
 
 /** Mirrors `std-notes.lolo`'s `Note.parentId : Note` self-relation and the
  *  record-detail generic's rewritten `Employee.seedRow : Employee` shape
@@ -78,76 +78,72 @@ describe('selfRelationFieldNames', () => {
   });
 });
 
-describe('pickBindableRow', () => {
-  it('returns the first row unchanged when avoidReferencedVia is undefined/empty (existing default)', () => {
-    const rows = [{ id: 'a' }, { id: 'b' }];
-    expect(pickBindableRow(rows, undefined)).toBe(rows[0]);
-    expect(pickBindableRow(rows, [])).toBe(rows[0]);
+/**
+ * C1-V17 — mirrors std-realtime-chat's real shape: `Channel` has NO
+ * self-relation at all, but `ChannelMember.channel` AND `ChatMessage.channel`
+ * both restrict-relate to it. `selfRelationFieldNames` alone (the pre-fix
+ * scan) reports empty for `Channel` — the planner had no way to know a
+ * `Channel` delete could ever be blocked, let alone by which entities.
+ */
+function channelSchema(): OrbitalSchema {
+  return {
+    name: 'cross-entity-restrict-fixture',
+    designTokens: {},
+    customPatterns: {},
+    orbitals: [
+      {
+        name: 'ChannelOrbital',
+        entity: { name: 'Channel', persistence: 'persistent', fields: [{ name: 'id', type: 'string', required: true }] },
+        auxiliaryEntities: [
+          {
+            name: 'ChannelMember',
+            persistence: 'persistent',
+            fields: [
+              { name: 'id', type: 'string', required: true },
+              { name: 'channel', type: 'relation', relation: { entity: 'Channel', cardinality: 'one' } },
+            ],
+          },
+          {
+            name: 'ChatMessage',
+            persistence: 'persistent',
+            fields: [
+              { name: 'id', type: 'string', required: true },
+              { name: 'channel', type: 'relation', relation: { entity: 'Channel', cardinality: 'one' } },
+            ],
+          },
+        ],
+        pages: [],
+        traits: [],
+      },
+    ],
+  };
+}
+
+describe('crossEntityRestrictRelations (C1-V17)', () => {
+  it('finds every OTHER entity whose relation field restrict-targets the entity, self excluded', () => {
+    const rels = crossEntityRestrictRelations(channelSchema(), 'Channel');
+    expect(rels).toEqual(
+      expect.arrayContaining([
+        { entityName: 'ChannelMember', fieldName: 'channel' },
+        { entityName: 'ChatMessage', fieldName: 'channel' },
+      ]),
+    );
+    expect(rels).toHaveLength(2);
   });
 
-  it('skips a row referenced by another row\'s self-relation field — the mock seeder\'s tree shape (row 0 is a root with children)', () => {
-    const rows = [
-      { id: 'root', parentId: '' },
-      { id: 'child-1', parentId: 'root' },
-      { id: 'child-2', parentId: 'root' },
-    ];
-    expect(pickBindableRow(rows, ['parentId'])?.id).toBe('child-1');
+  it('empty when no relation field anywhere in the schema targets the entity', () => {
+    expect(crossEntityRestrictRelations(channelSchema(), 'ChannelMember')).toEqual([]);
   });
 
-  it('falls back to the first row when every row is referenced (last resort, no worse than before)', () => {
-    // A cycle — pathological, but the fallback must still return something.
-    const rows = [
-      { id: 'a', parentId: 'b' },
-      { id: 'b', parentId: 'a' },
-    ];
-    expect(pickBindableRow(rows, ['parentId'])?.id).toBe('a');
-  });
-
-  it('undefined for an empty row set', () => {
-    expect(pickBindableRow([], ['parentId'])).toBeUndefined();
-  });
-
-  it('C1-V10 item 2: finds the genuine leaf in a 3-generation chain (grandchild → child → root), regardless of array order', () => {
-    // The mid-tree row ('child') has a child of its OWN ('grandchild') —
-    // a row that has zero DIRECT children but SOME ancestor with children
-    // is still a false positive if the reader only looks one hop up; the
-    // correct answer is the row with no reference to it at ANY distance,
-    // which for a tree reduces to "no direct children" at every level.
-    const rows = [
-      { id: 'grandchild', parentId: 'child' },
-      { id: 'child', parentId: 'root' },
-      { id: 'root', parentId: '' },
-    ];
-    expect(pickBindableRow(rows, ['parentId'])?.id).toBe('grandchild');
-  });
-
-  it('C1-V10 item 2: avoids a row referenced via an ARRAY-valued self-relation (many-cardinality), not just a scalar field', () => {
-    // `relatedIds : [Note]` — a many-cardinality self-relation stores an
-    // array of ids, mirroring `OrbitalServerRuntime.enforceOnDeleteRules`'s
-    // own `Array.isArray(fkValue) ? fkValue.includes(id) : ...` reader. A
-    // scalar-only reader would silently miss this and offer 'root' as
-    // "safe" even though 'child' still restrict-blocks it.
-    const rows = [
-      { id: 'root', relatedIds: [] },
-      { id: 'child', relatedIds: ['root'] },
-    ];
-    expect(pickBindableRow(rows, ['relatedIds'])?.id).toBe('child');
-  });
-
-  it('C1-V10 item 2: unions a scalar field and an array-valued field together', () => {
-    const rows = [
-      { id: 'root', parentId: '', relatedIds: [] },
-      { id: 'child', parentId: 'root', relatedIds: [] },
-      { id: 'leaf', parentId: 'child', relatedIds: [] },
-    ];
-    // 'root' is referenced via parentId (child.parentId), 'child' is
-    // referenced via parentId (leaf.parentId) — only 'leaf' is unreferenced.
-    expect(pickBindableRow(rows, ['parentId', 'relatedIds'])?.id).toBe('leaf');
+  it('never confuses a self-relation for a cross-entity one', () => {
+    // Note.parentId : Note is a SELF relation — selfRelationFieldNames'
+    // job, not crossEntityRestrictRelations'.
+    expect(crossEntityRestrictRelations(noteSchema(), 'Note')).toEqual([]);
   });
 });
 
 describe('pickTargetRow (C1-V12: server-truth vs browser-visible subset)', () => {
-  it('serverRows === visibleRows reproduces pickBindableRow exactly (no driver.listEntityRows)', () => {
+  it('serverRows === visibleRows: picks the first row unreferenced by self-relation', () => {
     const rows = [
       { id: 'root', parentId: '' },
       { id: 'child-1', parentId: 'root' },
@@ -155,6 +151,31 @@ describe('pickTargetRow (C1-V12: server-truth vs browser-visible subset)', () =>
     ];
     expect(pickTargetRow(rows, rows, ['parentId'])).toEqual({ row: rows[1] });
     expect(pickTargetRow(rows, rows, undefined)).toEqual({ row: rows[0] });
+  });
+
+  it('falls back to the first row when every row is self-referenced (last resort, no worse than before)', () => {
+    const rows = [
+      { id: 'a', parentId: 'b' },
+      { id: 'b', parentId: 'a' },
+    ];
+    expect(pickTargetRow(rows, rows, ['parentId'])).toEqual({ row: rows[0] });
+  });
+
+  it('C1-V10 item 2: finds the genuine leaf in a 3-generation chain (grandchild → child → root), regardless of array order', () => {
+    const rows = [
+      { id: 'grandchild', parentId: 'child' },
+      { id: 'child', parentId: 'root' },
+      { id: 'root', parentId: '' },
+    ];
+    expect(pickTargetRow(rows, rows, ['parentId'])).toEqual({ row: rows[0] });
+  });
+
+  it('C1-V10 item 2: avoids a row referenced via an ARRAY-valued self-relation (many-cardinality), not just a scalar field', () => {
+    const rows = [
+      { id: 'root', relatedIds: [] },
+      { id: 'child', relatedIds: ['root'] },
+    ];
+    expect(pickTargetRow(rows, rows, ['relatedIds'])).toEqual({ row: rows[1] });
   });
 
   it('avoids a row a HIDDEN sibling references, even though that sibling never appeared in the visible/browser snapshot', () => {
@@ -179,7 +200,7 @@ describe('pickTargetRow (C1-V12: server-truth vs browser-visible subset)', () =>
     expect(result).toEqual({ row: child2 });
   });
 
-  it('requireVisible: true fails closed with a reason when the intersection is empty (every visible row is referenced server-side)', () => {
+  it('requireVisible: true fails closed with a reason+code when the intersection is empty (every visible row is referenced server-side)', () => {
     const root = { id: 'root', parentId: '' };
     const child1 = { id: 'child-1', parentId: 'root' };
     const hiddenChild = { id: 'hidden-child', parentId: 'child-1' };
@@ -191,14 +212,16 @@ describe('pickTargetRow (C1-V12: server-truth vs browser-visible subset)', () =>
       requireVisible: true,
     });
     expect(result).toEqual({
+      code: 'all-referenced',
       reason: expect.stringContaining('every candidate row is referenced'),
     });
   });
 
-  it('requireVisible: true fails closed with a reason when NO rows of the entity are visible at all', () => {
+  it('requireVisible: true fails closed with a no-rows code when NO rows of the entity are visible at all', () => {
     const serverRows = [{ id: 'a' }, { id: 'b' }];
     const result = pickTargetRow(serverRows, [], undefined, { requireVisible: true });
     expect(result).toEqual({
+      code: 'no-rows',
       reason: expect.stringContaining('no row is rendered on the current page'),
     });
   });
@@ -210,5 +233,48 @@ describe('pickTargetRow (C1-V12: server-truth vs browser-visible subset)', () =>
     const serverRows = [{ id: 'note-1' }];
     const result = pickTargetRow(serverRows, [], undefined);
     expect(result).toEqual({ row: serverRows[0] });
+  });
+
+  describe('crossEntity (C1-V17: a restrict relation on a DIFFERENT entity)', () => {
+    it('finds the row NOT referenced by any other entity\'s restrict relation, with no self-relation involved at all', () => {
+      const c1 = { id: 'c1' };
+      const c2 = { id: 'c2' };
+      const channels = [c1, c2];
+      const channelMembers = [{ id: 'm1', channel: 'c1' }];
+
+      const result = pickTargetRow(channels, channels, undefined, {
+        requireUnreferenced: true,
+        crossEntity: [{ field: 'channel', rows: channelMembers }],
+      });
+      expect(result).toEqual({ row: c2 });
+    });
+
+    it('never falls back to row 0 as "safe" when it is referenced by another entity — the pre-fix blind spot', () => {
+      // std-realtime-chat shape: Channel has no self-relation, but BOTH
+      // ChannelMember.channel and ChatMessage.channel restrict-reference
+      // it. Row 0 ('c1') IS referenced (by a ChannelMember row) — the old
+      // self-relation-only check would never have known that and would
+      // have handed back row 0 as if it were safe.
+      const c1 = { id: 'c1' };
+      const c2 = { id: 'c2' };
+      const channels = [c1, c2];
+      const channelMembers = [{ id: 'm1', channel: 'c1' }];
+      const chatMessages = [{ id: 'msg1', channel: 'c2' }];
+
+      const result = pickTargetRow(channels, channels, undefined, {
+        requireUnreferenced: true,
+        crossEntity: [
+          { field: 'channel', rows: channelMembers },
+          { field: 'channel', rows: chatMessages },
+        ],
+      });
+      // Both c1 and c2 are referenced (by a different entity each) —
+      // every candidate is blocked, so this must fail closed with
+      // 'all-referenced', never silently return c1 (or any row).
+      expect(result).toEqual({
+        code: 'all-referenced',
+        reason: expect.stringContaining('every candidate row is referenced'),
+      });
+    });
   });
 });

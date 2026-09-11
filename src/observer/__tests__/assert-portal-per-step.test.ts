@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { VerificationSnapshot } from '@almadar/core';
-import { assertPortalPerStep } from '../assert-portal-per-step.js';
+import type { TransitionTrace } from '@almadar/core';
+import { assertPortalPerStep, assertTransientFailureArmPortals, assertSlotShowsForeignTransitionRender } from '../assert-portal-per-step.js';
 import type { PortalExpectation } from '../types.js';
 import type { DomSnapshot, Frame, FrameCause } from '../../frame/types.js';
 import type { PortalSlot } from '../../browser/portal-slots.js';
@@ -13,7 +14,7 @@ const emptySnapshot: VerificationSnapshot = {
   traits: [],
 };
 
-function dom(portals: ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>): DomSnapshot {
+function dom(portals: ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number; pattern?: string }>): DomSnapshot {
   return { url: '', rowsByEntity: {}, portals, visibleTextSample: '' };
 }
 
@@ -22,7 +23,11 @@ const cause = (
   from: string,
   event: string,
   to: string,
-  opts: { isRepositioning?: boolean; guardCase?: 'pass' | 'fail' | null } = {},
+  opts: {
+    isRepositioning?: boolean;
+    guardCase?: 'pass' | 'fail' | null;
+    verifiesPortalFor?: { traitName: string; from: string; event: string; to: string };
+  } = {},
 ): FrameCause => ({
   traitName: trait,
   from,
@@ -31,13 +36,19 @@ const cause = (
   guardCase: opts.guardCase ?? null,
   triggerKind: 'bus',
   isRepositioning: opts.isRepositioning ?? false,
+  ...(opts.verifiesPortalFor !== undefined && { verifiesPortalFor: opts.verifiesPortalFor }),
 });
+
+function transitionTrace(traitName: string, from: string, event: string, to: string): TransitionTrace {
+  return { id: `${traitName}-${event}`, traitName, from, to, event, effects: [], timestamp: Date.now() };
+}
 
 function frame(
   index: number,
   c: FrameCause,
   domSnapshot: DomSnapshot,
   accepted = true,
+  transitions: ReadonlyArray<TransitionTrace> = [],
 ): Frame {
   return {
     index,
@@ -47,7 +58,7 @@ function frame(
     stateAfter: c.to,
     payload: {},
     eventFired: c.event,
-    runtimeSnapshot: emptySnapshot,
+    runtimeSnapshot: transitions.length > 0 ? { ...emptySnapshot, transitions: [...transitions] } : emptySnapshot,
     domSnapshot,
     consoleDelta: { added: [], newErrors: 0, newWarnings: 0 },
     eventLogDelta: { added: [] },
@@ -150,5 +161,119 @@ describe('assertPortalPerStep', () => {
     const verdicts = assertPortalPerStep(frames, expectations);
     expect(verdicts).toHaveLength(1);
     expect(verdicts[0].passed).toBe(true);
+  });
+});
+
+describe('assertTransientFailureArmPortals (RV item 27)', () => {
+  const expectation: PortalExpectation = {
+    traitName: 'DirectMessageStarter', from: 'creating', event: 'DmChannelCreateFailed', to: 'idle',
+    slot: 'toast', pattern: 'alert',
+  };
+
+  it('returns [] when expectations is empty', () => {
+    expect(assertTransientFailureArmPortals([], [])).toEqual([]);
+  });
+
+  it('ignores frames with no verifiesPortalFor — never matches a plain dispatch by coincidence', () => {
+    const frames: Frame[] = [
+      frame(0, cause('DirectMessageStarter', 'idle', 'START_DM', 'creating'), dom([])),
+    ];
+    expect(assertTransientFailureArmPortals(frames, [expectation])).toEqual([]);
+  });
+
+  it('passes when the probed frame carries the matching arm in runtimeSnapshot.transitions and the portal is mounted', () => {
+    const frames: Frame[] = [
+      frame(
+        0,
+        cause('DirectMessageStarter', 'idle', 'START_DM', 'creating', {
+          verifiesPortalFor: { traitName: 'DirectMessageStarter', from: 'creating', event: 'DmChannelCreateFailed', to: 'idle' },
+        }),
+        dom([{ slot: 'toast', mounted: true, childCount: 1 }]),
+        true,
+        [transitionTrace('DirectMessageStarter', 'creating', 'DmChannelCreateFailed', 'idle')],
+      ),
+    ];
+    const verdicts = assertTransientFailureArmPortals(frames, [expectation]);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].passed).toBe(true);
+  });
+
+  it('fails honestly — never "slot not mounted" — when the forced dispatch never actually reproduced the arm', () => {
+    const frames: Frame[] = [
+      frame(
+        0,
+        cause('DirectMessageStarter', 'idle', 'START_DM', 'creating', {
+          verifiesPortalFor: { traitName: 'DirectMessageStarter', from: 'creating', event: 'DmChannelCreateFailed', to: 'idle' },
+        }),
+        dom([]),
+        true,
+        [], // the denying viewer did not actually deny — no matching trace
+      ),
+    ];
+    const verdicts = assertTransientFailureArmPortals(frames, [expectation]);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].passed).toBe(false);
+    expect(verdicts[0].detail).toMatch(/did not reproduce the failure/);
+    expect(verdicts[0].detail).not.toMatch(/slot not mounted/);
+  });
+
+  it('fails when the arm fired but the portal never mounted', () => {
+    const frames: Frame[] = [
+      frame(
+        0,
+        cause('DirectMessageStarter', 'idle', 'START_DM', 'creating', {
+          verifiesPortalFor: { traitName: 'DirectMessageStarter', from: 'creating', event: 'DmChannelCreateFailed', to: 'idle' },
+        }),
+        dom([]),
+        true,
+        [transitionTrace('DirectMessageStarter', 'creating', 'DmChannelCreateFailed', 'idle')],
+      ),
+    ];
+    const verdicts = assertTransientFailureArmPortals(frames, [expectation]);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].passed).toBe(false);
+    expect(verdicts[0].detail).toMatch(/slot not mounted/);
+  });
+});
+
+describe('assertSlotShowsForeignTransitionRender', () => {
+  const expectations: PortalExpectation[] = [
+    { traitName: 'X', from: 'a', event: 'OPEN_A', to: 'b', slot: 'modal', pattern: 'confirm-dialog' },
+    { traitName: 'X', from: 'c', event: 'OPEN_B', to: 'd', slot: 'modal', pattern: 'modal' },
+  ];
+
+  it('returns [] when expectations is empty', () => {
+    expect(assertSlotShowsForeignTransitionRender([], [])).toEqual([]);
+  });
+
+  it('passes silently when the observed pattern matches the firing transition\'s own declared pattern', () => {
+    const frames: Frame[] = [
+      frame(0, cause('X', 'a', 'OPEN_A', 'b'), dom([{ slot: 'modal', mounted: true, childCount: 1, pattern: 'confirm-dialog' }])),
+    ];
+    expect(assertSlotShowsForeignTransitionRender(frames, expectations)).toEqual([]);
+  });
+
+  it('flags a foreign render — the DOM shows a DIFFERENT declared writer\'s own pattern', () => {
+    const frames: Frame[] = [
+      frame(0, cause('X', 'a', 'OPEN_A', 'b'), dom([{ slot: 'modal', mounted: true, childCount: 1, pattern: 'modal' }])),
+    ];
+    const verdicts = assertSlotShowsForeignTransitionRender(frames, expectations);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].passed).toBe(false);
+    expect(verdicts[0].detail).toMatch(/authored by X\.OPEN_B, not the last writer/);
+  });
+
+  it('stays silent when the observed pattern matches no known declared writer at all (not attributable)', () => {
+    const frames: Frame[] = [
+      frame(0, cause('X', 'a', 'OPEN_A', 'b'), dom([{ slot: 'modal', mounted: true, childCount: 1, pattern: 'unknown-pattern' }])),
+    ];
+    expect(assertSlotShowsForeignTransitionRender(frames, expectations)).toEqual([]);
+  });
+
+  it('stays silent when the DOM carries no pattern marker at all (older driver, no data-pattern probe)', () => {
+    const frames: Frame[] = [
+      frame(0, cause('X', 'a', 'OPEN_A', 'b'), dom([{ slot: 'modal', mounted: true, childCount: 1 }])),
+    ];
+    expect(assertSlotShowsForeignTransitionRender(frames, expectations)).toEqual([]);
   });
 });

@@ -31,7 +31,7 @@ import { makeInitFrame, makeWalkFrame } from '../frame/factory.js';
 import type { Frame, FrameCause } from '../frame/types.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import type { ViewerRequirement } from '../planner/internal/viewer-requirement.js';
-import { pickTargetRow } from '../planner/internal/self-relation-fields.js';
+import { pickTargetRow, type PickTargetRowFailureCode } from '../planner/internal/self-relation-fields.js';
 import type { Driver, DriverContext } from './types.js';
 
 export async function tick<Ctx extends DriverContext>(
@@ -70,6 +70,7 @@ export async function tick<Ctx extends DriverContext>(
     isRepositioning: step.isRepositioning,
     coverageKey: step.coverageKey,
     ...(step.testKind !== undefined && { testKind: step.testKind }),
+    ...(step.verifiesPortalFor !== undefined && { verifiesPortalFor: step.verifiesPortalFor }),
     ...(step.expectedRowDelta !== undefined && { expectedRowDelta: step.expectedRowDelta }),
     ...(step.expectedPattern !== undefined && { expectedPattern: step.expectedPattern }),
     ...(step.expectedSuccessEvent !== undefined && { expectedSuccessEvent: step.expectedSuccessEvent }),
@@ -141,6 +142,17 @@ export async function tick<Ctx extends DriverContext>(
   // dispatch would switch to a viewer that doesn't own the row actually
   // being written.
   //
+  // C1-V17: resolve a planner-attached `avoidReferencedByOtherEntities`
+  // list (entity+field pairs) to LIVE rows via `serverRowsFor` — the
+  // planner only knows the schema shape at plan time, `tick()` is where the
+  // actual referencing rows exist.
+  const resolveCrossEntity = async (
+    refs: ReadonlyArray<{ entityName: string; fieldName: string }> | undefined,
+  ): Promise<ReadonlyArray<{ field: string; rows: ReadonlyArray<EntityRow> }> | undefined> => {
+    if (refs === undefined || refs.length === 0) return undefined;
+    return Promise.all(refs.map(async (ref) => ({ field: ref.fieldName, rows: await serverRowsFor(ref.entityName) })));
+  };
+
   // C1-V12 item 3: this dispatch is bus-driven (a preamble's payload
   // carries the row directly — nothing needs to be clicked), so the pick
   // draws from the SERVER-truth set with no visibility requirement: a
@@ -151,6 +163,7 @@ export async function tick<Ctx extends DriverContext>(
         await serverRowsFor(step.bindRowFrom.entityName),
         entitiesBefore[step.bindRowFrom.entityName] ?? [],
         step.bindRowFrom.avoidReferencedVia,
+        { crossEntity: await resolveCrossEntity(step.bindRowFrom.avoidReferencedByOtherEntities) },
       )
     : undefined;
   const boundRow = bindRowResult !== undefined && 'row' in bindRowResult ? bindRowResult.row : undefined;
@@ -183,7 +196,14 @@ export async function tick<Ctx extends DriverContext>(
   let crudTargetRow: EntityRow | undefined;
   if (crudEntityName !== undefined && unreachableRow === undefined) {
     const avoidReferencedVia = step.avoidReferencedVia;
-    const requireUnreferenced = avoidReferencedVia !== undefined && avoidReferencedVia.length > 0;
+    // C1-V17: cross-entity restrict relations (`ChannelMember.channel :
+    // Channel`) resolved to live rows once, reused for both the initial
+    // pick and the post-fallback retry below — the referencing entities'
+    // OWN rows are unaffected by creating a new row of `crudEntityName`.
+    const crossEntity = await resolveCrossEntity(step.avoidReferencedByOtherEntities);
+    const requireUnreferenced =
+      (avoidReferencedVia !== undefined && avoidReferencedVia.length > 0) ||
+      (crossEntity !== undefined && crossEntity.length > 0);
     // C1-V15 item B: a DOM-driven crud-edit/crud-delete step must target a
     // row whose affordance is actually ENABLED — a row for which the
     // affordance's own `disabled` expression evaluates `true` is a
@@ -198,6 +218,7 @@ export async function tick<Ctx extends DriverContext>(
       {
         requireUnreferenced,
         requireVisible: true,
+        crossEntity,
         ...(affordanceFilter !== undefined && {
           isEnabled: affordanceFilter.isEnabled,
           disabledReason: affordanceFilter.disabledReason,
@@ -241,6 +262,7 @@ export async function tick<Ctx extends DriverContext>(
           {
             requireUnreferenced,
             requireVisible: true,
+            crossEntity,
             ...(affordanceFilter !== undefined && {
               isEnabled: affordanceFilter.isEnabled,
               disabledReason: affordanceFilter.disabledReason,
@@ -249,14 +271,14 @@ export async function tick<Ctx extends DriverContext>(
         );
         if ('reason' in retryResult) {
           unreachableRow =
-            `no-target-row: '${crudEntityName}' has no row available for trait '${step.traitName}' — ${retryResult.reason} ` +
+            `${findingPrefixFor(retryResult.code)}: '${crudEntityName}' has no row available for trait '${step.traitName}' — ${retryResult.reason} ` +
             `(after dispatching the declared create flow '${fallback.event}' as a fallback)`;
         } else {
           crudTargetRow = retryResult.row;
         }
       } else {
         unreachableRow =
-          `no-target-row: '${crudEntityName}' has no row available for trait '${step.traitName}' — ${crudRowResult.reason}`;
+          `${findingPrefixFor(crudRowResult.code)}: '${crudEntityName}' has no row available for trait '${step.traitName}' — ${crudRowResult.reason}`;
       }
     } else {
       crudTargetRow = crudRowResult.row;
@@ -524,6 +546,19 @@ export async function tick<Ctx extends DriverContext>(
  */
 function asEventPayload(payload: Record<string, unknown>): EventPayload {
   return payload as EventPayload;
+}
+
+/**
+ * C1-V17: the crud row-resolution finding's message prefix — `no-target-
+ * row` for the pre-existing "nothing to pick from at all" cases (`no-rows`,
+ * `all-disabled`), `no-deletable-row` for `all-referenced`: EVERY candidate
+ * exists and IS a legitimate row, but the runtime's own `onDelete: restrict`
+ * rule would reject deleting any of them — a materially different finding
+ * from "no row exists"/"every affordance is disabled", so it gets its own
+ * name rather than sharing `no-target-row`'s.
+ */
+function findingPrefixFor(code: PickTargetRowFailureCode): string {
+  return code === 'all-referenced' ? 'no-deletable-row' : 'no-target-row';
 }
 
 /**

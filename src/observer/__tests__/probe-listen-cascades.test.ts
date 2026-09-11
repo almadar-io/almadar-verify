@@ -363,6 +363,140 @@ describe('probeListenCascades — role-only persist policy (B4-V5)', () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.check).toBe('listen-source-cannot-emit');
   });
+
+  it('C1-V19 (item 5a): reports "denied by access policy", never the old blind "guard rejected" text — this fixture\'s transition declares NO guard at all', async () => {
+    const schema = roleOnlyPersistCreateApp(['=', '@user.role', 'owner']);
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain('denied by access policy');
+    expect(result.findings[0]?.message).not.toContain('guard rejected');
+  });
+});
+
+/**
+ * C1-V19 (item 5b) — `Channel` has NO self-relation, but `ChannelMember.
+ * channel` restrict-relates to it (mirrors std-realtime-chat's real shape,
+ * C1-V17's fixture). The probe shares ONE persistence store across every
+ * probed listen, so by the time this delete-triggering listen runs the
+ * store may already hold a row referencing the entity's "default" seeded
+ * id. Before this fix `probeListenCascades` always targeted a fixed
+ * synthetic id (`effectiveSeedId`), so a genuinely-avoidable restrict block
+ * misreported as `listen-source-cannot-emit` with the misleading old
+ * hardcoded guard message. This fixture pre-seeds exactly that shape: two
+ * `Channel` rows, one of them (the one carrying the SAME id
+ * `effectiveSeedId` would have picked) referenced by a `ChannelMember` row.
+ */
+function channelDeleteCascadeApp(): OrbitalSchema {
+  return {
+    name: 'ChannelDeleteApp',
+    orbitals: [
+      {
+        name: 'ChannelOrbital',
+        entity: { name: 'Channel', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+        traits: [
+          {
+            name: 'Persistor',
+            scope: 'instance',
+            linkedEntity: 'Channel',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [
+                { key: 'DO_DELETE', name: 'Do Delete', payloadSchema: [{ name: 'id', type: 'string', required: true }] },
+              ],
+              transitions: [
+                {
+                  from: 'idle',
+                  to: 'idle',
+                  event: 'DO_DELETE',
+                  effects: [['persist', 'delete', 'Channel', '@payload.id', { emit: { success: 'CHANNEL_DELETED' } }]],
+                },
+              ],
+            },
+            emits: [{ event: 'CHANNEL_DELETED', scope: 'external' }],
+          },
+          {
+            name: 'Listener',
+            scope: 'instance',
+            linkedEntity: 'Channel',
+            stateMachine: {
+              states: [{ name: 'active', isInitial: true }],
+              events: [{ key: 'RECEIVED', name: 'Received' }],
+              transitions: [{ from: 'active', to: 'active', event: 'RECEIVED', effects: [['emit', 'DONE', {}]] }],
+            },
+            emits: [{ event: 'DONE', scope: 'external' }],
+            listens: [
+              { event: 'CHANNEL_DELETED', triggers: 'RECEIVED', scope: 'external', source: { kind: 'trait', trait: 'Persistor' } },
+            ],
+          },
+        ],
+        pages: [],
+      },
+      // `OrbitalServerRuntime.enforceOnDeleteRules` scans each REGISTERED
+      // orbital's own PRIMARY entity for a relation field targeting the
+      // entity being deleted — an `auxiliaryEntities` member is invisible
+      // to that scan, so `ChannelMember` must be its own orbital's primary
+      // entity for the restrict rule to actually enforce here.
+      {
+        name: 'ChannelMemberOrbital',
+        entity: {
+          name: 'ChannelMember',
+          persistence: 'runtime',
+          fields: [
+            { name: 'id', type: 'string' },
+            { name: 'channel', type: 'relation', relation: { entity: 'Channel', cardinality: 'one' } },
+          ],
+        },
+        traits: [],
+        pages: [],
+      },
+    ],
+  };
+}
+
+describe('probeListenCascades — persist delete picks an unreferenced row across entities (C1-V19 item 5b)', () => {
+  it('avoids the row a ChannelMember references and reports 0 findings, never a false restrict denial', async () => {
+    const schema = channelDeleteCascadeApp();
+    const persistence = new InMemoryPersistence();
+    // The id `effectiveSeedId`/the old fixed-seed behavior would have
+    // targeted — pre-referenced, so a delete against it is genuinely
+    // restrict-blocked. A second, unreferenced row is the only safe pick.
+    persistence.seed({
+      Channel: [{ id: 'Channel-verify-seed-1' }, { id: 'channel-free' }],
+      ChannelMember: [{ id: 'member-1', channel: 'Channel-verify-seed-1' }],
+    });
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.probed).toBe(1);
+    expect(result.findings).toEqual([]);
+    // The blocked row must still exist — the picker avoided it, not deleted
+    // around the restrict rule some other way.
+    expect(await persistence.getById('Channel', 'Channel-verify-seed-1')).not.toBeNull();
+    expect(await persistence.getById('Channel', 'channel-free')).toBeNull();
+  });
+
+  it('when every row is referenced, reports the honest restrict-rule failure, never the old blind "guard rejected" text', async () => {
+    const schema = channelDeleteCascadeApp();
+    const persistence = new InMemoryPersistence();
+    // Only ONE Channel row exists, and it IS referenced — genuinely no
+    // deletable row this run, and this transition declares no guard.
+    persistence.seed({
+      Channel: [{ id: 'Channel-verify-seed-1' }],
+      ChannelMember: [{ id: 'member-1', channel: 'Channel-verify-seed-1' }],
+    });
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain('restrict');
+    expect(result.findings[0]?.message).not.toContain('guard rejected');
+  });
 });
 
 describe('probeListenCascades — synthetic fixtures', () => {

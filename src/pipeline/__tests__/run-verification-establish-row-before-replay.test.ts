@@ -98,6 +98,153 @@ const baseOptions = {
   log: () => {},
 };
 
+/**
+ * C1-V16 — pipeline end-to-end: a guard-precondition preamble
+ * (`guard-precondition.ts`'s `establishAtState`) whose selected setter arm
+ * only exists PAST the establishing trait's own initial state. Mirrors
+ * std-thread's real shape: `ChannelThread` boots at `loading`; `browsing`
+ * is reached via a real dispatchable hop (`LOAD`); `EDIT_REPLY` (the
+ * setter `SUBMIT_REPLY`'s guard needs) is a self-loop declared ONLY at
+ * `browsing`, with no arm at `loading`. Before this fix the preamble fired
+ * at the trait's raw initial state (`loading`), where `EDIT_REPLY` has no
+ * arm — a silent no-op that left `replyDraft` empty and the guard failing
+ * every time.
+ */
+describe('runVerification — guard-precondition preamble replays to a non-initial establishAtState (C1-V16)', () => {
+  it('replays loading->browsing before dispatching EDIT_REPLY, then SUBMIT_REPLY succeeds', async () => {
+    const thread: Trait = {
+      name: 'ChannelThread',
+      scope: 'instance',
+      linkedEntity: 'ChatMessage',
+      stateMachine: {
+        states: [{ name: 'loading', isInitial: true }, { name: 'browsing' }],
+        events: [
+          { key: 'INIT', name: 'Init' },
+          { key: 'LOAD', name: 'Load' },
+          { key: 'EDIT_REPLY', name: 'Edit Reply', payloadSchema: [{ name: 'value', type: 'string', required: true }] },
+          { key: 'SUBMIT_REPLY', name: 'Submit Reply', payloadSchema: [{ name: 'data', type: 'string' }] },
+        ],
+        transitions: [
+          { from: 'loading', to: 'loading', event: 'INIT' },
+          { from: 'loading', to: 'browsing', event: 'LOAD' },
+          {
+            from: 'browsing',
+            to: 'browsing',
+            event: 'EDIT_REPLY',
+            effects: [['set', '@entity.replyDraft', '@payload.value']],
+          },
+          {
+            from: 'browsing',
+            to: 'browsing',
+            event: 'SUBMIT_REPLY',
+            guard: '@entity.replyDraft',
+            effects: [
+              ['persist', 'update', 'ChatMessage', '@payload.data', { emit: { success: 'SubmitReplyDone' } }],
+            ],
+          },
+        ],
+      },
+    };
+
+    const orbital: OrbitalSchema = {
+      name: 'thread-establish-at-state-fixture',
+      designTokens: {},
+      customPatterns: {},
+      orbitals: [
+        {
+          name: 'ChannelOrbital',
+          entity: {
+            name: 'ChatMessage',
+            persistence: 'persistent',
+            fields: [
+              { name: 'id', type: 'string', required: true },
+              { name: 'replyDraft', type: 'string' },
+            ],
+          },
+          pages: [{ name: 'ThreadPage', path: '/thread', traits: [{ ref: thread.name }] }],
+          traits: [thread],
+        },
+      ],
+    };
+
+    const { extractTraitWalkConfigs } = await import('../../planner/extract-trait-walk-configs.js');
+    const traits = extractTraitWalkConfigs(orbital);
+
+    let replyDraft = '';
+
+    const { driver, runtime } = createFakeDriver(traits, {
+      evaluateGuard: () => replyDraft !== '',
+      executeEffects: (effects, { payload }) => {
+        const traces: EffectTrace[] = [];
+        for (const effect of effects) {
+          if (!Array.isArray(effect)) continue;
+          const head = effect[0];
+          if (head === 'set' && effect[1] === '@entity.replyDraft') {
+            const ref = effect[2];
+            replyDraft = typeof ref === 'string' && ref.startsWith('@payload.')
+              ? String(payload[ref.slice('@payload.'.length)] ?? '')
+              : '';
+            traces.push({ type: 'set', args: [], status: 'executed' });
+            continue;
+          }
+          if (head === 'persist' && effect[1] === 'update') {
+            traces.push({
+              type: 'persist',
+              entityName: 'ChatMessage',
+              action: 'update',
+              args: [],
+              status: 'executed',
+              outcome: 'success',
+              resultId: 'msg-1',
+            });
+          }
+        }
+        return { effects: traces, emitted: [] };
+      },
+    });
+
+    // Seed a ChatMessage row on every reset — the hermetic per-step reset
+    // clears the fake runtime's whole store, so a one-time seed before
+    // `runVerification` starts never survives to the step that needs it.
+    const originalReset = driver.reset.bind(driver);
+    driver.reset = async (ctx) => {
+      await originalReset(ctx);
+      runtime.seed('ChatMessage', [{ id: 'msg-1', replyDraft: '' }]);
+    };
+
+    const result = await runVerification({
+      itemName: 'thread-establish-at-state-fixture',
+      orbital,
+      driver,
+      ctx: { outputDir: '', runtime },
+      options: baseOptions,
+    });
+
+    const submitFrame = result.frames.find(
+      (f) => f.cause.event === 'SUBMIT_REPLY' && f.cause.testKind === 'data-mutation',
+    );
+    expect(submitFrame).toBeDefined();
+
+    const establishFrame = result.frames.find(
+      (f) => f.cause.event === 'EDIT_REPLY' && f.cause.coverageKey?.includes('[establish-row]'),
+    );
+    expect(establishFrame).toBeDefined();
+    // The fix: the preamble dispatches AT `browsing`, not the trait's raw
+    // initial state `loading` — the only state `EDIT_REPLY` has an arm at.
+    expect(establishFrame?.cause.from).toBe('browsing');
+
+    const loadReconcileFrame = result.frames.find(
+      (f) => f.cause.event === 'LOAD' && f.cause.coverageKey?.includes('[establish-reconcile]'),
+    );
+    expect(loadReconcileFrame).toBeDefined();
+    expect(result.frames.indexOf(loadReconcileFrame!)).toBeLessThan(result.frames.indexOf(establishFrame!));
+
+    const persistTrace = submitFrame!.effectResults.find((e) => e.type === 'persist' && e.action === 'update');
+    expect(persistTrace?.outcome).toBe('success');
+    expect(submitFrame!.errors ?? []).toEqual([]);
+  });
+});
+
 describe('runVerification — beforeReplay establish-row preamble (C1-V14, F4)', () => {
   it('dispatches CREATE_TASK (establish) -> START_TASK (reconcile) -> MOVE_STAGE (step) inside one reset window, with a real bound row id', async () => {
     const orbital = orbitalFor(taskLifecycleTrait);

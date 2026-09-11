@@ -358,18 +358,19 @@ export function lastServerResponseFor(
  * consecutive reads agree (bounded ~1s) so the recorded snapshot is the
  * settled DOM, not a mid-paint frame.
  */
-async function probePortals(page: Page): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>> {
+async function probePortals(page: Page): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number; pattern?: string }>> {
   try {
     const slots = PORTAL_SLOTS as ReadonlyArray<PortalSlot>;
-    const readOnce = async (): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>> => {
+    const readOnce = async (): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number; pattern?: string }>> => {
       const results = await page.evaluate((slotNames: ReadonlyArray<string>) => {
         return slotNames.map((name) => {
           const el = document.getElementById(`slot-${name}`);
           if (el === null) return { slot: name, mounted: false, childCount: 0 };
-          return { slot: name, mounted: true, childCount: el.children.length };
+          const pattern = el.children[0]?.getAttribute('data-pattern') ?? undefined;
+          return { slot: name, mounted: true, childCount: el.children.length, ...(pattern !== undefined && { pattern }) };
         });
       }, [...slots]);
-      return results as ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number }>;
+      return results as ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number; pattern?: string }>;
     };
     let prev = await readOnce();
     for (let i = 0; i < 5; i++) {

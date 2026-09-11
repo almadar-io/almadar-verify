@@ -17,6 +17,10 @@ function schemaWith(overrides: {
   createPolicy?: SExpr;
   updatePolicy?: SExpr;
   deletePolicy?: SExpr;
+  /** Identity entity's own `role` vocabulary — defaults to `['member',
+   *  'admin']`; std-realtime-chat's `ChannelMember`/`OnlineUser` shape
+   *  needs a THIRD value (`moderator`) to reproduce C1-V19 item 6. */
+  roleVocabulary?: string[];
 }): OrbitalSchema {
   return {
     name: 'viewer-requirement-fixture',
@@ -45,7 +49,7 @@ function schemaWith(overrides: {
             identity: true,
             fields: [
               { name: 'id', type: 'string', required: true },
-              { name: 'role', type: 'string', values: ['member', 'admin'] },
+              { name: 'role', type: 'string', values: overrides.roleVocabulary ?? ['member', 'admin'] },
             ],
           },
         ],
@@ -106,5 +110,18 @@ describe('deriveViewerRequirement (C1-V9 item A)', () => {
   it('declared but nothing derivable (e.g. a role literal not in the identity\'s vocabulary) returns an empty requirement, distinct from undefined', () => {
     const schema = schemaWith({ updatePolicy: ['=', '@user.role', 'superuser'] });
     expect(deriveViewerRequirement(schema, 'Note', 'update')).toEqual({});
+  });
+
+  it('C1-V19 item 6: an OR of TWO role literals (no owner comparison at all) — std-realtime-chat\'s ChannelMember shape ("(or (= @user.role moderator) (= @user.role admin))") — derives the FIRST vocabulary-order role, no owner field at all', () => {
+    // Reproduces the exact policy shape behind `MembershipRemove ->
+    // MembershipPersistor.DO_REMOVE`'s `@delete` on `ChannelMember`. Unlike
+    // `OR_POLICY` above (role OR owner), this is role OR role — must never
+    // synthesize a spurious `owner` requirement from an `(or ...)` that
+    // contains no owner comparison at all.
+    const rolePolicy: SExpr = ['or', ['=', '@user.role', 'moderator'], ['=', '@user.role', 'admin']];
+    const schema = schemaWith({ deletePolicy: rolePolicy, roleVocabulary: ['member', 'moderator', 'admin'] });
+    expect(deriveViewerRequirement(schema, 'Note', 'delete')).toEqual({
+      role: { field: 'role', value: 'moderator' },
+    });
   });
 });

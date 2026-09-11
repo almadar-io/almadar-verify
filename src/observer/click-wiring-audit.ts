@@ -34,8 +34,9 @@
  */
 
 import type { OrbitalSchema, TraitEventListener, Transition } from '@almadar/core';
-import { collectEmbeddedTraitReferrers } from '@almadar/core';
+import { collectEmbeddedTraitReferrers, isInlineTrait } from '@almadar/core';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
+import { configItemActionEvents } from './wiring-lint.js';
 
 /** For each trait, the set of events its own state machine transitions on. */
 export function buildTraitTransitions(orbital: OrbitalSchema): Map<string, Set<string>> {
@@ -195,6 +196,13 @@ export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
       const effectEmitted = collectEffectEmittedEvents(transitions);
       const selfEvents = traitTransitions.get(traitName) ?? new Set<string>();
 
+      // The trait's own resolved config-item-action events (e.g.
+      // `itemActions`/`browseItemActions` descriptor arrays) — non-empty
+      // only when this call site's pattern is actually config-item-action
+      // driven at all. Computed once per trait so the per-emit check below
+      // is a plain Set lookup.
+      const itemActionEvents = isInlineTrait(traitRef) ? configItemActionEvents(traitRef) : new Set<string>();
+
       for (const emit of emits) {
         const event = emit.event;
         if (effectEmitted.has(event)) continue;
@@ -217,6 +225,17 @@ export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
         const listenerHandled = sources !== undefined && (sources.has('*') || sources.has(traitName));
 
         const routed = selfHandled || hostHandler !== undefined || listenerHandled;
+        // A trait whose pattern IS config-item-action driven (itemActions/
+        // browseItemActions declares SOME event set) but whose resolved
+        // config at THIS call site doesn't include `event` at all: the
+        // affordance was narrowed away, so the emit can never fire —
+        // reporting it as `missing` ("add a listens line") invents a
+        // defect nothing would ever deliver even with one. Scoped to
+        // patterns that actually declare item-action config (`itemActionEvents.
+        // size > 0`) so a trait with no such config (a plain compiler-
+        // synthesized action child, credited via the host-chain walk
+        // above instead) is never affected.
+        if (!routed && itemActionEvents.size > 0 && !itemActionEvents.has(event)) continue;
         const effectful = selfEffectful || effectfulHost !== undefined || listenerHandled;
         const wired: ListensAuditEmitter['wired'] = effectful ? true : routed ? 'bodiless' : false;
         const via: ListensAuditEmitter['via'] = selfHandled

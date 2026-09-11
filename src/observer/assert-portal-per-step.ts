@@ -121,3 +121,146 @@ export function assertPortalPerStep(
 
   return verdicts;
 }
+
+/**
+ * `assertTransientFailureArmPortals` — RV item 27: the portal check for a
+ * failure-route arm whose `from` state races forward via an
+ * effect-emitted sibling. `planTransientFailureProbes` dispatches the
+ * transition that ENTERS `from` under a denying viewer instead of the
+ * arm's own (unreachable) `(from, event)`, so the frame's own `cause`
+ * never literally matches the expectation — the arm to check is carried
+ * on `frame.cause.verifiesPortalFor` instead, and whether it actually
+ * fired is read from `frame.runtimeSnapshot.transitions` (the SAME
+ * "server cascade credit" the coverage observer already uses), not from
+ * `cause`/`accepted`. No match in any frame's snapshot means the forced
+ * dispatch did not reproduce the failure — an honest fail, never a false
+ * "slot not mounted".
+ */
+export function assertTransientFailureArmPortals(
+  frames: ReadonlyArray<Frame>,
+  expectations: ReadonlyArray<PortalExpectation>,
+): Verdict[] {
+  if (expectations.length === 0) return [];
+  const verdicts: Verdict[] = [];
+
+  for (const exp of expectations) {
+    const frameIndex = frames.findIndex((f) =>
+      f.cause.verifiesPortalFor?.traitName === exp.traitName
+      && f.cause.verifiesPortalFor.from === exp.from
+      && f.cause.verifiesPortalFor.event === exp.event
+      && f.cause.verifiesPortalFor.to === exp.to,
+    );
+    if (frameIndex === -1) continue; // not a probed arm — nothing to say here
+
+    const label = `${exp.traitName} ${exp.event} (forced-failure probe)`;
+    const armFired = frames[frameIndex].runtimeSnapshot.transitions.some(
+      (t) => t.traitName === exp.traitName && t.from === exp.from && t.event === exp.event && t.to === exp.to,
+    );
+    if (!armFired) {
+      verdicts.push({
+        passed: false,
+        detail: `portal: ${label} — the denying viewer did not reproduce the failure; '${exp.from}+${exp.event}->${exp.to}' never fired`,
+        evidence: { frameIndices: [frameIndex] },
+      });
+      continue;
+    }
+
+    const portal = frames[frameIndex].domSnapshot.portals.find((p) => p.slot === exp.slot);
+    if (exp.pattern === null) {
+      const isEmpty = portal === undefined || !portal.mounted || portal.childCount === 0;
+      verdicts.push({
+        passed: isEmpty,
+        detail: isEmpty
+          ? `portal: ${label} cleared slot "${exp.slot}" as expected`
+          : `portal: ${label} expected slot "${exp.slot}" to be empty, found mounted with ${portal.childCount} child(ren)`,
+        evidence: { frameIndices: [frameIndex] },
+      });
+      continue;
+    }
+    if (portal === undefined || !portal.mounted) {
+      verdicts.push({
+        passed: false,
+        detail: `portal: ${label} expected pattern "${exp.pattern}" in slot "${exp.slot}", slot not mounted`,
+        evidence: { frameIndices: [frameIndex] },
+      });
+      continue;
+    }
+    if (portal.childCount === 0) {
+      verdicts.push({
+        passed: false,
+        detail: `portal: ${label} expected pattern "${exp.pattern}" in slot "${exp.slot}", slot mounted but empty (blank-portal bug)`,
+        evidence: { frameIndices: [frameIndex] },
+      });
+      continue;
+    }
+    verdicts.push({
+      passed: true,
+      detail: `portal: ${label} mounted "${exp.pattern}" in slot "${exp.slot}" with ${portal.childCount} child(ren)`,
+      evidence: { frameIndices: [frameIndex] },
+    });
+  }
+
+  return verdicts;
+}
+
+/**
+ * `assertSlotShowsForeignTransitionRender` — the runtime twin of compiler
+ * §98's last-writer-per-slot contract. `assertPortalPerStep` only checks
+ * "is SOMETHING mounted" (`childCount > 0`); this checks WHICH pattern is
+ * mounted, using the DOM's own deterministic `data-pattern` marker
+ * (`domSnapshot.portals[*].pattern`, `UISlotRenderer`'s own stamp — no
+ * text/label heuristics). Walking frames in dispatch order, tracks each
+ * slot's expected content from its last matching `PortalExpectation`; a
+ * later frame whose observed pattern equals a DIFFERENT declared writer's
+ * own pattern (not the current expected one) means that OTHER
+ * transition's render is still showing — a stale/foreign render, not a
+ * blank one. An unrecognized observed pattern (matches no declared writer
+ * at all) is left silent: not attributable, so not a finding.
+ */
+export function assertSlotShowsForeignTransitionRender(
+  frames: ReadonlyArray<Frame>,
+  expectations: ReadonlyArray<PortalExpectation>,
+): Verdict[] {
+  if (expectations.length === 0) return [];
+  const verdicts: Verdict[] = [];
+
+  const expectationsByCause = new Map<string, PortalExpectation[]>();
+  const writersBySlot = new Map<string, Map<string, string>>();
+  for (const exp of expectations) {
+    if (exp.pattern === null) continue;
+    const causeKey = `${exp.traitName}:${exp.from}+${exp.event}->${exp.to}`;
+    const bucket = expectationsByCause.get(causeKey) ?? [];
+    bucket.push(exp);
+    expectationsByCause.set(causeKey, bucket);
+
+    const bySlot = writersBySlot.get(exp.slot) ?? new Map<string, string>();
+    bySlot.set(exp.pattern, `${exp.traitName}.${exp.event}`);
+    writersBySlot.set(exp.slot, bySlot);
+  }
+
+  for (const frame of frames) {
+    if (!frame.accepted || frame.cause.isRepositioning || frame.cause.guardCase === 'fail') continue;
+    if (frame.cause.payloadCase === 'malformed') continue;
+    const causeKey = `${frame.cause.traitName}:${frame.cause.from}+${frame.cause.event}->${frame.cause.to}`;
+    const matched = expectationsByCause.get(causeKey);
+    if (matched === undefined) continue;
+
+    for (const exp of matched) {
+      const portal = frame.domSnapshot.portals.find((p) => p.slot === exp.slot);
+      if (portal === undefined || !portal.mounted || portal.pattern === undefined) continue;
+      if (portal.pattern === exp.pattern) continue;
+      const foreignAuthor = writersBySlot.get(exp.slot)?.get(portal.pattern);
+      if (foreignAuthor === undefined) continue;
+      verdicts.push({
+        passed: false,
+        detail:
+          `slot-shows-foreign-transition-render: ${frame.cause.traitName} ${frame.cause.event} expected ` +
+          `'${exp.pattern}' in slot '${exp.slot}', but the DOM shows '${portal.pattern}' — authored by ` +
+          `${foreignAuthor}, not the last writer`,
+        evidence: { frameIndices: [frame.index] },
+      });
+    }
+  }
+
+  return verdicts;
+}
