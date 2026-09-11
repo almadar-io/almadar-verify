@@ -2258,28 +2258,52 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
   // `default` — only the field's `forwardedFrom` provenance still names the
   // knob it came from. `forwardsKnob` tests both shapes so this check reports
   // the same result pre- and post-resolve.
-  const CONFIG_KNOB_FORWARD_TOKEN = (knob: string): string => `@config.${knob}`;
-  function forwardsKnob(field: unknown, knob: string): boolean {
-    if (typeof field !== 'object' || field === null) return false;
-    const token = CONFIG_KNOB_FORWARD_TOKEN(knob);
-    const { default: defaultValue, forwardedFrom } = field as {
-      default?: unknown;
-      forwardedFrom?: unknown;
-    };
-    if (typeof forwardedFrom === 'string' && forwardedFrom === token) return true;
-    return typeof defaultValue === 'string' && defaultValue === token;
-  }
-  const traitConfigFields: unknown[] = [];
+  // A knob name from a `@config.<knob>` token; a dotted tail names a
+  // sibling's own forward, not a declaration of `<knob>`.
+  const forwardedKnob = (token: unknown): string | undefined => {
+    if (typeof token !== 'string' || !token.startsWith('@config.')) return undefined;
+    const knob = token.slice('@config.'.length);
+    return knob.length > 0 && !knob.includes('.') ? knob : undefined;
+  };
+  const fieldForwardTokens = (field: unknown): unknown[] => {
+    if (typeof field !== 'object' || field === null) return [];
+    const { default: defaultValue, forwardedFrom } = field as { default?: unknown; forwardedFrom?: unknown };
+    return [defaultValue, forwardedFrom];
+  };
+  // Every knob some trait publishes: direct trait forwards, closed over
+  // orbital-level knobs whose `forwardedFrom` chains further out — an
+  // imported orbital's knob the consumer folded from its own app knob
+  // publishes that app knob through whichever trait forwards the orbital knob
+  // (the compiler's `published_knobs`, `validation/orbital_config.rs`).
+  const published = new Set<string>();
   for (const orb of schema.orbitals) {
     for (const trait of orb.traits ?? []) {
       if (!isInlineTrait(trait)) continue;
       const config = trait.config as Record<string, unknown> | undefined;
       if (!config) continue;
-      traitConfigFields.push(...Object.values(config));
+      for (const field of Object.values(config)) {
+        for (const token of fieldForwardTokens(field)) {
+          const knob = forwardedKnob(token);
+          if (knob !== undefined) published.add(knob);
+        }
+      }
     }
   }
-  const isKnobForwarded = (knob: string): boolean =>
-    traitConfigFields.some((field) => forwardsKnob(field, knob));
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const orb of schema.orbitals) {
+      for (const [name, field] of Object.entries(orb.config ?? {})) {
+        if (!published.has(name)) continue;
+        const root = forwardedKnob((field as { forwardedFrom?: unknown }).forwardedFrom);
+        if (root !== undefined && !published.has(root)) {
+          published.add(root);
+          grew = true;
+        }
+      }
+    }
+  }
+  const isKnobForwarded = (knob: string): boolean => published.has(knob);
   for (const orb of schema.orbitals) {
     for (const knob of Object.keys(orb.config ?? {})) {
       if (isKnobForwarded(knob)) continue;

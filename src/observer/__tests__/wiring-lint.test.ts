@@ -1374,6 +1374,35 @@ describe('lintWiring — orbital-config-knob-unforwarded', () => {
     );
   });
 
+  it('resolves an app knob forwarded THROUGH an imported orbital knob (forwardedFrom chain), and flags a broken chain', () => {
+    const chained = (withTrait: boolean) => lintWiring({
+      name: 'MyApp',
+      designTokens: {},
+      customPatterns: {},
+      config: { googleCalendarId: { type: 'string', default: '' } },
+      orbitals: [
+        {
+          name: 'TaskOrbital',
+          entity: knobOrbitalEntity,
+          pages: [],
+          config: { calendarId: { type: 'string', default: '', forwardedFrom: '@config.googleCalendarId' } },
+          traits: withTrait
+            ? [{
+                name: 'CalendarSync',
+                scope: 'instance',
+                config: { calendarId: { default: '', type: 'unknown', forwardedFrom: '@config.calendarId' } },
+                stateMachine: emptyStateMachine,
+              }]
+            : [{ name: 'Plain', scope: 'instance', stateMachine: emptyStateMachine }],
+        },
+      ],
+    });
+    const forwarded = chained(true).findings.filter((f) => f.check === 'orbital-config-knob-unforwarded');
+    expect(forwarded).toEqual([]);
+    const broken = chained(false).findings.filter((f) => f.check === 'orbital-config-knob-unforwarded');
+    expect(broken.map((f) => f.orbital).sort()).toEqual(['MyApp', 'TaskOrbital']);
+  });
+
   it('does not count a dotted @config.knob.sub default as a forward', () => {
     const result = lintWiring({
       name: 'fixture',
