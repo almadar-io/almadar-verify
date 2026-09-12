@@ -19,10 +19,13 @@ import type { Effect, OrbitalSchema, SExpr } from '@almadar/core';
 import { isInlineTrait } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
 import { dispatchNavigates, findInitialState } from './internal/orbital-walk.js';
+import { collectEntityFields } from './internal/payload-synth.js';
+import { planGuardPreconditionPreamble } from './internal/guard-precondition.js';
 
 export function planClickPathSamples(orbital: OrbitalSchema): ExtendedWalkStep[] {
   const result: ExtendedWalkStep[] = [];
   const seen = new Set<string>();
+  const entityFieldsByName = collectEntityFields(orbital);
 
   for (const orb of orbital.orbitals) {
     for (const traitRef of orb.traits ?? []) {
@@ -45,7 +48,7 @@ export function planClickPathSamples(orbital: OrbitalSchema): ExtendedWalkStep[]
         // never visible, the bus fallback fired an event with no
         // transition from `idle`, and VG3 reported a spurious dead key.
         const target = findTransitionTarget(trait, site.state, site.event) ?? site.state;
-        result.push({
+        const step: ExtendedWalkStep = {
           from: site.state,
           event: site.event,
           to: target,
@@ -57,7 +60,19 @@ export function planClickPathSamples(orbital: OrbitalSchema): ExtendedWalkStep[]
           coverageKey: `${trait.name}:${site.state}+${site.event}->${target}[click-path:${site.slot}]`,
           testKind: 'click-path',
           ...(dispatchNavigates(orbital, orb, trait.name, site.event) ? { navigates: true } : {}),
-        });
+        };
+        // A click on a guarded affordance is only meaningful once the guard's
+        // `@entity.*` reads hold — the same precondition the walk establishes
+        // (a composer's Send with an empty draft is a held guard, not a dead key).
+        const guarded = trait.stateMachine.transitions.find(
+          (t) => t.from === site.state && t.event === site.event && t.guard !== undefined,
+        );
+        if (guarded !== undefined) {
+          const plan = planGuardPreconditionPreamble(orbital, trait, guarded, site.state, entityFieldsByName);
+          if (plan.establishesRow !== undefined) step.establishesRow = plan.establishesRow;
+          else if (plan.guardPreconditionUnreachable !== undefined) step.unreachableRowReason = plan.guardPreconditionUnreachable;
+        }
+        result.push(step);
       }
     }
   }

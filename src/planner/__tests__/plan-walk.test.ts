@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { EdgeWalkTransition } from '@almadar/core';
+import type { EdgeWalkTransition, OrbitalSchema, Trait } from '@almadar/core';
 import { planWalk } from '../plan-walk.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
 
@@ -352,5 +352,95 @@ describe('planWalk', () => {
       const fail = steps.find((s) => s.guardCase === 'fail');
       expect(fail?.guardSiblingTargets).toBeUndefined();
     });
+  });
+});
+
+describe('planWalk — guarded pass variants carry their establishing preamble when the schema is given', () => {
+  const composerTrait: TraitWalkConfig = {
+    traitName: 'ChatComposer',
+    initialState: 'ready',
+    linkedEntity: 'ChatMessage',
+    transitions: [
+      transition('ready', 'INIT', 'ready'),
+      transition('ready', 'DRAFT_CHANGED', 'ready'),
+      {
+        from: 'ready',
+        event: 'SEND',
+        to: 'ready',
+        hasGuard: true,
+        guard: ['and', '@entity.activeChannel', ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
+      },
+    ],
+  };
+  const composerDecl: Trait = {
+    name: 'ChatComposer',
+    scope: 'instance',
+    linkedEntity: 'ChatMessage',
+    stateMachine: {
+      states: [{ name: 'ready', isInitial: true }],
+      events: [
+        { key: 'INIT', name: 'Init' },
+        { key: 'DRAFT_CHANGED', name: 'Draft Changed', payloadSchema: [{ name: 'value', type: 'string' as const }] },
+        { key: 'SEND', name: 'Send' },
+      ],
+      transitions: [
+        { from: 'ready', to: 'ready', event: 'INIT', effects: [['set', '@entity.draft', ''], ['set', '@entity.activeChannel', 'general']] },
+        { from: 'ready', to: 'ready', event: 'DRAFT_CHANGED', effects: [['set', '@entity.draft', '@payload.value']] },
+        {
+          from: 'ready',
+          to: 'ready',
+          event: 'SEND',
+          guard: ['and', '@entity.activeChannel', ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
+          effects: [['emit', 'SAVE', { data: { content: '@entity.draft' } }]],
+        },
+      ],
+    },
+  };
+  const orbital: OrbitalSchema = {
+    name: 'efficacy-chat',
+    version: '1.0.0',
+    orbitals: [{
+      name: 'ChatMessageOrbital',
+      entity: { name: 'ChatMessage', fields: [{ name: 'id', type: 'string' as const, required: true }, { name: 'draft', type: 'string' as const }, { name: 'activeChannel', type: 'string' as const }] },
+      traits: [composerDecl],
+      pages: [],
+    }],
+  };
+
+  it('attaches DRAFT_CHANGED as the SEND pass variant\'s preamble', () => {
+    const steps = planWalk({ trait: composerTrait, orbital });
+    const sendPass = steps.find((s) => s.event === 'SEND' && s.guardCase === 'pass');
+    expect(sendPass?.establishesRow?.event).toBe('DRAFT_CHANGED');
+    expect(sendPass?.establishesRow?.beforeReplay).toBe(true);
+    const sendFail = steps.find((s) => s.event === 'SEND' && s.guardCase === 'fail');
+    expect(sendFail?.establishesRow).toBeUndefined();
+  });
+
+  it('plans no preamble without the schema (pre-existing callers unchanged)', () => {
+    const steps = planWalk({ trait: composerTrait });
+    const sendPass = steps.find((s) => s.event === 'SEND' && s.guardCase === 'pass');
+    expect(sendPass?.establishesRow).toBeUndefined();
+    expect(sendPass?.unreachableRowReason).toBeUndefined();
+  });
+
+  it('records the unreachable reason when no setter can satisfy the guard', () => {
+    const noSetter: OrbitalSchema = {
+      ...orbital,
+      orbitals: [{
+        ...orbital.orbitals[0],
+        traits: [{
+          ...composerDecl,
+          stateMachine: {
+            ...composerDecl.stateMachine!,
+            transitions: composerDecl.stateMachine!.transitions.map((t) =>
+              t.event === 'DRAFT_CHANGED' ? { ...t, effects: [['set', '@entity.pendingAttachment', '@payload.value']] } : t,
+            ),
+          },
+        }],
+      }],
+    };
+    const steps = planWalk({ trait: composerTrait, orbital: noSetter });
+    const sendPass = steps.find((s) => s.event === 'SEND' && s.guardCase === 'pass');
+    expect(sendPass?.unreachableRowReason).toContain('guard-precondition-unreachable');
   });
 });

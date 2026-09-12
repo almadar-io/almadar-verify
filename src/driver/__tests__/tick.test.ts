@@ -212,3 +212,62 @@ describe('FakeDriver', () => {
     expect(runtime.getState('BrowseItemBrowse')).toBe('loading');
   });
 });
+
+describe('tick — the runtime\'s own transitioned verdict decides a self-loop', () => {
+  const composer: TraitWalkConfig = {
+    traitName: 'ChatComposer',
+    initialState: 'ready',
+    transitions: [transition('ready', 'INIT', 'ready'), transition('ready', 'SEND', 'ready')],
+  };
+  function sendStep(guardCase: 'pass' | 'fail' | null): ExtendedWalkStep {
+    return {
+      from: 'ready',
+      event: 'SEND',
+      to: 'ready',
+      guardCase,
+      payloadCase: guardCase === 'fail' ? 'guard-fail' : 'success',
+      payload: {},
+      isRepositioning: false,
+      traitName: composer.traitName,
+      triggerKind: 'bus',
+      coverageKey: `ChatComposer:ready+SEND->ready${guardCase ? `[${guardCase}]` : ''}`,
+    };
+  }
+  function driverReporting(transitioned: boolean) {
+    const { driver, runtime } = createFakeDriver([composer]);
+    const reporting = {
+      ...driver,
+      sendEvent: async () => ({
+        sent: true,
+        serverResponse: { orbitalName: 'ChatMessageOrbital', success: true, transitioned, clientEffects: 0, dataEntities: {}, emittedEvents: [], timestamp: 1 },
+      }),
+    };
+    return { driver: reporting, runtime };
+  }
+
+  it('rejects a guard-pass self-loop the runtime says no arm accepted, even though the state "reached" to', async () => {
+    const { driver, runtime } = driverReporting(false);
+    const ctx = { outputDir: '/tmp', trait: composer, runtime };
+    const init = await tick(driver, ctx, null, step('ready', 'INIT', 'ready', 'auto-init'));
+    const frame = await tick(driver, ctx, init, sendStep('pass'));
+    expect(frame.stateAfter).toBe('ready');
+    expect(frame.accepted).toBe(false);
+    expect(frame.serverResponse?.transitioned).toBe(false);
+  });
+
+  it('accepts the same self-loop when the runtime reports the arm fired', async () => {
+    const { driver, runtime } = driverReporting(true);
+    const ctx = { outputDir: '/tmp', trait: composer, runtime };
+    const init = await tick(driver, ctx, null, step('ready', 'INIT', 'ready', 'auto-init'));
+    const frame = await tick(driver, ctx, init, sendStep('pass'));
+    expect(frame.accepted).toBe(true);
+  });
+
+  it('rejects a guard-fail probe the runtime accepted with no sibling arm to explain it', async () => {
+    const { driver, runtime } = driverReporting(true);
+    const ctx = { outputDir: '/tmp', trait: composer, runtime };
+    const init = await tick(driver, ctx, null, step('ready', 'INIT', 'ready', 'auto-init'));
+    const frame = await tick(driver, ctx, init, sendStep('fail'));
+    expect(frame.accepted).toBe(false);
+  });
+});

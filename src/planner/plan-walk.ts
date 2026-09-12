@@ -46,7 +46,7 @@
  * @packageDocumentation
  */
 
-import { buildGuardPayloads, collectBindings, constTruth, type EventPayload, type SExpr } from '@almadar/core';
+import { buildGuardPayloads, collectBindings, constTruth, type EventPayload, type OrbitalSchema, type SExpr, type Trait, type Transition } from '@almadar/core';
 import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PayloadCase, PlanWalkInput } from './types.js';
 import {
@@ -54,9 +54,12 @@ import {
   synthesizeSuccessPayload,
 } from './internal/payload-synth.js';
 import { transientClosure } from './internal/transient-closure.js';
+import { eachInlineTrait } from './internal/orbital-walk.js';
+import { planGuardPreconditionPreamble } from './internal/guard-precondition.js';
 
 export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
-  const { trait, includeAutoInit = true, entityFieldsByName = {} } = input;
+  const { trait, includeAutoInit = true, entityFieldsByName = {}, orbital } = input;
+  const traitDecl = orbital === undefined ? undefined : findTraitDecl(orbital, trait.traitName);
 
   const result: ExtendedWalkStep[] = [];
 
@@ -116,7 +119,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
       }
 
       if (canPass) {
-        result.push(makeStep({
+        const passStep = makeStep({
           trait,
           transition,
           guardCase: 'pass',
@@ -124,7 +127,11 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
           payload: { ...successPayload, ...guardPayloads.pass } as EventPayload,
           entityFieldsByName,
           guardSteerable: steerable,
-        }));
+        });
+        if (orbital !== undefined && traitDecl !== undefined) {
+          attachGuardPrecondition(passStep, orbital, traitDecl, transition, entityFieldsByName);
+        }
+        result.push(passStep);
       }
 
       if (canFail) {
@@ -163,6 +170,37 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
   }
 
   return result;
+}
+
+function findTraitDecl(orbital: OrbitalSchema, traitName: string): Trait | undefined {
+  for (const { trait } of eachInlineTrait(orbital)) {
+    if (trait.name === traitName) return trait;
+  }
+  return undefined;
+}
+
+/**
+ * A guarded `pass` variant reading a non-id `@entity.<field>` is only
+ * meaningful once that field holds a satisfying value — the hermetic reset
+ * before every step re-runs the boot, which is exactly when a composer's
+ * draft is blank. Route through the one owner of that precondition
+ * (`planGuardPreconditionPreamble`); a guard no setter can ever satisfy is
+ * recorded on the step, and `tick()` fails it closed instead of dispatching.
+ */
+function attachGuardPrecondition(
+  step: ExtendedWalkStep,
+  orbital: OrbitalSchema,
+  traitDecl: Trait,
+  transition: PlanWalkInput['trait']['transitions'][number],
+  entityFieldsByName: Record<string, EntityFieldDef[]>,
+): void {
+  const decl: Transition | undefined = traitDecl.stateMachine?.transitions.find(
+    (t) => t.from === transition.from && t.event === transition.event && t.to === transition.to && t.guard !== undefined,
+  );
+  if (decl === undefined) return;
+  const plan = planGuardPreconditionPreamble(orbital, traitDecl, decl, transition.from, entityFieldsByName);
+  if (plan.establishesRow !== undefined) step.establishesRow = plan.establishesRow;
+  else if (plan.guardPreconditionUnreachable !== undefined) step.unreachableRowReason = plan.guardPreconditionUnreachable;
 }
 
 interface MakeStepInput {

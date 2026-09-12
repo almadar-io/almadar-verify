@@ -74,7 +74,10 @@
  *    the target's linked entity declares `<F>`'s type — the emit's own
  *    `payloadSchema` type for that field is a different primitive. A relay
  *    emit has no host consumer to mismatch against, so it is excluded here
- *    too. Mirrors `payload-starved-route`'s contract, one registry over.
+ *    too. Mirrors the same payload-sufficiency contract `wiring-lint.ts`'s
+ *    retired `payload-starved-route` used to check (2026-09-12 →
+ *    `ORB_LISTEN_ROUTE_STARVES_REQUIRED_FIELD` in `orb validate`), one
+ *    registry over.
  *  - `plugin-listen-source-not-host` — a source-qualified `listens`
  *    (`X.EVENT`, `ListenSource.kind !== 'any'`) on a plugin trait whose
  *    source trait is neither declared in the plugin's own orbital(s) NOR in
@@ -270,7 +273,7 @@ interface RequiredField {
 
 /** Every `@payload.<field>` binding reachable anywhere under an effect tree
  *  — the same duck-typed recursive-array walk `wiring-lint.ts`'s own
- *  helpers use (`embeddedTraitRefs`, `renderedAffordanceEvents`, …) rather
+ *  helpers use (`mainWriteOffersAWayOn`, `descriptorEvents`, …) rather
  *  than `@almadar/core`'s `collectBindings`: `Effect`'s variadic tuple arms
  *  (`AsyncAllEffect` et al.) are not structurally assignable to `SExpr`
  *  under TS's tuple/index-signature check, and this file's contract only

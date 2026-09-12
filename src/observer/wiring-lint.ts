@@ -24,140 +24,42 @@
  *    identity-roster class, 2026-08-19: 31 rosters shipped theme-less next to
  *    theme-pinned siblings). Theme values and pages are declared data — no
  *    name matching.
- *  - `orbital-config-knob-unforwarded` (warning) — an orbital- or app-level
- *    DECLARED config knob (`Orbital.config` / `OrbitalSchema.config`, §4.5 of
- *    `Almadar_Orbital_Import.md`) that no trait forwards. A knob is published
- *    only when some trait's own `config[<key>].default` is the literal
- *    string `@config.<knob>` — the same forwarding contract atoms already
- *    use (`traitDeclaresConfigForward`), no dotted tail. A knob nothing
- *    forwards is a live wire terminating in nothing: an importer can set it
- *    on the `uses` line or the orbital's own reference-form `config {}`, and
- *    no trait ever reads the value. `ORB_O_CONFIG_DEAD_KNOB` is the
- *    compiled-path twin (hard error there — the compiler has no warning
- *    severity); this is the runtime-side mirror.
+ *  - `orbital-config-knob-unforwarded` (retired 2026-09-12 → duplicate of the
+ *    compiler's `ORB_O_CONFIG_DEAD_KNOB`, `orbital_config.rs::validate_orbital_config_forwarding`,
+ *    which already runs this exact `published_knobs` closure as a hard error).
  *  - `identity-roster-unwritable` (warning) — the app declares an
  *    `[identity]` entity but no transition anywhere reaches a
  *    `persist create` on it: the roster the app's personas map onto has no
  *    write path, so users can never be added from inside the app (the
  *    read-only identity-directory class, 2026-08-19: 46 carriers).
- *  - `client-unbound-state-machine` — a trait owning a state machine that is
- *    in no page decl and not in any page's `@trait.X` embed closure. The
- *    client binds state machines exactly for page-declared traits plus that
- *    closure (`OrbPreview.allPageTraits`), so the trait can never handle an
- *    event in the shipped app (std-ecommerce `CartItemRemoveConfirm`: dead
- *    cart-remove modal).
- *  - `steady-state-no-init-reentry` (warning) — a state a trait settles in
- *    after one of its own `fetch` effects succeeds, which declares no `INIT`
- *    transition of its own. The server machine rests there between visits, so
- *    a revisit's re-INIT finds no transition and is dropped while the
- *    freshly-mounted client sits in `loading` forever (the 39-carrier
- *    W-ATOM-NO-INIT-REENTRY-IN-STEADY-STATE family: std-board `viewing_board`,
- *    std-invoice/std-donor/... `browsing`). Warning, not error, for the same
- *    reason as `unclaimed-main-writer`: whether a dropped re-INIT strands the
- *    user depends on who owns the page's content region afterwards, which
- *    statics cannot settle without a slot-outlet contract. Corpus calibration
- *    (2026-07-25): the `browsing`/`viewing` content-owner shapes are
- *    probe-proven carriers, while std-app-search's `results` is a proven FALSE
- *    positive — the page's content trait repaints main on revisit, live-probed
- *    GREEN through an in-app round trip. Live revisit probes remain the
- *    arbiter per finding.
- *  - `async-result-deaf-target` (warning) — a transition that CHANGES state
- *    while one of its `fetch`/`persist` effects declares `emit: { success,
- *    failure }` events the TARGET state does not handle: the requester departs
- *    to a state deaf to its own operation result, so when the cascade lands
- *    the machine drops it and deadlocks (the std-dunning `SET_STATUS ->
- *    loading` class, 2026-07-27: the persist's `DunningCaseUpdated` was only
- *    handled in `browsing`, wedging every subsequent walk step in `loading`).
- *    Self-transitions (`from === to`) are excluded — the machine stays in an
- *    interactive state, a different (render-drop) class, not a wedge.
- *  - `failure-arm-missing` (error) / `failure-arm-renders-nothing` (warning)
- *    — the FAILURE-specific pair `async-result-deaf-target` doesn't
- *    distinguish (that check only asks whether SOME arm — success or
- *    failure — handles the result event at all). For every client-bound
- *    transition's `fetch`/`persist`/`call-service` effect declaring
- *    `emit.failure: X`: no transition in the target state (or `*`) handling
- *    `X` at all is `failure-arm-missing` — a failed write has nowhere to
- *    land, strictly worse than a stray success miss because nothing tells
- *    the user their write vanished. An arm exists but its effects neither
- *    `render-ui` (into any slot, non-null — `notify` is retired sugar for a
- *    `render-ui toast` and no longer a separate check) is
- *    `failure-arm-renders-nothing` — the failure is caught and silently
- *    absorbed. Rung-3 runtime twin: `assertEffectFailureNotSurfaced`
- *    (`effect-failure-not-surfaced.ts`) proves the same contract actually
- *    held at walk time (declared route fired, toast mounted); this lint is
- *    the static, pre-walk gate for the same class.
- *  - `modal-shell-close-deaf` (warning) — a client-bound trait's transition
- *    writes `['render-ui', 'modal'|'drawer', payload]` where `payload` is a
- *    pattern config (not `null`, not a `RenderBinding` string) whose `type` is
- *    not in `SELF_OVERLAY_PATTERN_TYPES` (`@almadar/core`: `modal`,
- *    `confirm-dialog` — patterns that paint their own backdrop/chrome), while
- *    the TARGET state's handled events (`transitions.filter(t => t.from ===
- *    to || t.from === '*')`) contain neither `CLOSE` nor `CANCEL`. Everything
- *    else painted into an overlay slot gets `UISlotRenderer`'s `CompiledPortal`
- *    shell (`SELF_OVERLAY_PATTERN_TYPES` gates which patterns it wraps), whose
- *    X / Escape / overlay-click dismiss emits `UI:<Orbital>.<Trait>.CLOSE`
- *    then `.CANCEL` — a target state handling neither leaves that control
- *    dead (std-realtime-chat `ChatOverlayPanel`: a `stack` painted into
- *    `modal` with no `CLOSE`/`CANCEL` arm, so the shell's X did nothing next
- *    to the panel's own working dismiss).
- *  - `filter-field-never-written` (warning) — a client-bound trait's `fetch`
- *    effect (found anywhere in a transition's effects, including through `if`
- *    branches) carries a `filter` S-expression referencing `(object/get
- *    @entity <f>)` for the fetched entity `E`, where NO `persist
- *    create`/`update` of `E` anywhere in the schema supplies key `f` — scanning
- *    only EXPLICIT object-literal data keys; a bare/computed data argument
- *    (`@entity`, `@payload.data`, an `object/merge` call, …) may supply any
- *    field, so it exempts the whole entity rather than being read further.
- *    Conservative by construction: silent unless `E` resolves to an inline
- *    entity definition (an opaque/imported entity proves nothing either way),
- *    silent when `f` is a declared field carrying a `default` or `@intrinsic`
- *    (seeded without an explicit writer), and silent once ANY persist for `E`
- *    uses a bare data argument. What remains is exactly: `f` is not declared
- *    on `E` at all, or is declared but written by nothing and read only by
- *    this filter — the filter can never match a real row (the std-realtime-chat
- *    `ChannelThread`/`threadRootId` class: a fetch filtered on a field no
- *    `persist create ChatMessage` ever set, so the thread panel always reads
- *    zero rows). `<f>` itself must be a LITERAL field name — a config-
- *    forwarded or payload-bound field selector (`@config.scopeField`,
- *    `?field`) is dynamic, and by resolve time may have inlined to the
- *    call site's literal value (often `""`, an unset std-browse
- *    `scopeField`/`initialFilterField`) or stayed a bare `?field`/
- *    `@payload.field` token — either reads as a bogus finding rather than a
- *    real one, so both sigils are excluded from `f` entirely. `E` itself is
- *    exempt when it is `[identity]`-tagged (`identityEntityNames`,
- *    `@almadar/core/mock` — the same marker `identity-roster-unwritable`
- *    consults, shadowed copies included): an identity roster's rows come
- *    from the auth provider, never a `persist create`/`update` inside the
- *    program, so "no persist supplies this field" proves nothing for any
- *    field on it (the std-realtime-chat `OnlineUser`/`name`/`username`
- *    false-positive: a read-only `[identity]` roster, already flagged
- *    unwritable in its entirety by `identity-roster-unwritable`). `E` is also
- *    exempt on a per-FIELD basis when another entity sharing its declared
- *    `persistent:` collection (`entityAccessTable`'s collection-inheritance
- *    idiom, `@almadar/core/access/entityAccess.ts`) DOES supply `f` — a
- *    std-atom's own entity writes real rows a sibling organism's
- *    differently-named "view" entity only reads (the std-cms `HubArticle`/
- *    `Article` and std-nonprofit-donations `DonorBroadcast`/`BroadcastDraft`
- *    shapes, both `[persistent: articles]`/`[persistent: broadcastdrafts]`
- *    respectively — measured live 2 of 5 in a random corpus sample).
- *  - `listens-source-never-emits` — a `listens { A.EVENT -> X }` route whose
- *    source trait exists but never produces EVENT (not in its emits
- *    contract, no effect `emit:` option, no `action:`/`itemActions`
- *    affordance) — the std-cicd wrong-source-listener class.
+ *  - `client-unbound-state-machine` (retired 2026-09-12 → `ORB_CIRCUIT_CLIENT_UNBOUND_STATE_MACHINE`
+ *    in `orb validate`, `closed_circuit.rs::validate_client_bound_state_machines`).
+ *  - `steady-state-no-init-reentry` (retired 2026-09-12 → `ORB_CIRCUIT_STEADY_STATE_NO_INIT_REENTRY`
+ *    in `orb validate`, `phases/validation/async_results.rs::validate_steady_state_no_init_reentry`
+ *    — promoted from warning to error per the 0/0 ruling; the JS check's one documented false
+ *    positive, std-app-search's `results` state (2026-07-25 calibration), is exempted by the SAME
+ *    declared fact the port reads: `statesWithInit` is keyed on an INIT arm's `from` regardless of
+ *    its `to`, and `results` already declares its own `INIT -> idle` re-entry arm).
+ *  - `async-result-deaf-target` (retired 2026-09-12 → `ORB_CIRCUIT_ASYNC_RESULT_DEAF_TARGET`
+ *    in `orb validate`, `phases/validation/async_results.rs::validate_async_result_deaf_target`
+ *    — promoted from warning to error per the 0/0 ruling).
+ *  - `listens-source-never-emits` (retired 2026-09-12 → duplicate of the
+ *    compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED`,
+ *    `cross_orbital/listens.rs::validate_listens_integrity`, which reads the
+ *    same three production sites — `emits[]`, effect `emit:` options, and
+ *    rendered/item-action affordances — as an error).
  *  - `listener-affordance-removed-by-config` (warning) — a `listens { A.EVENT
  *    -> X }` route whose source trait's own `emits[]` contract DOES declare
- *    EVENT (so `listens-source-never-emits` stays silent — the route is
- *    structurally legal), but no LIVE mechanism at this call site — effect
+ *    EVENT (so the compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED` already
+ *    passed it — the route is structurally legal), but no LIVE mechanism at
+ *    this call site — effect
  *    `emit:`, rendered affordance, config-driven item action, or an embedded
  *    child's own producer up the embed-host chain — actually fires it: a
  *    config override (e.g. `itemActions` narrowed to VIEW-only) silenced the
  *    contract's only producer. The listener is reachable in principle but
  *    dead in practice at this configuration.
- *  - `payload-starved-route` — a route delivering EVENT to a listener whose
- *    own contract for the triggered event requires payload fields the
- *    source's declared emit sites cannot supply (std-lms header
- *    "Edit Selected" emitting `EDIT_COURSE` with no `id` while the modal
- *    contract demands `id: string!`).
+ *  - `payload-starved-route` (retired 2026-09-12 → `ORB_LISTEN_ROUTE_STARVES_REQUIRED_FIELD`
+ *    in `orb validate`).
  *  - `unclaimed-main-writer` (warning) — a page-declared trait rendering a
  *    content-grade body into slot `main` while the page's content channel
  *    (`contentTrait`/`idleContent` config slots) already claims one: the
@@ -177,37 +79,12 @@
  *    `AssessmentForm` flagged as rival to its own materialised descendant).
  *    Supersedes the v1-falsified ">1 boot writers" candidate (see `Almadar_Verification_Gaps.md`
  *    V-WIRING-LINT-STRAY-WRITER-NEEDS-SLOT-OUTLET-CONTRACT).
- *  - `dead-lifecycle-action` — a rendered affordance targeting a lifecycle
- *    event (`INIT`, `LOAD`, `$MOUNT`). The affordance set is registry-derived,
- *    not a key list: `action:` plus every prop the node's own pattern declares
- *    as an event outlet (`kind: "event" | "event-ref" | "callback"` —
- *    `cancelEvent`, `retryEvent`, `onRetry`, …) and every `kind: "event-list"`
- *    descriptor array, via `eventKeyPropsOf`/`eventListPropsOf`. Reading only
- *    `action:` undercounted the class silently for every pattern that names its
- *    outlet something else (`V-DEAD-LIFECYCLE-ACTION-MISSES-EVENT-PROPS`).
- *    The runtime never delivers lifecycle events from the
- *    bus (`useTraitStateMachine` LIFECYCLE_EVENTS — correctly: a bare
- *    `UI:INIT` would broadcast a re-INIT into every trait on the page), so
- *    the control does nothing when clicked. The std-realtime-chat
- *    "Back to chat" class (2026-07-29): 63 sites across 31 organisms used
- *    `action={INIT}` as a Back affordance on screens that replaced `main`,
- *    stranding the viewer with no way home.
- *  - `dead-bodiless-action` — a state-CHANGING transition (`from !== to`) that
- *    carries no effects at all. `get_state_render_effects` (orbital-core
- *    `kernel.rs:530`) re-applies a state's render only in the no-transition
- *    branch, so arriving in a state BY transition paints exactly what the arm
- *    renders — nothing. The machine leaves the old state while the screen keeps
- *    its paint, so every affordance routed to that arm is dead AND the surface
- *    now disagrees with the state it is in. `dead-lifecycle-action` cannot see
- *    this class: the target is a first-class user event, and the affordance
- *    usually lives in a nested inline trait whose own machine has no such arm
- *    (std-builder `SchemaPreview`'s "Back to Editor", found by hand 2026-08-01
- *    while closing the D2 leftovers).
- *  - `dead-lifecycle-emit` — an arm whose effects `(emit INIT|LOAD|$MOUNT)`.
- *    The client publishes `UI:INIT` (`createClientEffectHandlers.ts:66`) but
- *    subscribes to no lifecycle event (`useTraitStateMachine.ts:1854,1911`), so
- *    the emit is dropped and whatever it meant to repaint never renders. The
- *    Rust kernel has no such exclusion, so this is also a two-path divergence.
+ *  - `dead-lifecycle-action` (retired 2026-09-12 → `ORB_RENDER_ACTION_LIFECYCLE_EVENT`
+ *    in `orb validate`).
+ *  - `dead-bodiless-action` (retired 2026-09-12 → `ORB_CIRCUIT_DEAD_BODILESS_ACTION`
+ *    in `orb validate`, `closed_circuit.rs::validate_dead_bodiless_actions`).
+ *  - `dead-lifecycle-emit` (retired 2026-09-12 → `ORB_CIRCUIT_LIFECYCLE_EMIT_UNDELIVERED`
+ *    in `orb validate`, `closed_circuit.rs::validate_lifecycle_emit_effects`).
  *  - `embedded-sibling-single-referrer` — a trait embedded via `@trait.X` by
  *    more than one referrer in one orbital. Both resolvers materialise a
  *    sub-view PER EMBEDDER, so this can only mean the invariant broke: the
@@ -218,16 +95,11 @@
  *    C-SIBLING-PULL-SHARED-ACROSS-REBINDS class: `std-realtime-chat`'s
  *    conversation rail listed chat messages because `ChannelRail` and
  *    `ChatThread` shared one pulled `DenseTableView`.
- *  - `navigate-target-undeclared` (warning) — a `(navigate <target>)` effect
- *    whose target matches no declared `page "<path>"` in the app (positional
- *    `:param` matching both ways; a `str/concat`-built target is matched by
- *    its literal prefix against declared paths with their trailing `:param`
- *    segment stripped). `audit_listens` reports this arm `wired: true via
- *    self-transition` because the emit/listen wiring IS complete — the
- *    affordance is a live click that lands on a 404, a class no listens-graph
- *    check can see. Cross-orbital: an app's navigate targets routinely point
- *    at pages owned by a sibling orbital, so the declared-path universe is
- *    every page in the schema, not just the navigating trait's own orbital.
+ *  - `navigate-target-undeclared` (retired 2026-09-12 → duplicate of the
+ *    compiler's `ORB_EFF_NAVIGATE_TARGET_UNREACHABLE`,
+ *    `phases/validation/effect/navigate.rs::validate_navigate`, confirmed at
+ *    parity on all three target shapes — cross-orbital literal, `str/concat`
+ *    prefix, `http(s)://` external — as an error).
  *  - `page-absent-from-nav` (warning) — a declared page whose path carries no
  *    `:param` segment (a parameterized detail page is legitimately reached
  *    only via a row click, never a nav link — structural exclusion, not a
@@ -247,18 +119,9 @@
  *    arrays anywhere (a registry atom, a chrome-less fixture) has not opted
  *    into nav-driven reachability, so every page reading "absent" would be
  *    noise.
- *  - `page-path-duplicate` (warning) — two declared page paths collide once
- *    every `:name` param segment is collapsed to a bare `:` (`/x/:id` and
- *    `/x/:slug` both normalize to `/x/:`) — a router can't dispatch on the
- *    param's name, so the two routes are indistinguishable regardless of
- *    which was authored first. JS twin of the compiler's page-path
- *    uniqueness owner (`orbital-compiler/src/phases/validation/page.rs`
- *    `normalize_page_path` + `validate_page_path_uniqueness`,
- *    `ORB_P_DUPLICATE_PATH`) — cross-orbital like `navigate-target-undeclared`,
- *    since sibling orbitals' pages share one app router. The compiler owns
- *    this as a hard error; lintWiring is a linter, so it is reported here as
- *    a warning, once per colliding path group, naming both original paths
- *    and both orbital/page sites.
+ *  - `page-path-duplicate` (retired 2026-09-12 → duplicate of the compiler's
+ *    `ORB_P_DUPLICATE_PATH`, `page.rs::validate_page_path_uniqueness`, which
+ *    already runs the same `:name`-segment normalization as a hard error).
  *  - `relation-field-rendered-raw` (warning) — a table-like pattern's
  *    `columns` entry (`{key|field}`) resolves, through the trait's
  *    `linkedEntity`, to a relation-typed entity field, carries no per-column
@@ -274,8 +137,8 @@
  *    `detail-panel`/`form`/`form-section` would flag the now-healed common
  *    case, not a real gap.
  *  - `plugin-emit-no-host-listener`, `plugin-emit-payload-mismatch`,
- *    `plugin-listen-source-not-host` — CROSS-REGISTRY siblings of
- *    `listens-source-never-emits`/`payload-starved-route` above, emitted by
+ *    `plugin-listen-source-not-host` — CROSS-REGISTRY siblings of the retired
+ *    `listens-source-never-emits`/`payload-starved-route` classes above, emitted by
  *    `lintPluginWiring` in `plugin-wiring-lint.ts` (a separate export, not a
  *    case in `lintWiring`: this schema is single-orbital, that one is
  *    plugin-schema-vs-N-target-schemas). See that file's header doc for the
@@ -301,8 +164,9 @@ import type {
   Transition,
 } from '@almadar/core';
 import { identityEntityName, identityEntityNames, ownerFieldsFromSchema } from '@almadar/core/mock';
-import { collectBindings, collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, getPatternFieldsContract, isContentBodyPattern, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, SELF_OVERLAY_PATTERN_TYPES, traitDeclaresConfigForward } from '@almadar/core';
-import { collectAsyncResultEvents, collectEffectEmittedEvents, collectFailureEvents, collectFetchSuccessEvents } from '../planner/internal/effect-emits.js';
+import { collectTraitConfigRefAdjacency, collectTraitEmbedAdjacency, eventKeyPropsOf, eventListPropsOf, getPatternFieldsContract, isContentBodyPatternType, isContentMainWriter, isInlineTrait, isValueInputPattern, reduceToOwners, resolvePageContentOwner, isMainSlotRenderUi, isPageReference, traitDeclaresConfigForward } from '@almadar/core';
+import { LIFECYCLE_EVENTS as RuntimeLifecycleEvents } from '@almadar/runtime';
+import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
 import { embedHostsOf } from './click-wiring-audit.js';
 import { traitOrEmbedHostProduces } from './probe-listen-cascades.js';
 
@@ -324,33 +188,15 @@ export type WiringLintSeverity = 'error' | 'warning';
 
 export interface WiringLintFinding {
   check:
-    | 'client-unbound-state-machine'
-    | 'steady-state-no-init-reentry'
-    | 'async-result-deaf-target'
-    | 'failure-arm-missing'
-    | 'failure-arm-renders-nothing'
-    | 'modal-shell-close-deaf'
-    | 'self-overlay-inside-modal-shell'
-    | 'filter-field-never-written'
     | 'groupby-enum-column-gap'
-    | 'listens-source-never-emits'
-    | 'listens-target-unreachable-state'
     | 'listener-affordance-removed-by-config'
-    | 'payload-starved-route'
     | 'unclaimed-main-writer'
-    | 'dead-lifecycle-action'
-    | 'dead-bodiless-action'
-    | 'dead-lifecycle-emit'
-    | 'mutation-affordance-never-persists'
     | 'viewer-stranded'
     | 'embedded-sibling-single-referrer'
     | 'unscoped-owned-entity'
     | 'app-theme-divergent'
-    | 'orbital-config-knob-unforwarded'
     | 'identity-roster-unwritable'
-    | 'navigate-target-undeclared'
     | 'page-absent-from-nav'
-    | 'page-path-duplicate'
     | 'relation-field-rendered-raw'
     | 'plugin-emit-no-host-listener'
     | 'plugin-emit-payload-mismatch'
@@ -480,149 +326,6 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
 }
 
 /**
- * Rendered affordances as `(event, label)` pairs — buttons and action
- * descriptors that carry BOTH a target event and user-visible text.
- *
- * The label is what makes `mutation-affordance-never-persists` safe to run:
- * plenty of arms legitimately only re-fetch or navigate, so the check keys on
- * controls whose own wording promises something durable ("Archive", "Publish").
- * Without that, the rule flags every read-only affordance in the corpus.
- */
-function labelledAffordances(trait: Trait): Array<readonly [string, string]> {
-  const out: Array<readonly [string, string]> = [];
-  const scan = (node: ScanNode): void => {
-    if (node === null || node === undefined) return;
-    if (Array.isArray(node)) {
-      for (const child of node) scan(child);
-      return;
-    }
-    if (typeof node !== 'object') return;
-    const record = asRecordNode(node);
-    const label = record['label'];
-    if (typeof label === 'string' && label.length > 0) {
-      const action = record['action'];
-      if (typeof action === 'string' && action.length > 0) out.push([action, label] as const);
-      const event = record['event'];
-      if (typeof event === 'string' && event.length > 0) out.push([event, label] as const);
-      const patternType = record['type'];
-      if (typeof patternType === 'string') {
-        for (const prop of eventKeyPropsOf(patternType)) {
-          const value = record[prop];
-          if (typeof value === 'string' && value.length > 0) out.push([value, label] as const);
-        }
-      }
-    }
-    for (const value of Object.values(record)) scan(value);
-  };
-  for (const transition of trait.stateMachine?.transitions ?? []) {
-    for (const effect of transition.effects ?? []) {
-      if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
-    }
-  }
-  if (trait.config) scan(trait.config);
-  return out;
-}
-
-/**
- * Every event an arm's own render puts on screen as a control, label or not.
- *
- * This is the confirmation edge. `REQUEST_VOID` renders a confirm dialog whose
- * button fires `CONFIRM_VOID`, and only `CONFIRM_VOID` persists — so a walk
- * that follows emits and listens alone declares the Void button dead when the
- * flow is exactly right. Rendering a control that fires X *is* a way to reach
- * X; the user is the edge.
- */
-function renderedAffordanceEvents(effects: ReadonlyArray<Effect> | undefined): Set<string> {
-  const out = new Set<string>();
-  const scan = (node: ScanNode): void => {
-    if (node === null || node === undefined) return;
-    if (Array.isArray(node)) {
-      for (const child of node) scan(child);
-      return;
-    }
-    if (typeof node !== 'object') return;
-    const record = asRecordNode(node);
-    for (const key of ['action', 'event']) {
-      const value = record[key];
-      if (typeof value === 'string' && value.length > 0) out.add(value);
-    }
-    const patternType = record['type'];
-    if (typeof patternType === 'string') {
-      for (const prop of eventKeyPropsOf(patternType)) {
-        const value = record[prop];
-        if (typeof value === 'string' && value.length > 0) out.add(value);
-      }
-    }
-    for (const value of Object.values(record)) scan(value);
-  };
-  for (const effect of effects ?? []) {
-    if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
-  }
-  return out;
-}
-
-/** `@trait.X` names an arm's render embeds — the control usually lives in X. */
-function embeddedTraitRefs(effects: ReadonlyArray<Effect> | undefined): Set<string> {
-  const out = new Set<string>();
-  const scan = (node: ScanNode): void => {
-    if (node === null || node === undefined) return;
-    if (typeof node === 'string') {
-      if (node.startsWith('@trait.')) out.add(node.slice('@trait.'.length));
-      return;
-    }
-    if (Array.isArray(node)) {
-      for (const child of node) scan(child);
-      return;
-    }
-    if (typeof node !== 'object') return;
-    for (const value of Object.values(asRecordNode(node))) scan(value);
-  };
-  for (const effect of effects ?? []) {
-    if (Array.isArray(effect) && effect[0] === 'render-ui' && effect[2] != null) scan(effect[2]);
-  }
-  return out;
-}
-
-/**
- * Every event an embedded trait can fire — what it declares in `emits`, plus
- * any affordance in its own config.
- *
- * `events { ACTION: CONFIRM_VOID_CLICKED }` on the call site is a RENAME, and
- * resolve has already applied it: the button's `emits` carries the renamed
- * event by the time the lint sees it. So `emits` is the honest source here, not
- * the rename map.
- */
-function configAffordanceEvents(trait: Trait): Set<string> {
-  const out = new Set<string>();
-  const scan = (node: ScanNode): void => {
-    if (node === null || node === undefined) return;
-    if (Array.isArray(node)) {
-      for (const child of node) scan(child);
-      return;
-    }
-    if (typeof node !== 'object') return;
-    const record = asRecordNode(node);
-    for (const key of ['action', 'event']) {
-      const value = record[key];
-      if (typeof value === 'string' && value.length > 0) out.add(value);
-    }
-    const patternType = record['type'];
-    if (typeof patternType === 'string') {
-      for (const prop of eventKeyPropsOf(patternType)) {
-        const value = record[prop];
-        if (typeof value === 'string' && value.length > 0) out.add(value);
-      }
-    }
-    for (const value of Object.values(record)) scan(value);
-  };
-  if (trait.config) scan(trait.config);
-  for (const emit of trait.emits ?? []) {
-    if (typeof emit.event === 'string' && emit.event.length > 0) out.add(emit.event);
-  }
-  return out;
-}
-
-/**
  * Does this `main` body still offer the viewer a way on?
  *
  * JSX hoists every inline component into its own `@trait.InlineXRenderN`, so
@@ -721,8 +424,11 @@ function mainWriteOffersAWayOn(
 /** Mount-time events the runtime fires internally, once per trait, and
  *  deliberately never delivers from the bus (`useTraitStateMachine`
  *  LIFECYCLE_EVENTS — the qualified self-subscription and the bare-cascade
- *  routing both skip them). A rendered affordance targeting one is dead. */
-const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set(['INIT', 'LOAD', '$MOUNT']);
+ *  routing both skip them). The owner is `@almadar/runtime`'s own
+ *  `LIFECYCLE_EVENTS` (`StateMachineCore.ts`), already re-exported and
+ *  consumed by `@almadar/ui` — this set wraps it rather than repeating the
+ *  event names. */
+const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set(RuntimeLifecycleEvents);
 
 /** An action-descriptor array is recognised STRUCTURALLY, not by name: a
  *  config array whose entries are objects carrying an `event` string is what
@@ -848,26 +554,13 @@ function liveProducibleEvents(trait: Trait): Set<string> {
 
 /** Every event the trait can produce, by any declared mechanism — exported
  *  for `probe-listen-cascades.ts`'s "can the source produce it at all" check,
- *  the same oracle this lint's own `listens-source-never-emits` static check
- *  uses, so a probed vs. a statically-linted source never disagree. */
+ *  the same oracle this lint's own `listener-affordance-removed-by-config`
+ *  static check uses, so a probed vs. a statically-linted source never
+ *  disagree. */
 export function producibleEvents(trait: Trait): Set<string> {
   const out = liveProducibleEvents(trait);
   for (const emit of trait.emits ?? []) out.add(emit.event);
   return out;
-}
-
-/** Required payload field names the listener itself declares for `event`
- *  (its own emits-contract entry — the atom idiom declares the contract on
- *  the consuming trait so call sites know what to supply). */
-function requiredContractFields(listener: Trait, event: string): Set<string> {
-  const required = new Set<string>();
-  for (const emit of listener.emits ?? []) {
-    if (emit.event !== event) continue;
-    for (const field of emit.payloadSchema ?? []) {
-      if (field.required === true) required.add(field.name);
-    }
-  }
-  return required;
 }
 
 /** Page-declared trait names plus the transitive `@trait.X` embed closure —
@@ -905,126 +598,6 @@ function clientBoundTraits(orb: Orbital, adjacency: ReadonlyMap<string, Readonly
   return bound;
 }
 
-/** True when this one effect list paints a content-grade body into `main`,
- *  including through `if` branches. Shared by the trait-level writer test and
- *  the per-transition steady-state test. */
-function writesContentMain(effects: ReadonlyArray<Effect> | undefined): boolean {
-  const scanNode = (node: unknown): boolean => {
-    if (!Array.isArray(node)) return false;
-    if (isMainSlotRenderUi(node)) return isContentBodyPattern(node[2]);
-    return node.some(scanNode);
-  };
-  return (effects ?? []).some((effect) => scanNode(effect));
-}
-
-/** True for a {@link RenderUiPayload} that is an actual pattern config —
- *  excludes `null` and `RenderBinding` marker strings (`@…`). Narrows the
- *  union so `.type` is safe to read. */
-function isPatternPayload(payload: RenderUiPayload): payload is AnyPatternConfig {
-  return payload !== null && typeof payload !== 'string';
-}
-
-/** Every `['render-ui', 'modal'|'drawer', payload]` effect anywhere in an
- *  effect list, including through `if` branches — same traversal shape as
- *  {@link writesContentMain}, scoped to the two OVERLAY slots the
- *  `CompiledPortal` shell wraps. Feeds `modal-shell-close-deaf`. */
-function overlaySlotRenderUiPayloads(effects: ReadonlyArray<Effect> | undefined): RenderUiPayload[] {
-  const out: RenderUiPayload[] = [];
-  const scanNode = (node: unknown): void => {
-    if (!Array.isArray(node)) return;
-    if (node[0] === 'render-ui' && (node[1] === 'modal' || node[1] === 'drawer')) {
-      out.push(node[2] as RenderUiPayload);
-      return;
-    }
-    for (const child of node) scanNode(child);
-  };
-  for (const effect of effects ?? []) scanNode(effect);
-  return out;
-}
-
-/** True when `payload` — or ANY pattern node nested inside it (a layout
- *  container's `children`, or any other nested field) — carries `slideOver:
- *  true`: a pattern that self-manages its own overlay chrome. Recurses
- *  through the whole payload tree rather than just the top-level node,
- *  since a self-overlaying pattern usually arrives wrapped in a layout
- *  `Stack` (`overlaySlotRenderUiPayloads` only returns that outer node).
- *  Feeds `self-overlay-inside-modal-shell`. */
-function containsSelfOverlayNode(payload: unknown): boolean {
-  if (payload === null || typeof payload !== 'object') return false;
-  if (Array.isArray(payload)) return payload.some(containsSelfOverlayNode);
-  const record = payload as Readonly<Record<string, unknown>>;
-  if (record['slideOver'] === true) return true;
-  return Object.values(record).some(containsSelfOverlayNode);
-}
-
-/** True when an effect list, anywhere including through `if`/`do`
- *  branches, contains a `render-ui` with a non-null pattern (any slot —
- *  including the `toast` slot, the one feedback surface now that `notify`
- *  is retired sugar for it). Feeds `failure-arm-renders-nothing` — the arm
- *  must actually paint something, not merely exist. */
-function armPaintsSomething(effects: ReadonlyArray<Effect> | undefined): boolean {
-  let paints = false;
-  const scanNode = (node: unknown): void => {
-    if (paints || !Array.isArray(node)) return;
-    if (node[0] === 'render-ui' && node.length >= 3 && node[2] !== null) {
-      paints = true;
-      return;
-    }
-    for (const child of node) scanNode(child);
-  };
-  for (const effect of effects ?? []) scanNode(effect);
-  return paints;
-}
-
-/** Every `['fetch', entityName, { filter, … }]` occurrence anywhere in an
- *  effect list, including through `if` branches, that carries a `filter`
- *  S-expression. Feeds `filter-field-never-written`. */
-function fetchFiltersOf(effects: ReadonlyArray<Effect> | undefined): Array<{ entity: string; filter: SExpr }> {
-  const out: Array<{ entity: string; filter: SExpr }> = [];
-  const scanNode = (node: unknown): void => {
-    if (!Array.isArray(node)) return;
-    if (node[0] === 'fetch' && typeof node[1] === 'string') {
-      const options = node[2];
-      if (options !== null && typeof options === 'object' && !Array.isArray(options)) {
-        const filter = (options as Readonly<{ filter?: SExpr }>).filter;
-        if (filter !== undefined) out.push({ entity: node[1], filter });
-      }
-      return;
-    }
-    for (const child of node) scanNode(child);
-  };
-  for (const effect of effects ?? []) scanNode(effect);
-  return out;
-}
-
-/** Field names referenced as `(object/get @entity <f>)` anywhere in a filter
- *  S-expression — the fetched-entity fields a `fetch`'s `filter` compares
- *  against, regardless of how deep in `and`/`or`/`=` nesting the comparison
- *  sits. `<f>` must be a LITERAL field name: a config-forwarded or
- *  payload-bound field selector (`@config.scopeField`, `?field`) is itself
- *  dynamic — by the time the schema is resolved it may have inlined to
- *  today's call-site value (often `""`, the std-browse `scopeField`/
- *  `initialFilterField` unset default) or stayed a literal `?field`/
- *  `@payload.field` token, and either reads as a bogus "field ''" or
- *  "field '@payload.field'" finding rather than a real one — the same
- *  literal-vs-binding guard `unclaimed-main-writer`'s label check already
- *  applies (`!value.startsWith('@') && !value.startsWith('?')`). */
-function objectGetEntityFields(node: unknown, out: Set<string>): void {
-  if (!Array.isArray(node)) return;
-  if (
-    node[0] === 'object/get' &&
-    node[1] === '@entity' &&
-    typeof node[2] === 'string' &&
-    node[2].length > 0 &&
-    !node[2].startsWith('@') &&
-    !node[2].startsWith('?')
-  ) {
-    out.add(node[2]);
-    return;
-  }
-  for (const child of node) objectGetEntityFields(child, out);
-}
-
 export function lintWiring(schema: OrbitalSchema): WiringLintResult {
   const findings: WiringLintFinding[] = [];
   // Whole-schema embed-host map — `listener-affordance-removed-by-config`
@@ -1032,90 +605,6 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
   // the same contract `probe-listen-cascades.ts` and `click-wiring-audit.ts`
   // already share.
   const embedHosts = embedHostsOf(schema);
-
-  // Schema-wide index for `filter-field-never-written` — cross-orbital
-  // because the persistor that supplies a field routinely lives in a
-  // sibling orbital (the modal + persistor idiom).
-  // `[identity]`-tagged entities are exempt entirely: their rows come from
-  // the auth roster, never a `persist create`/`update` inside the program
-  // (the same fact `identity-roster-unwritable` already encodes for the
-  // whole entity) — "no persist supplies this field" proves nothing for a
-  // roster no persist ever writes AT ALL. Shadowed-copy aware, same as
-  // `identity-roster-unwritable`'s own lookup.
-  const identityNames = new Set(identityEntityNames(schema));
-  const entityDefsByName = new Map<string, OrbitalEntity>();
-  // Entities sharing a `persistent:` collection are the SAME table under
-  // different names (`entityAccessTable`'s collection-inheritance idiom,
-  // `@almadar/core/access/entityAccess.ts` — "36 of 54 app organisms share a
-  // collection this way"): a std-atom's own entity name writes real rows a
-  // sibling organism's differently-named "view" entity (`HubArticle` next to
-  // `Article`, both `[persistent: articles]`) only READS. A persist under
-  // the writer's name must count as supplying the field for every entity
-  // sharing its collection, or every such view entity's filters read as
-  // permanently dead. Same collection-key convention as `entityAccessTable`
-  // — explicit `def.collection` only, never the derived default.
-  const collectionOf = new Map<string, string>();
-  const entitiesByCollection = new Map<string, string[]>();
-  for (const orb of schema.orbitals) {
-    for (const ref of [orb.entity, ...(orb.auxiliaryEntities ?? [])]) {
-      if (typeof ref !== 'object' || ref === null || !('fields' in ref)) continue;
-      const def = ref as OrbitalEntity;
-      if (typeof def.name !== 'string') continue;
-      entityDefsByName.set(def.name, def);
-      if (typeof def.collection === 'string') {
-        collectionOf.set(def.name, def.collection);
-        const mates = entitiesByCollection.get(def.collection) ?? [];
-        mates.push(def.name);
-        entitiesByCollection.set(def.collection, mates);
-      }
-    }
-  }
-  // Fields an explicit object-literal `persist create`/`update` data
-  // argument supplies, per entity. An entity with any BARE data argument
-  // (`@entity`, `@payload.data`, a computed `SExpr[]`) goes into
-  // `anyDataEntities` instead — that call may supply any field, so the whole
-  // entity is exempted rather than contributing specific keys.
-  const writtenFieldsByEntity = new Map<string, Set<string>>();
-  const anyDataEntities = new Set<string>();
-  const notePersistWrite = (entityName: string, data: unknown): void => {
-    if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
-      const set = writtenFieldsByEntity.get(entityName) ?? new Set<string>();
-      for (const key of Object.keys(data as Readonly<Record<string, unknown>>)) set.add(key);
-      writtenFieldsByEntity.set(entityName, set);
-    } else {
-      anyDataEntities.add(entityName);
-    }
-  };
-  const scanForPersistWrites = (node: unknown): void => {
-    if (!Array.isArray(node)) return;
-    if (node[0] === 'persist' && (node[1] === 'create' || node[1] === 'update') && typeof node[2] === 'string') {
-      notePersistWrite(node[2], node[3]);
-    }
-    for (const child of node) scanForPersistWrites(child);
-  };
-  for (const orb of schema.orbitals) {
-    for (const traitRef of orb.traits ?? []) {
-      if (!isInlineTrait(traitRef)) continue;
-      for (const arm of traitRef.stateMachine?.transitions ?? []) {
-        for (const effect of arm.effects ?? []) scanForPersistWrites(effect);
-      }
-    }
-  }
-  /** True when SOME persist for `entityName`, or for another entity sharing
-   *  its `persistent:` collection, supplies `field` — directly, or via a
-   *  bare data argument (may supply anything). The collection-mate lookup
-   *  is what makes a "view" entity's filter provably safe: `HubArticle`
-   *  (`[persistent: articles]`) never sees a `persist create HubArticle`,
-   *  but `Article` — the SAME table under its writer's own name — does. */
-  const fieldSuppliedForEntity = (entityName: string, field: string): boolean => {
-    if (anyDataEntities.has(entityName)) return true;
-    if (writtenFieldsByEntity.get(entityName)?.has(field) === true) return true;
-    const collection = collectionOf.get(entityName);
-    if (collection === undefined) return false;
-    return (entitiesByCollection.get(collection) ?? []).some(
-      (mate) => mate !== entityName && (anyDataEntities.has(mate) || writtenFieldsByEntity.get(mate)?.has(field) === true),
-    );
-  };
 
   for (const orb of schema.orbitals) {
     const traits = new Map<string, Trait>();
@@ -1142,190 +631,6 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     const bound = clientBoundTraits(orb, adjacency);
     const producible = new Map<string, Set<string>>();
     for (const [name, trait] of traits) producible.set(name, producibleEvents(trait));
-
-    // --- client-unbound-state-machine -----------------------------------
-    for (const [name, trait] of traits) {
-      const transitions = trait.stateMachine?.transitions ?? [];
-      if (transitions.length === 0) continue;
-      if (bound.has(name)) continue;
-      const childPages = pages
-        .filter((page) =>
-          (page.traits ?? []).some((pageTrait) => (adjacency.get(name) ?? new Set()).has(pageTrait.ref)),
-        )
-        .map((page) => page.path);
-      findings.push({
-        check: 'client-unbound-state-machine',
-        severity: 'error',
-        orbital: orb.name,
-        trait: name,
-        message:
-          `${name} owns a state machine (${transitions.length} transition(s)) but is in no page decl and no page's ` +
-          `@trait embed closure — the client never binds it, so it can never handle an event in the shipped app`,
-        suggestion:
-          childPages.length > 0
-            ? `add ${name} to the page decl mounting its embedded children (${childPages.join(', ')})`
-            : `add ${name} to the page decl of the page whose traits route events to it`,
-      });
-    }
-
-    // --- dead-lifecycle-action -------------------------------------------
-    for (const [name, trait] of traits) {
-      const actionEvents = collectRenderActionEvents(trait);
-      const descriptorEvents = configItemActionEvents(trait);
-      for (const event of new Set([...actionEvents, ...descriptorEvents])) {
-        if (!LIFECYCLE_EVENTS.has(event)) continue;
-        findings.push({
-          check: 'dead-lifecycle-action',
-          severity: 'error',
-          orbital: orb.name,
-          trait: name,
-          message:
-            `${name} renders an affordance targeting '${event}' — a lifecycle event the runtime never delivers ` +
-            `from the bus, so the control does nothing when clicked`,
-          suggestion:
-            `emit a first-class user event instead; if this is a "back" affordance on a screen that replaced main, ` +
-            `recut the screen as a modal overlay owned by a dedicated overlay trait (the std-realtime-chat ` +
-            `ChatOverlayPanel shape), so dismissing is one (render-ui modal null) and main is never repainted`,
-        });
-      }
-    }
-
-    // --- dead-bodiless-action --------------------------------------------
-    // `get_state_render_effects` re-applies a state's render ONLY in the
-    // no-transition branch, so entering a state BY transition paints exactly
-    // what that arm renders. An arm with no effects at all therefore paints
-    // nothing — the affordance pointing at it is as dead as one targeting INIT,
-    // and the lifecycle check above never sees it.
-    for (const [name, trait] of traits) {
-      if (!bound.has(name)) continue; // an unbound trait's arms never run at all
-      // States this trait actually paints. A lifecycle trait that renders
-      // nothing has no paint to strand, so its effect-less arms are not a
-      // defect — the finding only exists where a screen is left standing.
-      const painted = new Set(
-        (trait.stateMachine?.transitions ?? [])
-          .filter((transition) => (transition.effects ?? []).some((effect) => isMainSlotRenderUi(effect)))
-          .map((transition) => transition.to),
-      );
-      for (const arm of trait.stateMachine?.transitions ?? []) {
-        if (arm.from === arm.to) continue; // a self-transition leaves the current paint standing
-        if ((arm.effects ?? []).length > 0) continue;
-        if (!painted.has(arm.from)) continue;
-        findings.push({
-          check: 'dead-bodiless-action',
-          severity: 'error',
-          orbital: orb.name,
-          trait: name,
-          message:
-            `${name}: '${arm.event}' moves ${arm.from} -> ${arm.to} but carries no effects — the machine leaves ` +
-            `${arm.from} while the screen keeps ${arm.from}'s paint, so every affordance routed here is dead and ` +
-            `the surface now disagrees with the state it is in`,
-          suggestion:
-            `give the arm the body ${arm.to} should show — copy ${arm.to}'s INIT render (and its fetch, if any) ` +
-            `into the arm. An (emit INIT) is not a substitute: the bus never delivers lifecycle events`,
-        });
-      }
-    }
-
-    // --- mutation-affordance-never-persists ------------------------------
-    // A control wired to a real, deliverable event whose arm chain reaches no
-    // `persist`. Neither sibling check can see it: `dead-lifecycle-action`
-    // needs a lifecycle target, `dead-bodiless-action` needs an EMPTY effects
-    // list — these arms have effects, just not durable ones. Verified live 7+
-    // times (std-moderation-rule ARCHIVE_RULE, std-help-{article,category}
-    // PUBLISH/ARCHIVE, std-donation-receipt, std-donor, std-time-tracking ×3),
-    // each a button whose spinner claims to save and does not.
-    //
-    // Deliberately narrow, to stay quiet on the legitimate shapes: only
-    // affordances whose LABEL names a mutation are considered, and an arm that
-    // reaches a persist *transitively* (via an event it emits, within this
-    // trait) counts as persisting.
-    // The chain is ORBITAL-WIDE, not per-trait: the corpus idiom is a modal
-    // emitting SAVE, a sibling persistor `listens { Modal.SAVE -> DO_CREATE }`,
-    // and the persist living on DO_CREATE. A per-trait walk flags every one of
-    // those as dead. So close over emits AND listens across all traits to a
-    // fixpoint, then ask whether the affordance's event reaches a persist.
-    const hasPersist = (effects: ReadonlyArray<Effect> | undefined): boolean =>
-      (effects ?? []).some((e) => Array.isArray(e) && typeof e[0] === 'string' && e[0].startsWith('persist'));
-    const persisting = new Set<string>();
-    for (const [, trait] of traits) {
-      for (const arm of trait.stateMachine?.transitions ?? []) {
-        if (hasPersist(arm.effects)) persisting.add(arm.event);
-      }
-    }
-    for (let pass = 0; pass < 8; pass++) {
-      const before = persisting.size;
-      for (const [, trait] of traits) {
-        // a listens route `Source.EVENT -> LOCAL`: firing EVENT triggers LOCAL
-        for (const listen of trait.listens ?? []) {
-          const local = listen.triggers;
-          if (typeof local === 'string' && persisting.has(local) && typeof listen.event === 'string') {
-            persisting.add(listen.event);
-          }
-        }
-        for (const arm of trait.stateMachine?.transitions ?? []) {
-          if (persisting.has(arm.event)) continue;
-          for (const effect of arm.effects ?? []) {
-            if (!Array.isArray(effect) || effect[0] !== 'emit') continue;
-            const emitted = effect[1];
-            if (typeof emitted === 'string' && persisting.has(emitted)) {
-              persisting.add(arm.event);
-              break;
-            }
-          }
-          if (persisting.has(arm.event)) continue;
-          // …and the confirmation edge: this arm RENDERS a control that fires
-          // an event that persists — directly, or through an embedded
-          // `@trait.X` whose own config carries the action. Without it, every
-          // two-step request -> confirm -> write flow reads as a dead control.
-          const reachable = renderedAffordanceEvents(arm.effects);
-          for (const ref of embeddedTraitRefs(arm.effects)) {
-            const embedded = traits.get(ref);
-            if (embedded) for (const e of configAffordanceEvents(embedded)) reachable.add(e);
-          }
-          for (const rendered of reachable) {
-            if (persisting.has(rendered)) {
-              persisting.add(arm.event);
-              break;
-            }
-          }
-        }
-      }
-      if (persisting.size === before) break;
-    }
-    // Only labels that PROMISE durability. "Cancel"/"Close"/"Back" abort a flow
-    // and are correct with no persist; including them made the first draft of
-    // this check flag 10 controls in one file, all of them fine.
-    // approve/reject/submit/promote added 2026-08-16 (dead-persist-action
-    // promotion): std-timesheet shipped all four as no-op refetches and every
-    // gate stayed green — the verbs promise a durable status write exactly as
-    // hard as "publish" does.
-    const MUTATING_LABEL = /^(archive|publish|unpublish|deactivate|retire|void|revoke|issue|approve|reject|submit|promote)\b/i;
-    for (const [name, trait] of traits) {
-      if (!bound.has(name)) continue;
-      const arms = trait.stateMachine?.transitions ?? [];
-      const seen = new Set<string>();
-      for (const [event, label] of labelledAffordances(trait)) {
-        if (LIFECYCLE_EVENTS.has(event)) continue;           // dead-lifecycle-action owns these
-        if (!MUTATING_LABEL.test(label)) continue;
-        if (!arms.some((a) => a.event === event)) continue;  // unhandled: a different class
-        if (persisting.has(event)) continue;
-        if (seen.has(event)) continue;                        // one finding per control
-        seen.add(event);
-        findings.push({
-          check: 'mutation-affordance-never-persists',
-          severity: 'warning',
-          orbital: orb.name,
-          trait: name,
-          message:
-            `${name}: '${label}' fires '${event}', and no arm reachable from it anywhere in this orbital ` +
-            `persists — the control is delivered and handled, but nothing durable happens, so the change ` +
-            `is lost on reload`,
-          suggestion:
-            `give the arm a (persist create|update|delete …), or route it into the arm that already ` +
-            `persists. A re-fetch is not a save: it re-reads the row the click was supposed to change`,
-        });
-      }
-    }
 
     // --- viewer-stranded ---------------------------------------------------
     // The CONTENT OWNER of a page repaints its own region, on a user-triggered
@@ -1450,93 +755,6 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     }
 
 
-    // --- dead-lifecycle-emit ---------------------------------------------
-    // `(emit INIT)` as a repaint: the client publishes `UI:INIT`
-    // (`createClientEffectHandlers.ts:66`) but nothing subscribes to it — both
-    // the self and bare-cascade subscription loops skip LIFECYCLE_EVENTS
-    // (`useTraitStateMachine.ts:1854,1911`). The arm therefore runs its sets
-    // and paints nothing. The Rust kernel has no such exclusion, so this also
-    // diverges between the two execution paths.
-    for (const [name, trait] of traits) {
-      for (const arm of trait.stateMachine?.transitions ?? []) {
-        for (const effect of arm.effects ?? []) {
-          if (!Array.isArray(effect) || effect[0] !== 'emit') continue;
-          const event = effect[1];
-          if (typeof event !== 'string' || !LIFECYCLE_EVENTS.has(event)) continue;
-          findings.push({
-            check: 'dead-lifecycle-emit',
-            severity: 'error',
-            orbital: orb.name,
-            trait: name,
-            message:
-              `${name}: '${arm.event}' (${arm.from} -> ${arm.to}) emits '${event}' — the client subscribes to no ` +
-              `lifecycle event, so the emit is dropped and whatever it was meant to repaint never renders ` +
-              `(the Rust kernel has no such exclusion, so the two paths also disagree)`,
-            suggestion:
-              `render inline instead: put the body '${event}' would have painted directly in this arm. If the ` +
-              `intent was to re-run a fetch, carry the (fetch …) here too`,
-          });
-        }
-      }
-    }
-
-    // --- steady-state-no-init-reentry ------------------------------------
-    for (const [name, trait] of traits) {
-      const machine = trait.stateMachine;
-      const transitions = machine?.transitions ?? [];
-      if (transitions.length === 0) continue;
-
-      // Only page-mounted traits can strand a user: an unbound trait's dropped
-      // INIT paints nothing either way.
-      if (!bound.has(name)) continue;
-
-      const loadedBy = collectFetchSuccessEvents(transitions);
-      if (loadedBy.size === 0) continue;
-
-      // `from: '*'` is a legal state name in the IR's transition contract and
-      // means "any state", so one wildcard INIT covers every steady state.
-      if (transitions.some((t) => t.event === 'INIT' && t.from === '*')) continue;
-
-      const initialState = machine?.states?.find((state) => state.isInitial)?.name;
-      const statesWithInit = new Set(
-        transitions.filter((t) => t.event === 'INIT').map((t) => t.from),
-      );
-
-      // The stranded surface has to be a content body in `main`: a state that
-      // paints only chrome (or nothing) has no spinner to hang on.
-      const contentStates = new Set(
-        transitions
-          .filter((t) => writesContentMain(t.effects))
-          // Effects paint on the way IN, so the body belongs to the target state.
-          .map((t) => t.to),
-      );
-
-      const loadedStates = new Set(
-        transitions.filter((t) => loadedBy.has(t.event)).map((t) => t.to),
-      );
-
-      for (const state of loadedStates) {
-        if (!contentStates.has(state)) continue;
-        // The initial state's own INIT is what performed the load.
-        if (state === initialState) continue;
-        if (statesWithInit.has(state)) continue;
-        findings.push({
-          check: 'steady-state-no-init-reentry',
-          severity: 'warning',
-          orbital: orb.name,
-          trait: name,
-          message:
-            `${name} settles in '${state}' after a fetch succeeds, but '${state}' handles no INIT — on a page revisit ` +
-            `the server machine is already resting there and drops the client's re-INIT, so the surface hangs on its spinner`,
-          suggestion:
-            `add an INIT re-entry to '${state}' in ${name} that re-fetches and RE-ENTERS '${state}' ` +
-            `without repainting a loading body — the shape std-browse uses. Copying the loading ` +
-            `state's INIT verbatim reintroduces the flicker: '${state}' already holds rendered ` +
-            `content, so a skeleton render unmounts it on every revisit`,
-        });
-      }
-    }
-
     // --- embedded-sibling-single-referrer ---------------------------------
     // Invert the embed adjacency: every child must have exactly one referrer.
     // The pull materialises per embedder on both paths, so a second referrer
@@ -1575,236 +793,6 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
           `declare ${child} once per embedder (the sibling pull does exactly this for imported atoms), or move ` +
           `the forwarded knobs to literals so the render no longer depends on which trait embeds it`,
       });
-    }
-
-    // --- async-result-deaf-target -----------------------------------------
-    for (const [name, trait] of traits) {
-      const transitions = trait.stateMachine?.transitions ?? [];
-      if (transitions.length === 0) continue;
-      const handledIn = (state: string): Set<string> =>
-        new Set(transitions.filter((t) => t.from === state || t.from === '*').map((t) => t.event));
-      for (const transition of transitions) {
-        if (transition.from === transition.to) continue;
-        const results = collectAsyncResultEvents(transition.effects ?? []);
-        if (results.size === 0) continue;
-        const handled = handledIn(transition.to);
-        const deaf = [...results].filter((event) => !handled.has(event));
-        if (deaf.length === 0) continue;
-        findings.push({
-          check: 'async-result-deaf-target',
-          severity: 'warning',
-          orbital: orb.name,
-          trait: name,
-          message:
-            `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' fires a fetch/persist whose ` +
-            `result event(s) ${deaf.map((e) => `'${e}'`).join(', ')} are not handled in '${transition.to}' — the ` +
-            `cascade lands on a deaf state and the machine wedges there`,
-          suggestion:
-            `handle ${deaf.map((e) => `'${e}'`).join(', ')} in '${transition.to}' (mirror the arms the source state ` +
-            `declares for them), or route the effect's emit to an event '${transition.to}' already handles`,
-        });
-      }
-    }
-
-    // --- listens-target-unreachable-state -----------------------------------
-    // A cross-trait `listens { Source.EVENT -> triggers }` can fire while the
-    // listening trait sits in ANY of its own declared states — unlike a
-    // same-trait dispatch, there's no single known `from` to check reachability
-    // against. `triggers` is genuinely unreachable only when NO state the
-    // trait can ever be in (its own declared states, `handledIn` unioned
-    // across all of them — which already folds in wildcard `*`-sourced arms)
-    // has an arm for it: the cascade lands with nothing to receive it,
-    // wherever the trait happened to be.
-    for (const [name, trait] of traits) {
-      const transitions = trait.stateMachine?.transitions ?? [];
-      const states = trait.stateMachine?.states ?? [];
-      if (transitions.length === 0 || states.length === 0) continue;
-      const handledIn = (state: string): Set<string> =>
-        new Set(transitions.filter((t) => t.from === state || t.from === '*').map((t) => t.event));
-      const everHandled = new Set<string>();
-      for (const state of states) {
-        for (const event of handledIn(state.name)) everHandled.add(event);
-      }
-      for (const listen of trait.listens ?? []) {
-        if (typeof listen.triggers !== 'string' || listen.triggers.length === 0) continue;
-        if (everHandled.has(listen.triggers)) continue;
-        findings.push({
-          check: 'listens-target-unreachable-state',
-          severity: 'warning',
-          orbital: orb.name,
-          trait: name,
-          message:
-            `${name} listens for '${listen.event}' -> '${listen.triggers}', but no state ${name} can be in has ` +
-            `an arm for '${listen.triggers}' — the cascade lands with nothing to receive it`,
-          suggestion:
-            `add a '${listen.triggers}' arm reachable from every state ${name} can be in (or from '*'), or point ` +
-            `the listen at an event ${name} actually handles`,
-        });
-      }
-    }
-
-    // --- failure-arm-missing / failure-arm-renders-nothing -----------------
-    // The FAILURE-specific pair `async-result-deaf-target` doesn't
-    // distinguish: that check only asks whether SOME arm (success or
-    // failure) handles the result event. Scoped to client-bound traits only
-    // — an unbound trait's arms never mount, so nothing is "rendered" there
-    // either way.
-    for (const [name, trait] of traits) {
-      if (!bound.has(name)) continue;
-      const transitions = trait.stateMachine?.transitions ?? [];
-      if (transitions.length === 0) continue;
-      const armsIn = (state: string): Transition[] =>
-        transitions.filter((t) => t.from === state || t.from === '*');
-      for (const transition of transitions) {
-        const failureEvents = collectFailureEvents(transition.effects ?? []);
-        if (failureEvents.size === 0) continue;
-        const armsAtTarget = armsIn(transition.to);
-        for (const failureEvent of failureEvents) {
-          const handlingArms = armsAtTarget.filter((t) => t.event === failureEvent);
-          if (handlingArms.length === 0) {
-            findings.push({
-              check: 'failure-arm-missing',
-              severity: 'error',
-              orbital: orb.name,
-              trait: name,
-              message:
-                `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' declares emit.failure ` +
-                `'${failureEvent}', but no arm in '${transition.to}' (or '*') handles it — a failed write has ` +
-                `nowhere to land`,
-              suggestion:
-                `add '${failureEvent} -> <state> (render-ui toast ...)' (or any render-ui into a visible slot) in ` +
-                `'${transition.to}'`,
-            });
-            continue;
-          }
-          if (handlingArms.some((t) => armPaintsSomething(t.effects))) continue;
-          findings.push({
-            check: 'failure-arm-renders-nothing',
-            severity: 'warning',
-            orbital: orb.name,
-            trait: name,
-            message:
-              `${name}: '${transition.to} + ${failureEvent}' handles the declared failure route from ` +
-              `'${transition.from} + ${transition.event}' but its effects render nothing — ` +
-              `the failure is absorbed silently`,
-            suggestion:
-              `paint a toast (render-ui toast, or any render-ui into a visible slot) in the '${failureEvent}' arm ` +
-              `so the failure reaches the user`,
-          });
-        }
-      }
-    }
-
-    // --- modal-shell-close-deaf ---------------------------------------------
-    // Only a render into an OVERLAY slot (`modal`/`drawer`) whose pattern is
-    // NOT self-overlaying gets `UISlotRenderer`'s `CompiledPortal` shell — see
-    // `SELF_OVERLAY_PATTERN_TYPES` (`@almadar/core`). That shell's X / Escape /
-    // overlay-click dismiss emits `CLOSE` then `CANCEL`; a target state
-    // handling neither leaves the control dead.
-    for (const [name, trait] of traits) {
-      if (!bound.has(name)) continue; // an unbound trait's shell never mounts
-      const transitions = trait.stateMachine?.transitions ?? [];
-      if (transitions.length === 0) continue;
-      const handledIn = (state: string): Set<string> =>
-        new Set(transitions.filter((t) => t.from === state || t.from === '*').map((t) => t.event));
-      for (const transition of transitions) {
-        const shellWrapped = overlaySlotRenderUiPayloads(transition.effects)
-          .filter(isPatternPayload)
-          .filter((payload) => !SELF_OVERLAY_PATTERN_TYPES.has(payload.type));
-        if (shellWrapped.length === 0) continue;
-        const handled = handledIn(transition.to);
-        if (handled.has('CLOSE') || handled.has('CANCEL')) continue;
-        findings.push({
-          check: 'modal-shell-close-deaf',
-          severity: 'warning',
-          orbital: orb.name,
-          trait: name,
-          message:
-            `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' renders '${shellWrapped[0]?.type}' ` +
-            `into the overlay slot, but '${transition.to}' handles neither CLOSE nor CANCEL — the slot shell's X / ` +
-            `Escape / overlay-click emits UI:${orb.name}.${name}.CLOSE then .CANCEL, and with no arm for either the ` +
-            `dismiss control does nothing`,
-          suggestion:
-            `add \`CLOSE -> ${transition.to} (render-ui modal null)\` or \`CANCEL -> ${transition.to} (render-ui modal null)\`, ` +
-            `or render a 'modal'/'confirm-dialog' pattern instead so the content paints its own chrome and the slot ` +
-            `shell adds none`,
-        });
-      }
-    }
-
-    // --- self-overlay-inside-modal-shell -------------------------------------
-    // The inverse defect from `modal-shell-close-deaf`: a pattern that
-    // manages its OWN overlay chrome (declares `slideOver: true` — today
-    // only `DetailPanel`'s own slide-over mode, not a named-pattern special
-    // case: any pattern carrying this prop true self-manages its overlay)
-    // rendered into `modal`/`drawer` ANYWHERE in the payload tree (a
-    // `DetailPanel` nested inside a layout `Stack`, the shape
-    // `overlaySlotRenderUiPayloads` alone doesn't see since it only returns
-    // the top-level payload). `UISlotRenderer` only skips its
-    // `CompiledPortal` wrap for `SELF_OVERLAY_PATTERN_TYPES` members
-    // (`modal`/`confirm-dialog`) — a self-overlaying pattern outside that
-    // set still gets wrapped, so the render ends up with TWO overlay
-    // chromes stacked (the generic shell's backdrop/dismiss plus the
-    // pattern's own) — live in the corpus (`std-blaz-klemenc`'s exercise/
-    // photos DetailPanels, rendered into `modal` with `slideOver: true`).
-    for (const [name, trait] of traits) {
-      if (!bound.has(name)) continue; // an unbound trait's shell never mounts
-      for (const transition of trait.stateMachine?.transitions ?? []) {
-        for (const payload of overlaySlotRenderUiPayloads(transition.effects)) {
-          if (!containsSelfOverlayNode(payload)) continue;
-          findings.push({
-            check: 'self-overlay-inside-modal-shell',
-            severity: 'warning',
-            orbital: orb.name,
-            trait: name,
-            message:
-              `${name}: '${transition.from} + ${transition.event} -> ${transition.to}' renders a self-overlaying ` +
-              `pattern (\`slideOver: true\`) into the overlay slot — the pattern paints its own chrome AND the slot ` +
-              `shell's \`CompiledPortal\` wraps it again (it isn't a SELF_OVERLAY_PATTERN_TYPES member), producing ` +
-              `two stacked overlays`,
-            suggestion:
-              `set \`slideOver: false\` (or drop the prop) so the slot shell is the only chrome, or move this render ` +
-              `into \`main\`/another non-overlay slot where the pattern's own overlay mode is the only one painted`,
-          });
-        }
-      }
-    }
-
-    // --- filter-field-never-written ------------------------------------------
-    // A fetch filtered on a field no persist anywhere ever writes can never
-    // match a real row. See the header doc block for the exact predicate
-    // (declared-with-default/@intrinsic, any bare persist data argument, and
-    // an unresolved fetched entity all keep this silent).
-    for (const [name, trait] of traits) {
-      if (!bound.has(name)) continue;
-      for (const transition of trait.stateMachine?.transitions ?? []) {
-        for (const { entity: fetchedEntity, filter } of fetchFiltersOf(transition.effects)) {
-          if (identityNames.has(fetchedEntity)) continue; // [identity] roster — rows come from outside the program
-          const entityDef = entityDefsByName.get(fetchedEntity);
-          if (entityDef === undefined) continue; // unresolved entity — cannot prove absence, stay quiet
-          const fields = new Set<string>();
-          objectGetEntityFields(filter, fields);
-          if (fields.size === 0) continue;
-          for (const field of fields) {
-            if (fieldSuppliedForEntity(fetchedEntity, field)) continue;
-            const declared = (entityDef.fields ?? []).find((f) => f.name === field);
-            if (declared !== undefined && (declared.default !== undefined || declared.intrinsic === true)) continue;
-            findings.push({
-              check: 'filter-field-never-written',
-              severity: 'warning',
-              orbital: orb.name,
-              trait: name,
-              message:
-                `${name} fetches ${fetchedEntity} filtered on \`${field}\`, but no \`persist create\`/\`update\` of ` +
-                `${fetchedEntity} anywhere in the schema supplies \`${field}\`${declared === undefined ? ' (not even a declared field)' : ''} — ` +
-                `the filter can never match a real row, so the fetch always returns empty`,
-              suggestion:
-                `supply \`${field}\` in the \`persist create\`/\`update ${fetchedEntity}\` data that produces the rows ` +
-                `this filter targets, or drop \`${field}\` from the filter if it is dead`,
-            });
-          }
-        }
-      }
     }
 
     // --- groupby-enum-column-gap ------------------------------------------
@@ -1926,7 +914,13 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     // (detail-panel-back-in-actions retired 2026-08-21 — the temporary
     // migration aid burned down to 0 corpus-wide in the UX campaign.)
 
-    // --- listens-source-never-emits + payload-starved-route --------------
+    // --- listener-affordance-removed-by-config ------------------------
+    // A `listens { A.EVENT -> X }` route whose source trait/event pair is
+    // unresolved (missing source trait, or the event genuinely unproduced)
+    // is the compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED`
+    // (`listens-source-never-emits`, retired 2026-09-12) — this walk only
+    // needs to skip those shapes to reach the ones IT owns: a source that
+    // resolves in CONTRACT but has been silenced at THIS call site.
     for (const [listenerName, listener] of traits) {
       for (const listen of listener.listens ?? []) {
         const source = listen.source;
@@ -1934,44 +928,10 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
         const sourceName = source.trait;
         if (typeof sourceName !== 'string') continue;
         const sourceTrait = traits.get(sourceName);
-        if (sourceTrait === undefined) {
-          // A declared REF-trait source exists; its producibility is behind
-          // the unresolved ref and not statically decidable here — skip, do
-          // not report a phantom missing-source (composed-schema false
-          // positive class, G-REPAIR-RESET-1 round 3).
-          if (declaredTraitNames.has(sourceName)) continue;
-          findings.push({
-            check: 'listens-source-never-emits',
-            severity: 'error',
-            orbital: orb.name,
-            trait: listenerName,
-            message: `listens route ${sourceName}.${listen.event} -> ${listen.triggers}: source trait ${sourceName} does not exist in orbital ${orb.name}`,
-            suggestion: `point the listens route at the trait that actually emits ${listen.event}`,
-          });
-          continue;
-        }
+        if (sourceTrait === undefined) continue;
         const sourceEvents = producible.get(sourceName) ?? new Set<string>();
-        if (!sourceEvents.has(listen.event)) {
-          const candidates = [...traits.entries()]
-            .filter(([, candidate]) => producibleEvents(candidate).has(listen.event))
-            .map(([candidateName]) => candidateName);
-          findings.push({
-            check: 'listens-source-never-emits',
-            severity: 'error',
-            orbital: orb.name,
-            trait: listenerName,
-            message:
-              `listens route ${sourceName}.${listen.event} -> ${listen.triggers}: ${sourceName} never produces ` +
-              `${listen.event} (not in its emits contract, effects, or rendered affordances) — the route is dead`,
-            suggestion:
-              candidates.length > 0
-                ? `rewire to the actual emitter: ${candidates.map((candidate) => `${candidate}.${listen.event}`).join(' or ')}`
-                : `no trait in ${orb.name} produces ${listen.event} — add the affordance or drop the route`,
-          });
-          continue;
-        }
+        if (!sourceEvents.has(listen.event)) continue;
 
-        // --- listener-affordance-removed-by-config ------------------------
         // sourceEvents.has(listen.event) is true here (the block above
         // already continued on the miss), so the CONTRACT permits sourceName
         // to produce listen.event. `sourceEvents` is `producibleEvents`,
@@ -1995,38 +955,6 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
               `call site produces it — a config override (e.g. itemActions/browseItemActions narrowed) likely ` +
               `removed the only producer`,
             suggestion: `restore ${listen.event} to ${sourceName}'s active affordance config, or drop the ${listenerName} route if the removal is intentional`,
-          });
-        }
-
-        const required = requiredContractFields(listener, listen.triggers);
-        if (required.size === 0) continue;
-        const supplied = suppliedPayloadFields(sourceTrait, listen.event);
-        if (supplied === 'runtime-forwarded') continue;
-        // payloadMapping is {targetField: SExpr} — every value is evaluated
-        // against the source payload (core `applyListenPayloadMapping`). A
-        // value reads the source only through its `@payload.<field>` bindings:
-        // none at all is a literal or a self-contained computation and supplies
-        // the field unconditionally; otherwise every field it reads must itself
-        // be supplied, or the expression evaluates over a hole.
-        const mapped = new Set(supplied);
-        for (const [toField, expr] of Object.entries(listen.payloadMapping ?? {})) {
-          const reads = collectBindings(expr)
-            .filter((b) => b.startsWith('@payload.'))
-            .map((b) => b.slice('@payload.'.length));
-          if (reads.every((field) => supplied.has(field))) mapped.add(toField);
-        }
-        const missing = [...required].filter((field) => !mapped.has(field));
-        if (missing.length > 0) {
-          findings.push({
-            check: 'payload-starved-route',
-            severity: 'error',
-            orbital: orb.name,
-            trait: listenerName,
-            message:
-              `route ${sourceName}.${listen.event} -> ${listen.triggers}: ${listenerName} requires ` +
-              `{${missing.join(', ')}} but ${sourceName}'s declared emit sites for ${listen.event} supply ` +
-              `{${[...supplied].join(', ') || 'nothing'}} — the affordance is payload-starved and can never satisfy the contract`,
-            suggestion: `emit ${listen.event} from a row-scoped affordance (itemActions supplies {id, row} natively) or add the missing fields to the emit payload`,
           });
         }
       }
@@ -2235,108 +1163,6 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     }
   }
 
-  // --- orbital-config-knob-unforwarded --------------------------------------
-  // §4.5's declared config surface: an orbital-level `Orbital.config` or
-  // app-level `OrbitalSchema.config` knob is PUBLISHED only when some trait
-  // forwards it — a `config[<key>].default` equal to the literal string
-  // `@config.<knob>` (no dotted tail; a `@config.<knob>.<path>` default reads
-  // a sibling's own forward, not a declaration of THIS knob — the same
-  // `CONFIG_FORWARD_RE` grammar `traitDeclaresConfigForward`
-  // (`@almadar/core`) already tests). A declared knob nothing forwards is a
-  // live wire terminating in nothing: an importer can set it
-  // (`uses … { config { … } }` / the orbital's own `config { … }` override)
-  // and no trait ever reads the value. `ORB_O_CONFIG_DEAD_KNOB` is this
-  // rule's compiled-path twin — a hard error there, since the compiler has
-  // no warning severity; this is the runtime-side mirror. Forwarders are
-  // collected across the WHOLE schema, not just the declaring orbital — a
-  // knob can be forwarded by a trait pulled in from another orbital, matching
-  // the compiler's post-flatten walk.
-  //
-  // The L2 inline phase (and the runtime resolver) COLLAPSE a forward down to
-  // its resolved value before this lint ever sees the schema, so on an
-  // already-resolved schema the literal `@config.<knob>` token is gone from
-  // `default` — only the field's `forwardedFrom` provenance still names the
-  // knob it came from. `forwardsKnob` tests both shapes so this check reports
-  // the same result pre- and post-resolve.
-  // A knob name from a `@config.<knob>` token; a dotted tail names a
-  // sibling's own forward, not a declaration of `<knob>`.
-  const forwardedKnob = (token: unknown): string | undefined => {
-    if (typeof token !== 'string' || !token.startsWith('@config.')) return undefined;
-    const knob = token.slice('@config.'.length);
-    return knob.length > 0 && !knob.includes('.') ? knob : undefined;
-  };
-  const fieldForwardTokens = (field: unknown): unknown[] => {
-    if (typeof field !== 'object' || field === null) return [];
-    const { default: defaultValue, forwardedFrom } = field as { default?: unknown; forwardedFrom?: unknown };
-    return [defaultValue, forwardedFrom];
-  };
-  // Every knob some trait publishes: direct trait forwards, closed over
-  // orbital-level knobs whose `forwardedFrom` chains further out — an
-  // imported orbital's knob the consumer folded from its own app knob
-  // publishes that app knob through whichever trait forwards the orbital knob
-  // (the compiler's `published_knobs`, `validation/orbital_config.rs`).
-  const published = new Set<string>();
-  for (const orb of schema.orbitals) {
-    for (const trait of orb.traits ?? []) {
-      if (!isInlineTrait(trait)) continue;
-      const config = trait.config as Record<string, unknown> | undefined;
-      if (!config) continue;
-      for (const field of Object.values(config)) {
-        for (const token of fieldForwardTokens(field)) {
-          const knob = forwardedKnob(token);
-          if (knob !== undefined) published.add(knob);
-        }
-      }
-    }
-  }
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const orb of schema.orbitals) {
-      for (const [name, field] of Object.entries(orb.config ?? {})) {
-        if (!published.has(name)) continue;
-        const root = forwardedKnob((field as { forwardedFrom?: unknown }).forwardedFrom);
-        if (root !== undefined && !published.has(root)) {
-          published.add(root);
-          grew = true;
-        }
-      }
-    }
-  }
-  const isKnobForwarded = (knob: string): boolean => published.has(knob);
-  for (const orb of schema.orbitals) {
-    for (const knob of Object.keys(orb.config ?? {})) {
-      if (isKnobForwarded(knob)) continue;
-      findings.push({
-        check: 'orbital-config-knob-unforwarded',
-        severity: 'warning',
-        orbital: orb.name,
-        trait: orb.name,
-        message:
-          `Orbital "${orb.name}" declares config knob "${knob}" but no trait forwards ` +
-          `@config.${knob} — the knob is dead (an importer can set it, nothing reads it)`,
-        suggestion:
-          `forward it from the trait that should publish it (config { ${knob}: @config.${knob} }) ` +
-          `or delete the declaration`,
-      });
-    }
-  }
-  for (const knob of Object.keys(schema.config ?? {})) {
-    if (isKnobForwarded(knob)) continue;
-    findings.push({
-      check: 'orbital-config-knob-unforwarded',
-      severity: 'warning',
-      orbital: schema.name,
-      trait: schema.name,
-      message:
-        `App "${schema.name}" declares config knob "${knob}" but no trait forwards ` +
-        `@config.${knob} — the knob is dead (an importer can set it, nothing reads it)`,
-      suggestion:
-        `forward it from the trait that should publish it (config { ${knob}: @config.${knob} }) ` +
-        `or delete the declaration`,
-    });
-  }
-
   // --- identity-roster-unwritable ------------------------------------------
   // The `[identity]` entity is the app's persona roster. A roster no
   // transition ever `persist`s (create, update, OR delete) has no write
@@ -2406,99 +1232,12 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
     }
   }
 
-  // --- navigate-target-undeclared -------------------------------------------
-  // The declared-path universe is the WHOLE app: a navigate target routinely
-  // points at a page owned by a sibling orbital (an AppLayout's cross-feature
-  // links), so this is cross-orbital, unlike the per-orb checks above.
-  const allPages = schema.orbitals.flatMap((orb) => inlinePages(orb));
-  const pathSegments = (path: string): string[] => path.split('/').filter((segment) => segment.length > 0);
-  // The prefix a `str/concat`-built target can be compared against: a page's
-  // path with its trailing `:param` segment stripped (only a TRAILING param
-  // segment — a mid-path param like "/contacts/:id/edit" has no such prefix).
-  const paramStrippedPrefix = (path: string): string | undefined => {
-    const segments = pathSegments(path);
-    const last = segments[segments.length - 1];
-    if (last === undefined || !last.startsWith(':')) return undefined;
-    return `/${segments.slice(0, -1).join('/')}/`;
-  };
-  const isPathDeclared = (target: string): boolean => {
-    const targetSegments = pathSegments(target);
-    return allPages.some((page) => {
-      const pageSegments = pathSegments(page.path);
-      if (pageSegments.length !== targetSegments.length) return false;
-      return pageSegments.every(
-        (segment, i) =>
-          segment === targetSegments[i] || segment.startsWith(':') || targetSegments[i]!.startsWith(':'),
-      );
-    });
-  };
-  const isPrefixDeclared = (prefix: string): boolean => {
-    const normalized = prefix.endsWith('/') ? prefix : `${prefix}/`;
-    return allPages.some((page) => {
-      const stripped = paramStrippedPrefix(page.path);
-      return (
-        stripped !== undefined &&
-        (normalized === stripped || normalized.startsWith(stripped) || stripped.startsWith(normalized))
-      );
-    });
-  };
-  type NavigateTarget = { kind: 'literal' | 'prefix'; value: string };
-  const collectNavigateTargets = (node: unknown, out: NavigateTarget[]): void => {
-    if (!Array.isArray(node)) return;
-    if (node[0] === 'navigate') {
-      const target = node[1];
-      if (
-        typeof target === 'string' &&
-        target.length > 0 &&
-        !target.startsWith('@') &&
-        !target.startsWith('?') &&
-        !/^https?:\/\//.test(target)
-      ) {
-        out.push({ kind: 'literal', value: target });
-      } else if (
-        Array.isArray(target) &&
-        target[0] === 'str/concat' &&
-        typeof target[1] === 'string' &&
-        target[1].startsWith('/')
-      ) {
-        out.push({ kind: 'prefix', value: target[1] });
-      }
-    }
-    for (const child of node) collectNavigateTargets(child, out);
-  };
-  for (const orb of schema.orbitals) {
-    for (const trait of orb.traits ?? []) {
-      if (!isInlineTrait(trait)) continue;
-      const seen = new Set<string>();
-      for (const arm of trait.stateMachine?.transitions ?? []) {
-        const targets: NavigateTarget[] = [];
-        for (const effect of arm.effects ?? []) collectNavigateTargets(effect, targets);
-        for (const target of targets) {
-          const declared = target.kind === 'literal' ? isPathDeclared(target.value) : isPrefixDeclared(target.value);
-          if (declared) continue;
-          const dedupeKey = `${target.kind}:${target.value}`;
-          if (seen.has(dedupeKey)) continue;
-          seen.add(dedupeKey);
-          findings.push({
-            check: 'navigate-target-undeclared',
-            severity: 'warning',
-            orbital: orb.name,
-            trait: trait.name,
-            message:
-              `${trait.name} navigates to '${target.value}' but no page in this app declares that path (or its ` +
-              `parameterized prefix) — the affordance is structurally wired but lands on a 404`,
-            suggestion: `declare a page at '${target.value}', or point the navigate effect at an existing page path`,
-          });
-        }
-      }
-    }
-  }
-
   // --- page-absent-from-nav ---------------------------------------------
   // `href` extraction reuses the same structural descriptor-array parse
   // `descriptorEvents` already applies to `itemActions`: any array whose
   // entries are objects carrying the field counts, regardless of which
   // trait/config key holds it — no hardcoded `navItems` name list.
+  const pathSegments = (path: string): string[] => path.split('/').filter((segment) => segment.length > 0);
   const navHrefs = new Set<string>();
   const collectHrefs = (node: unknown): void => {
     if (node === null || node === undefined) return;
@@ -2546,47 +1285,6 @@ export function lintWiring(schema: OrbitalSchema): WiringLintResult {
         });
       }
     }
-  }
-
-  // --- page-path-duplicate ------------------------------------------------
-  // JS twin of the compiler's page-path uniqueness owner
-  // (`orbital-compiler/src/phases/validation/page.rs::normalize_page_path` +
-  // `validate_page_path_uniqueness`, wired via `ctx.merge` in
-  // `validate_all_pages`, code `ORB_P_DUPLICATE_PATH`): collapse every
-  // `:name` segment to a bare `:` so `/x/:id` and `/x/:slug` collide at
-  // dispatch regardless of the param's name — a router can't tell them
-  // apart. Cross-orbital, like `navigate-target-undeclared`/`allPages`
-  // above: two orbitals' pages share one app router. The compiler owns this
-  // as an ERROR; lintWiring is a linter, so this fires as a warning.
-  const normalizePagePath = (path: string): string =>
-    path
-      .split('/')
-      .map((segment) => (segment.startsWith(':') ? ':' : segment))
-      .join('/');
-  const pagesByNormalizedPath = new Map<string, { orbital: string; page: string; path: string }[]>();
-  for (const orb of schema.orbitals) {
-    for (const page of inlinePages(orb)) {
-      const key = normalizePagePath(page.path);
-      const bucket = pagesByNormalizedPath.get(key) ?? [];
-      bucket.push({ orbital: orb.name, page: page.name, path: page.path });
-      pagesByNormalizedPath.set(key, bucket);
-    }
-  }
-  for (const [normalized, entries] of pagesByNormalizedPath) {
-    if (entries.length < 2) continue;
-    const first = entries[0]!;
-    const originals = entries.map((entry) => `'${entry.path}'`).join(' and ');
-    const sites = entries.map((entry) => `${entry.orbital}.${entry.page}`).join(' and ');
-    findings.push({
-      check: 'page-path-duplicate',
-      severity: 'warning',
-      orbital: first.orbital,
-      trait: first.page,
-      message:
-        `page paths ${originals} (declared on ${sites}) normalize to the same dispatch shape '${normalized}' — ` +
-        `two routes that only differ by a param NAME still collide at dispatch`,
-      suggestion: 'give each page a distinct path shape, or merge the pages if they are meant to be one route',
-    });
   }
 
   const errors = findings.filter((finding) => finding.severity === 'error').length;

@@ -27,6 +27,8 @@ export interface ReportInput {
    * Default 0 (caller didn't supply the schema count).
    */
   schemaTransitions?: number;
+  /** Per trait, the events its own effects fire — forwarded to `coverage()`. */
+  effectEmittedByTrait?: ReadonlyMap<string, ReadonlySet<string>>;
   /**
    * The schema's transition coverage bases (`${trait}:${from}+${event}->${to}`)
    * — one per declared transition. When supplied, `coverage()` reports the
@@ -54,7 +56,7 @@ export interface ReportInput {
 export function report(input: ReportInput): ReportShape {
   const { itemName, frames, plan, verdicts } = input;
 
-  const cov = coverage(frames, plan, input.schemaTransitions ?? 0, input.schemaTransitionKeys);
+  const cov = coverage(frames, plan, input.schemaTransitions ?? 0, input.schemaTransitionKeys, input.effectEmittedByTrait);
 
   const errors: string[] = [];
   const warnings: string[] = [];

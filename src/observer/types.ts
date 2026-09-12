@@ -178,6 +178,11 @@ export interface ReportShape {
     portalPerStep?: Verdict;
     binding?: Verdict;
     refTrait?: Verdict;
+    /**
+     * Every planned bus dispatch the runtime rejected (`accepted === false`
+     * outside the guard-fail / malformed variants) — `transition-not-fired`.
+     */
+    walk?: Verdict;
     /** VG3 — one verdict per click-path sample, combined. */
     clickPath?: Verdict;
     /** Phase 4c — one verdict per contract emit, combined. */
@@ -261,9 +266,10 @@ export interface ReportShape {
      */
     transientArmUnreachable?: Verdict;
     /**
-     * `listens-edge-never-fired` — the runtime twin of the static
-     * `listens-source-never-emits` lint: a declared listens route whose
-     * source fired ≥2 times this session but the listening trait's own
+     * `listens-edge-never-fired` — the runtime twin of the compiler's
+     * `ORB_X_LISTEN_SOURCE_UNRESOLVED` (the static `listens-source-never-emits`
+     * lint duplicated and was retired 2026-09-12): a declared listens route
+     * whose source fired ≥2 times this session but the listening trait's own
      * `triggers` transition was never observed firing — wired on paper,
      * dead in practice.
      */

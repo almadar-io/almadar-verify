@@ -217,3 +217,88 @@ describe('planGuardPreconditionPreamble (C1-V15 item A)', () => {
     expect(result).toEqual({});
   });
 });
+
+/**
+ * The chat composer shape (efficacy fixture `chat/good`): `SEND -> ready when
+ * (and @entity.activeChannel (not (= (str/default @entity.draft "") "")))`.
+ * INIT writes `activeChannel` (a literal — the hermetic boot establishes it
+ * for free); only `draft` needs a setter, and `DRAFT_CHANGED` is the
+ * same-trait self-loop that writes it from `@payload.value`.
+ */
+function composerSchema(setterWritesDraft: boolean): { schema: OrbitalSchema; composer: Trait } {
+  const composer: Trait = {
+    name: 'ChatComposer',
+    scope: 'instance',
+    linkedEntity: 'ChatMessage',
+    stateMachine: {
+      states: [{ name: 'ready', isInitial: true }],
+      events: [
+        { key: 'INIT', name: 'Init' },
+        { key: 'DRAFT_CHANGED', name: 'Draft Changed', payloadSchema: [{ name: 'value', type: 'string' }] },
+        { key: 'SEND', name: 'Send', payloadSchema: [{ name: 'value', type: 'string' }] },
+      ],
+      transitions: [
+        {
+          from: 'ready',
+          to: 'ready',
+          event: 'INIT',
+          effects: [['set', '@entity.draft', ''], ['set', '@entity.activeChannel', 'general']],
+        },
+        {
+          from: 'ready',
+          to: 'ready',
+          event: 'DRAFT_CHANGED',
+          effects: [['set', setterWritesDraft ? '@entity.draft' : '@entity.pendingAttachment', '@payload.value']],
+        },
+        {
+          from: 'ready',
+          to: 'ready',
+          event: 'SEND',
+          guard: ['and', '@entity.activeChannel', ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
+          effects: [['emit', 'SAVE', { data: { content: '@entity.draft', channel: '@entity.activeChannel' } }], ['set', '@entity.draft', '']],
+        },
+      ],
+    },
+  };
+  const schema: OrbitalSchema = {
+    name: 'efficacy-chat',
+    version: '1.0.0',
+    orbitals: [{
+      name: 'ChatMessageOrbital',
+      entity: {
+        name: 'ChatMessage',
+        fields: [
+          { name: 'id', type: 'string', required: true },
+          { name: 'content', type: 'string', required: true },
+          { name: 'activeChannel', type: 'string' },
+          { name: 'draft', type: 'string' },
+          { name: 'pendingAttachment', type: 'string' },
+        ],
+      },
+      traits: [composer],
+      pages: [],
+    }],
+  };
+  return { schema, composer };
+}
+
+describe('planGuardPreconditionPreamble — boot-established fields form the baseline', () => {
+  it('skips the field INIT writes and plans the setter of the one it does not (chat composer SEND)', () => {
+    const { schema, composer } = composerSchema(true);
+    const send = composer.stateMachine!.transitions[2];
+    const plan = planGuardPreconditionPreamble(schema, composer, send, 'ready', {});
+    expect(plan.guardPreconditionUnreachable).toBeUndefined();
+    expect(plan.establishesRow?.event).toBe('DRAFT_CHANGED');
+    expect(plan.establishesRow?.traitName).toBe('ChatComposer');
+    expect(plan.establishesRow?.establishAtState).toBe('ready');
+    expect(typeof plan.establishesRow?.payload['value']).toBe('string');
+  });
+
+  it('reports the guard unreachable when no setter ever writes the remaining field', () => {
+    const { schema, composer } = composerSchema(false);
+    const send = composer.stateMachine!.transitions[2];
+    const plan = planGuardPreconditionPreamble(schema, composer, send, 'ready', {});
+    expect(plan.establishesRow).toBeUndefined();
+    expect(plan.guardPreconditionUnreachable).toContain("'@entity.draft'");
+  });
+});

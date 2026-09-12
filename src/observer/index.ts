@@ -37,6 +37,7 @@ export { assertInteractionPattern } from './assert-interaction-pattern.js';
 export { assertClickNoListener } from './assert-click-no-listener.js';
 export { assertEmitPayloadAlwaysEmpty } from './emit-payload-always-empty.js';
 export { assertListensEdgeNeverFired } from './listens-edge-never-fired.js';
+export { assertWalkStepsFired } from './assert-walk-fired.js';
 export { assertEffectFailureNotSurfaced } from './effect-failure-not-surfaced.js';
 export { report, type ReportInput } from './report.js';
 export {

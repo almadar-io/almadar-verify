@@ -614,6 +614,16 @@ export interface PlanWalkInput {
    * primitives instead of real entity-shaped rows.
    */
   entityFieldsByName?: Record<string, EntityFieldDef[]>;
+  /**
+   * The resolved schema the trait lives in. When given, every guarded
+   * `pass` variant whose guard reads a non-id `@entity.<field>` gets the
+   * establishing preamble `planGuardPreconditionPreamble` finds (or its
+   * `guard-precondition-unreachable` reason) — the same precondition the
+   * persist/CRUD planners already attach. Without it an emit-only guarded
+   * arm is dispatched straight off the hermetic reset, where the boot has
+   * just wiped the very field its guard reads.
+   */
+  orbital?: OrbitalSchema;
 }
 
 /** Input to `planEmitSweep`. */

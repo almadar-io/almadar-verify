@@ -31,7 +31,7 @@ function snapshotWithTransition(
   return { ...emptySnapshot, transitions: [tx] };
 }
 
-function frame(cause: FrameCause, index: number, snapshot: VerificationSnapshot = emptySnapshot): Frame {
+function frame(cause: FrameCause, index: number, snapshot: VerificationSnapshot = emptySnapshot, accepted = true): Frame {
   return {
     index,
     timestamp: 1000 + index,
@@ -48,7 +48,7 @@ function frame(cause: FrameCause, index: number, snapshot: VerificationSnapshot 
     effectResults: [],
     serverResponse: null,
     screenshotPath: null,
-    accepted: true,
+    accepted,
     errors: [],
     warnings: [],
   };
@@ -404,3 +404,36 @@ describe('coverage', () => {
     });
   });
 });
+
+describe('coverage — a rejected dispatch covers nothing', () => {
+  it('does not credit a planned self-loop whose frame the runtime rejected (accepted=false)', () => {
+    const plan = [step('ChatComposer', 'ready', 'SEND', 'ready', 'bus', 'pass')];
+    const rejected = frame(
+      { traitName: 'ChatComposer', from: 'ready', event: 'SEND', to: 'ready', guardCase: 'pass', triggerKind: 'bus', isRepositioning: false, coverageKey: plan[0].coverageKey },
+      0,
+      emptySnapshot,
+      false,
+    );
+    const metric = coverage([rejected], plan);
+    expect(metric.coveredItems).toBe(0);
+    expect(metric.uncovered).toContain(plan[0].coverageKey);
+
+    const accepted = { ...rejected, accepted: true };
+    expect(coverage([accepted], plan).coveredItems).toBe(1);
+  });
+});
+
+describe('coverage — effect-emitted events keep their credit when the hand dispatch is rejected', () => {
+  it('credits a fetch-failure arm the planner dispatched after the fetch already settled', () => {
+    const plan = [step('List', 'loading', 'ItemsLoadFailed', 'loading', 'bus')];
+    const rejected = frame(
+      { traitName: 'List', from: 'loading', event: 'ItemsLoadFailed', to: 'loading', guardCase: null, triggerKind: 'bus', isRepositioning: false, coverageKey: plan[0].coverageKey },
+      0,
+      emptySnapshot,
+      false,
+    );
+    expect(coverage([rejected], plan).coveredItems).toBe(0);
+    expect(coverage([rejected], plan, 0, undefined, new Map([['List', new Set(['ItemsLoadFailed'])]])).coveredItems).toBe(1);
+  });
+});
+

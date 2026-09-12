@@ -605,7 +605,7 @@ describe('probeListenCascades — synthetic fixtures', () => {
   // dispatch-and-observe server-side (only a literal `emit` effect or a
   // fetch/persist success|failure option lands in `response.emittedEvents`)
   // must SKIP rather than report `listen-source-cannot-emit` — that static
-  // side is already proven by `lintWiring`'s `listens-source-never-emits`.
+  // side is already proven by the compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED`.
 
   it('reports 0 findings when the source declares the event only in emits[] (no literal effect emit)', async () => {
     const schema: OrbitalSchema = {
@@ -618,7 +618,7 @@ describe('probeListenCascades — synthetic fixtures', () => {
             {
               // `emits` names PING but no transition anywhere literally
               // emits it — structurally producible (the same contract
-              // `producibleEvents`/`listens-source-never-emits` trust), but
+              // `producibleEvents` trusts), but
               // nothing this probe can dispatch and observe.
               name: 'Source',
               scope: 'instance',

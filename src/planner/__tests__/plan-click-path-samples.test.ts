@@ -179,3 +179,50 @@ describe('planClickPathSamples', () => {
     expect(planClickPathSamples(noSM)).toEqual([]);
   });
 });
+
+describe('planClickPathSamples — a guarded affordance carries its guard preamble', () => {
+  it('attaches DRAFT_CHANGED before clicking a composer Send guarded on the draft', () => {
+    const orbital: OrbitalSchema = {
+      name: 'efficacy-chat',
+      version: '1.0.0',
+      orbitals: [{
+        name: 'ChatMessageOrbital',
+        entity: { name: 'ChatMessage', fields: [{ name: 'id', type: 'string', required: true }, { name: 'draft', type: 'string' }, { name: 'activeChannel', type: 'string' }] },
+        pages: [],
+        traits: [{
+          name: 'ChatComposer',
+          scope: 'instance',
+          linkedEntity: 'ChatMessage',
+          stateMachine: {
+            states: [{ name: 'ready', isInitial: true }],
+            events: [
+              { key: 'INIT', name: 'Init' },
+              { key: 'DRAFT_CHANGED', name: 'Draft Changed', payloadSchema: [{ name: 'value', type: 'string' }] },
+              { key: 'SEND', name: 'Send' },
+            ],
+            transitions: [
+              {
+                from: 'ready', to: 'ready', event: 'INIT',
+                effects: [
+                  ['set', '@entity.draft', ''],
+                  ['set', '@entity.activeChannel', 'general'],
+                  ['render-ui', 'main', { type: 'stack', children: [{ type: 'textarea', onChange: 'DRAFT_CHANGED' }, { type: 'button', action: 'SEND', label: 'Send' }] }],
+                ],
+              },
+              { from: 'ready', to: 'ready', event: 'DRAFT_CHANGED', effects: [['set', '@entity.draft', '@payload.value']] },
+              {
+                from: 'ready', to: 'ready', event: 'SEND',
+                guard: ['and', '@entity.activeChannel', ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
+                effects: [['emit', 'SAVE', { data: { content: '@entity.draft' } }]],
+              },
+            ],
+          },
+        }],
+      }],
+    };
+    const steps = planClickPathSamples(orbital);
+    const send = steps.find((s) => s.event === 'SEND');
+    expect(send?.establishesRow?.event).toBe('DRAFT_CHANGED');
+    expect(send?.establishesRow?.beforeReplay).toBe(true);
+  });
+});

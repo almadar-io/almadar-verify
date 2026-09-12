@@ -1,8 +1,10 @@
 /**
- * `assertListensEdgeNeverFired` — the runtime twin of `wiring-lint.ts`'s
- * static `listens-source-never-emits`: proves a declared `listens {
- * Source.EVENT -> triggers }` route ACTUALLY DELIVERS over a live session,
- * not just that the source event is structurally producible somewhere.
+ * `assertListensEdgeNeverFired` — the runtime twin of the compiler's static
+ * `ORB_X_LISTEN_SOURCE_UNRESOLVED` (`wiring-lint.ts`'s own
+ * `listens-source-never-emits` duplicated this and was retired 2026-09-12):
+ * proves a declared `listens { Source.EVENT -> triggers }` route ACTUALLY
+ * DELIVERS over a live session, not just that the source event is
+ * structurally producible somewhere.
  *
  * Modelled on `emit-payload-always-empty.ts`'s per-session tally: walk the
  * whole session's bus event log (`Frame.eventLogDelta.added`, accumulated

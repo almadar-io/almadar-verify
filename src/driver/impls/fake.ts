@@ -160,6 +160,7 @@ export class FakeRuntime {
         serverResponse: {
           orbitalName: traitName,
           success: false,
+          transitioned: false,
           clientEffects: 0,
           dataEntities: {},
           emittedEvents: [],

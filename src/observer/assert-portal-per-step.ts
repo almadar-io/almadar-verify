@@ -220,12 +220,13 @@ export function assertTransientFailureArmPortals(
 export function assertSlotShowsForeignTransitionRender(
   frames: ReadonlyArray<Frame>,
   expectations: ReadonlyArray<PortalExpectation>,
+  effectEmittedByTrait: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): Verdict[] {
   if (expectations.length === 0) return [];
   const verdicts: Verdict[] = [];
 
   const expectationsByCause = new Map<string, PortalExpectation[]>();
-  const writersBySlot = new Map<string, Map<string, string>>();
+  const writersBySlot = new Map<string, Map<string, { author: string; traitName: string; event: string }>>();
   for (const exp of expectations) {
     if (exp.pattern === null) continue;
     const causeKey = `${exp.traitName}:${exp.from}+${exp.event}->${exp.to}`;
@@ -233,8 +234,8 @@ export function assertSlotShowsForeignTransitionRender(
     bucket.push(exp);
     expectationsByCause.set(causeKey, bucket);
 
-    const bySlot = writersBySlot.get(exp.slot) ?? new Map<string, string>();
-    bySlot.set(exp.pattern, `${exp.traitName}.${exp.event}`);
+    const bySlot = writersBySlot.get(exp.slot) ?? new Map<string, { author: string; traitName: string; event: string }>();
+    bySlot.set(exp.pattern, { author: `${exp.traitName}.${exp.event}`, traitName: exp.traitName, event: exp.event });
     writersBySlot.set(exp.slot, bySlot);
   }
 
@@ -249,14 +250,21 @@ export function assertSlotShowsForeignTransitionRender(
       const portal = frame.domSnapshot.portals.find((p) => p.slot === exp.slot);
       if (portal === undefined || !portal.mounted || portal.pattern === undefined) continue;
       if (portal.pattern === exp.pattern) continue;
-      const foreignAuthor = writersBySlot.get(exp.slot)?.get(portal.pattern);
-      if (foreignAuthor === undefined) continue;
+      const writer = writersBySlot.get(exp.slot)?.get(portal.pattern);
+      if (writer === undefined) continue;
+      // The same trait's own effect-emitted successor (a fetch-on-INIT trait:
+      // spinner, then the loaded list in the same settle window) is the last
+      // writer by design, not a rival — whether or not the state reader
+      // sampled the settled state yet.
+      const ownSuccessor = writer.traitName === frame.cause.traitName
+        && (effectEmittedByTrait.get(writer.traitName)?.has(writer.event) === true || frame.stateAfter !== frame.cause.to);
+      if (ownSuccessor) continue;
       verdicts.push({
         passed: false,
         detail:
           `slot-shows-foreign-transition-render: ${frame.cause.traitName} ${frame.cause.event} expected ` +
           `'${exp.pattern}' in slot '${exp.slot}', but the DOM shows '${portal.pattern}' — authored by ` +
-          `${foreignAuthor}, not the last writer`,
+          `${writer.author}, not the last writer`,
         evidence: { frameIndices: [frame.index] },
       });
     }

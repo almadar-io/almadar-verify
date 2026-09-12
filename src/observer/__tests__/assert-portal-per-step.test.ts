@@ -253,6 +253,26 @@ describe('assertSlotShowsForeignTransitionRender', () => {
     expect(assertSlotShowsForeignTransitionRender(frames, expectations)).toEqual([]);
   });
 
+  it('stays silent when the frame settled past its own `to` and the paint is the same trait\'s successor (fetch-on-INIT transient closure)', () => {
+    const transient: PortalExpectation[] = [
+      { traitName: 'List', from: 'loading', event: 'INIT', to: 'loading', slot: 'main', pattern: 'spinner' },
+      { traitName: 'List', from: 'loading', event: 'ItemsLoaded', to: 'browsing', slot: 'main', pattern: 'data-list' },
+      { traitName: 'Composer', from: 'ready', event: 'INIT', to: 'ready', slot: 'main', pattern: 'stack' },
+    ];
+    const settledPastTo = { ...frame(0, cause('List', 'loading', 'INIT', 'loading'), dom([{ slot: 'main', mounted: true, childCount: 1, pattern: 'data-list' }])), stateAfter: 'browsing' };
+    expect(assertSlotShowsForeignTransitionRender([settledPastTo], transient)).toEqual([]);
+
+    // The state reader sampled before the fetch settled (stateAfter still `loading`) — the
+    // effect-emitted successor is still this trait's own last writer.
+    const sampledEarly = frame(2, cause('List', 'loading', 'INIT', 'loading'), dom([{ slot: 'main', mounted: true, childCount: 1, pattern: 'data-list' }]));
+    expect(assertSlotShowsForeignTransitionRender([sampledEarly], transient, new Map([['List', new Set(['ItemsLoaded'])]]))).toEqual([]);
+
+    const rivalTrait = { ...frame(1, cause('List', 'loading', 'INIT', 'loading'), dom([{ slot: 'main', mounted: true, childCount: 1, pattern: 'stack' }])), stateAfter: 'browsing' };
+    const verdicts = assertSlotShowsForeignTransitionRender([rivalTrait], transient);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].detail).toMatch(/authored by Composer\.INIT/);
+  });
+
   it('flags a foreign render — the DOM shows a DIFFERENT declared writer\'s own pattern', () => {
     const frames: Frame[] = [
       frame(0, cause('X', 'a', 'OPEN_A', 'b'), dom([{ slot: 'modal', mounted: true, childCount: 1, pattern: 'modal' }])),

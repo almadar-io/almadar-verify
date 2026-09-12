@@ -782,6 +782,14 @@ function decideAccepted(
   serverResponse: ServerResponseTrace | null,
 ): boolean {
   if (step.guardCase === 'fail') {
+    // The runtime says an arm fired: only a complementary sibling arm
+    // catching the failing payload makes that the machine working.
+    if (
+      serverResponse?.transitioned === true &&
+      !(stateAfter !== null && (step.guardSiblingTargets ?? []).includes(stateAfter))
+    ) {
+      return false;
+    }
     // Guard-fail: state should NOT change — unless a complementary sibling
     // arm of the same (from, event) caught the failing payload, which is
     // the state machine working (planner-supplied guardSiblingTargets).
@@ -803,6 +811,11 @@ function decideAccepted(
     const serverRejected = serverResponse === null || serverResponse.success === false;
     return held && serverRejected;
   }
+  // The runtime's own verdict comes first: a dispatch no arm accepted is
+  // rejected even when the state "reached" `to` — on a self-loop the two
+  // are indistinguishable by state alone (the chat composer's guarded
+  // `SEND: ready -> ready` was credited while its guard said no).
+  if (serverResponse?.transitioned === false) return false;
   // Normal or guard-pass: state should reach step.to — or any state in the
   // transient closure when `to` auto-advances (planner-supplied acceptStates,
   // e.g. `loading` settling at `browsing` after its fetch). A `null`

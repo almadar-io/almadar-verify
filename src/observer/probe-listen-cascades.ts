@@ -17,9 +17,11 @@
  *     existing gate stays green, because every existing gate proves the
  *     LISTENER'S OWN transition is well-formed, never that the EMIT reaches
  *     it.
- *   - `lintWiring`'s `listens-source-never-emits` (`wiring-lint.ts`) is the
- *     static sibling of this probe's `listen-source-cannot-emit` finding —
- *     it proves the source trait CAN structurally produce the event. It
+ *   - the compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED` (`wiring-lint.ts`'s own
+ *     `listens-source-never-emits` duplicated this and was retired
+ *     2026-09-12) is the static sibling of this probe's
+ *     `listen-source-cannot-emit` finding — it proves the source trait CAN
+ *     structurally produce the event. It
  *     cannot prove the emit is actually DELIVERED once produced: a listener
  *     with no `eventId` yet, subscribing under the bare event name while
  *     the emitter routes under a V4 ledger event-id key
@@ -283,7 +285,8 @@ function allInlineTraitsByName(schema: OrbitalSchema): Map<string, Trait> {
  *  structurally produce `event` by ANY declared mechanism —
  *  `producibleEvents`'s full oracle (emits[]/effect-emit/registry
  *  event-outlet prop/config item-action descriptor), the same one
- *  `lintWiring`'s `listens-source-never-emits` static check already trusts.
+ *  `lintWiring`'s `listener-affordance-removed-by-config` static check
+ *  already trusts.
  *  This is deliberately broader than {@link transitionEmittedEvents}: a
  *  render-action or config-item-action affordance is a real, declared
  *  producer a user can click, but its click routes through the CLIENT's own
@@ -394,7 +397,7 @@ export async function probeListenCascades(
         const sourceOrb = schema.orbitals.find((o) => o.name === sourceOrbitalName);
         const sourceTrait = sourceOrb === undefined ? undefined : inlineTraits(sourceOrb.traits).get(source.trait);
         if (sourceOrb === undefined || sourceTrait === undefined) {
-          // Dangling source — `lintWiring`'s `listens-source-never-emits`
+          // Dangling source — the compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED`
           // (single-orbital) and `lintPluginWiring`'s
           // `plugin-listen-source-not-host` (cross-registry) already report
           // this statically; there is nothing live to dispatch against.

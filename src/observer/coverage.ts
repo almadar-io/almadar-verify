@@ -52,6 +52,7 @@ export function coverage(
   plan: ReadonlyArray<ExtendedWalkStep>,
   schemaTransitions = 0,
   schemaTransitionKeys?: ReadonlyArray<string>,
+  effectEmittedByTrait: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): CoverageMetric {
   // Denominator: every key the plan declared.
   const planKeys = new Set<string>();
@@ -60,9 +61,17 @@ export function coverage(
   }
 
   // Numerator (1/2): every coverage key the kernel observed via a
-  // frame whose cause IS that transition.
+  // frame whose cause IS that transition AND whose dispatch proved what
+  // its variant claims (`accepted`) — a rejected dispatch covers nothing.
+  // Effect-emitted events (fetch/persist result routes) keep the
+  // pre-existing credit: the planner dispatches them by hand after the
+  // effect usually already fired them and moved the trait on, so their
+  // hand dispatch is not the proof either way (the cascade credit below
+  // and the transient-failure probes are).
   const coveredSet = new Set<string>();
   for (const frame of frames) {
+    const effectEmitted = effectEmittedByTrait.get(frame.cause.traitName)?.has(frame.cause.event) === true;
+    if (!frame.accepted && !effectEmitted) continue;
     coveredSet.add(keyOf(frame.cause));
   }
 

@@ -52,8 +52,8 @@ import { eachInlineTrait, findInitialState } from './internal/orbital-walk.js';
 import { findPersistKind, isWholeRowField } from './internal/persist-binding.js';
 import { planGuardPreconditionPreamble } from './internal/guard-precondition.js';
 import { findAffordanceDisabledExpr } from './internal/affordance-disabled.js';
-import { collectEntityFields, hasRequiredPayloadFields } from './internal/payload-synth.js';
-import { buildMinimalPayload, declaredValuesOf, type EntityFieldDef } from '../browser/interaction.js';
+import { collectEntityFields, hasRequiredPayloadFields, payloadFieldSpec } from './internal/payload-synth.js';
+import { buildMinimalPayload, declaredValuesOf, type EntityFieldDef, type PayloadFieldSpec } from '../browser/interaction.js';
 import { isPortalSlot } from '../browser/portal-slots.js';
 import { configItemActionEvents, renderActionEventsOf } from '../observer/wiring-lint.js';
 import { deriveViewerRequirement } from './internal/viewer-requirement.js';
@@ -571,15 +571,10 @@ function indexTraitsByName(orbital: OrbitalSchema): Map<string, Trait> {
 function extractPayloadSchema(
   trait: Trait,
   eventKey: string,
-): Array<{ name: string; type: string; required?: boolean; entity?: string }> {
+): PayloadFieldSpec[] {
   const event = trait.stateMachine?.events.find((e) => e.key === eventKey);
   if (event === undefined || event.payloadSchema === undefined) return [];
-  return event.payloadSchema.map((f) => ({
-    name: f.name,
-    type: f.type,
-    required: f.required,
-    entity: f.entity,
-  }));
+  return event.payloadSchema.map(payloadFieldSpec);
 }
 
 interface NestedForm {

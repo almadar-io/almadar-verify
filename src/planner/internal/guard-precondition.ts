@@ -223,24 +223,72 @@ function selectSatisfyingCandidate(
   candidates: ReadonlyArray<FieldSettingCandidate>,
   field: string,
   guard: SExpr,
+  baseline: Record<string, FieldValue>,
 ): FieldSettingCandidate | null {
   for (const candidate of candidates) {
     const info = findEntityFieldSet(candidate.transition.effects ?? [], field);
     if (!info.sets || info.value === undefined) continue;
-    if (candidateSatisfiesGuard(info.value, field, guard, candidate.establishAtState)) return candidate;
+    if (candidateSatisfiesGuard(info.value, field, guard, candidate.establishAtState, baseline)) return candidate;
   }
   return null;
 }
 
-function candidateSatisfiesGuard(valueExpr: SExpr, field: string, guard: SExpr, atState: string): boolean {
+function candidateSatisfiesGuard(
+  valueExpr: SExpr,
+  field: string,
+  guard: SExpr,
+  atState: string,
+  baseline: Record<string, FieldValue>,
+): boolean {
   try {
     const runtimeValue = evaluate(valueExpr, createMinimalContext({}, {}, atState));
     if (!isFieldValue(runtimeValue)) return true;
-    const ctx = createMinimalContext({ [field]: runtimeValue }, {}, atState);
+    const ctx = createMinimalContext({ ...baseline, [field]: runtimeValue }, {}, atState);
     return evaluateGuard(guard, ctx) === true;
   } catch {
     return true;
   }
+}
+
+function guardHolds(guard: SExpr, fields: Record<string, FieldValue>, atState: string): boolean {
+  try {
+    return evaluateGuard(guard, createMinimalContext(fields, {}, atState)) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Entity fields the trait's own boot already establishes: literal values
+ * `(set @entity.<field> <literal>)` written by an `INIT` arm out of the
+ * trait's initial state. The hermetic preamble re-runs that boot before
+ * every step, so these fields need no setter of their own — they form the
+ * evaluation baseline for the fields that do (the chat composer's
+ * `SEND when (and @entity.activeChannel (not (= draft "")))`: INIT writes
+ * `activeChannel`, only `draft` needs `DRAFT_CHANGED`).
+ */
+function initEstablishedFields(trait: Trait, fields: ReadonlyArray<string>): Record<string, FieldValue> {
+  const out: Record<string, FieldValue> = {};
+  const machine = trait.stateMachine;
+  if (machine === undefined) return out;
+  const initial = findInitialState(machine);
+  if (initial === null) return out;
+  for (const transition of machine.transitions) {
+    if (transition.event !== 'INIT') continue;
+    if (transition.from !== initial && transition.from !== '*') continue;
+    for (const field of fields) {
+      if (field in out) continue;
+      const info = findEntityFieldSet(transition.effects ?? [], field);
+      if (!info.sets || info.value === undefined || info.payloadPath !== null) continue;
+      try {
+        const value = evaluate(info.value, createMinimalContext({}, {}, initial));
+        if (isFieldValue(value)) out[field] = value;
+      } catch {
+        // a non-literal boot value establishes nothing we can evaluate
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -313,15 +361,29 @@ export function planGuardPreconditionPreamble(
   const fields = entityFieldGuardBindings(transition.guard);
   if (fields.length === 0) return {};
 
-  const field = fields[0];
-  const candidates = findFieldSettingCandidates(orbital, trait.linkedEntity, field, trait.name, atState);
-  const candidate = selectSatisfyingCandidate(candidates, field, transition.guard);
+  // The boot's own literal writes are the baseline: when they already
+  // satisfy the guard nothing needs establishing; when they do not (a
+  // composer INIT resets `draft` to ""), a later setter must overwrite.
+  const baseline = initEstablishedFields(trait, fields);
+  if (Object.keys(baseline).length > 0 && guardHolds(transition.guard, baseline, atState)) return {};
+
+  let field = fields[0];
+  let candidate: FieldSettingCandidate | null = null;
+  for (const f of fields) {
+    const candidates = findFieldSettingCandidates(orbital, trait.linkedEntity, f, trait.name, atState);
+    const picked = selectSatisfyingCandidate(candidates, f, transition.guard, baseline);
+    if (picked !== null) {
+      field = f;
+      candidate = picked;
+      break;
+    }
+  }
   if (candidate === null) {
     return {
       guardPreconditionUnreachable:
         `guard-precondition-unreachable: trait '${trait.name}' transition '${transition.from}+${transition.event}` +
-        `->${transition.to}' reads '@entity.${field}' in its guard, but no transition on this trait or any ` +
-        `sibling trait linked to '${trait.linkedEntity}' ever sets it to a value that satisfies the guard`,
+        `->${transition.to}' reads '@entity.${fields.join("', '@entity.")}' in its guard, but no transition on this trait or any ` +
+        `sibling trait linked to '${trait.linkedEntity}' ever sets ${fields.length === 1 ? 'it' : 'any of them'} to a value that satisfies the guard`,
     };
   }
 

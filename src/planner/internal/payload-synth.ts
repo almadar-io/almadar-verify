@@ -17,7 +17,7 @@
 
 import type { OrbitalSchema, EventPayload, PayloadField } from '@almadar/core';
 import { isEntityReference, isEntityCall } from '@almadar/core';
-import { buildMinimalPayload, type EntityFieldDef } from '../../browser/interaction.js';
+import { buildMinimalPayload, type EntityFieldDef, type PayloadFieldSpec } from '../../browser/interaction.js';
 
 /**
  * Build a name → fields map for every inline-defined entity in the
@@ -29,16 +29,21 @@ import { buildMinimalPayload, type EntityFieldDef } from '../../browser/interact
 export function collectEntityFields(orbital: OrbitalSchema): Record<string, EntityFieldDef[]> {
   const out: Record<string, EntityFieldDef[]> = {};
   for (const orb of orbital.orbitals) {
-    const entityRef = orb.entity;
-    if (entityRef === undefined) continue;
-    if (isEntityReference(entityRef) || isEntityCall(entityRef)) continue;
-    const fields = entityRef.fields ?? [];
-    // `EntityFieldDef` IS core's `EntityField` — pass the declared fields
-    // through unchanged (min/max/intrinsic/default/relation/items/properties
-    // included) instead of re-deriving a narrowed `{name,type,values}` copy.
-    out[entityRef.name] = fields.filter((f): f is typeof f & { name: string } =>
-      typeof f.name === 'string' && f.name.length > 0,
-    );
+    // The primary entity AND every auxiliary one: an orbital whose primary
+    // is its `[identity]` roster keeps its real records in `auxiliaryEntities`,
+    // and a payload synthesized without their fields is a shapeless
+    // placeholder the store now rejects for missing required columns.
+    for (const entityRef of [orb.entity, ...(orb.auxiliaryEntities ?? [])]) {
+      if (entityRef === undefined) continue;
+      if (isEntityReference(entityRef) || isEntityCall(entityRef)) continue;
+      const fields = entityRef.fields ?? [];
+      // `EntityFieldDef` IS core's `EntityField` — pass the declared fields
+      // through unchanged (min/max/intrinsic/default/relation/items/properties
+      // included) instead of re-deriving a narrowed `{name,type,values}` copy.
+      out[entityRef.name] = fields.filter((f): f is typeof f & { name: string } =>
+        typeof f.name === 'string' && f.name.length > 0,
+      );
+    }
   }
   return out;
 }
@@ -60,15 +65,36 @@ export function synthesizeSuccessPayload(
   entityFieldsByName: Record<string, EntityFieldDef[]>,
 ): EventPayload {
   if (payloadSchema === undefined || payloadSchema.length === 0) return {};
-  const fields = payloadSchema.map((f) => ({
-    name: f.name,
-    type: f.type,
-    required: f.required,
-  }));
   const entityFields = linkedEntity !== undefined
     ? entityFieldsByName[linkedEntity] ?? []
     : [];
-  return buildMinimalPayload(fields, [...entityFields]);
+  // An entity-typed field names its OWN entity (`row : Channel` on a trait
+  // linked to ChatMessage): expand it from that entity's declared fields,
+  // not the trait's linked entity.
+  const foreign: EventPayload = {};
+  const rest: PayloadFieldSpec[] = [];
+  for (const f of payloadSchema) {
+    const own = f.entity !== undefined && f.entity !== linkedEntity ? entityFieldsByName[f.entity] : undefined;
+    if (own !== undefined && own.length > 0) {
+      const spec = payloadFieldSpec(f);
+      foreign[f.name] = buildMinimalPayload([{ ...spec, properties: undefined }], [...own])[f.name] ?? null;
+    } else {
+      rest.push(payloadFieldSpec(f));
+    }
+  }
+  return { ...buildMinimalPayload(rest, [...entityFields]), ...foreign };
+}
+
+/** The declared payload field, nested `properties` included, in the shape
+ *  `buildMinimalPayload` consumes — the one owner of payload synthesis. */
+export function payloadFieldSpec(f: PayloadField): PayloadFieldSpec {
+  return {
+    name: f.name,
+    type: f.type,
+    required: f.required,
+    entity: f.entity,
+    ...(f.properties !== undefined && f.properties.length > 0 && { properties: f.properties.map(payloadFieldSpec) }),
+  };
 }
 
 /**

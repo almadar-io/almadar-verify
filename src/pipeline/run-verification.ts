@@ -51,6 +51,7 @@ import type { EmitDeclaration } from '../browser/catalog-probes.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import type { TraitWalkConfig, WalkTransition } from '../engine/types.js';
 import { assertGuardParity } from '../observer/assert-guard-parity.js';
+import { assertWalkStepsFired } from '../observer/assert-walk-fired.js';
 import { assertPortalSlots } from '../observer/assert-portal.js';
 import { assertRefTraitInvariantOverFrames } from '../observer/assert-ref-trait-invariant.js';
 import { probeBindings } from '../observer/probe-bindings.js';
@@ -348,9 +349,9 @@ export async function runVerification<Ctx extends DriverContext>(
     // the first extension step fires into a still-hydrating page and
     // flakes with `frame 0: dispatch failed`.
     const baseSteps = importedSource === undefined
-      ? planWalk({ trait, entityFieldsByName })
+      ? planWalk({ trait, entityFieldsByName, orbital: input.orbital })
       : extensionSteps.length > 0
-        ? planWalk({ trait, entityFieldsByName }).filter((s) => s.triggerKind === 'auto-init')
+        ? planWalk({ trait, entityFieldsByName, orbital: input.orbital }).filter((s) => s.triggerKind === 'auto-init')
         : [];
     attachRowContextFromDataMutation(baseSteps, extensionSteps);
     const plan = [...baseSteps, ...extensionSteps];
@@ -780,6 +781,12 @@ export async function runVerification<Ctx extends DriverContext>(
   // GUARD-LAMBDA-DROP — in-run guard prediction vs runtime accept parity.
   verdicts.guardParity = assertGuardParity(frames);
 
+  // A planned dispatch the runtime rejected is a finding, never coverage.
+  const effectEmittedByTrait = new Map<string, ReadonlySet<string>>(
+    traits.map((t) => [t.traitName, t.effectEmittedEvents ?? new Set<string>()]),
+  );
+  verdicts.walk = assertWalkStepsFired(frames, effectEmittedByTrait);
+
   // REPLAY-NONDET-DISPATCH — only surfaced when a reconcile hop diverged.
   if (replayDivergences.length > 0) {
     verdicts.replayDiverged = {
@@ -909,10 +916,11 @@ export async function runVerification<Ctx extends DriverContext>(
     verdicts.emitPayloadAlwaysEmpty = combineVerdicts(emitPayloadAlwaysEmptyVerdicts, 'emit-payload-always-empty');
   }
 
-  // listens-edge-never-fired — the runtime twin of the static
-  // listens-source-never-emits lint: a declared listens route whose
-  // source fired repeatedly this session but the listener's own trigger
-  // was never observed firing — wired on paper, dead in practice.
+  // listens-edge-never-fired — the runtime twin of the compiler's
+  // ORB_X_LISTEN_SOURCE_UNRESOLVED (the static listens-source-never-emits
+  // lint duplicated this and was retired 2026-09-12): a declared listens
+  // route whose source fired repeatedly this session but the listener's own
+  // trigger was never observed firing — wired on paper, dead in practice.
   const listensEdgeNeverFiredVerdicts = assertListensEdgeNeverFired(frames, input.orbital);
   if (listensEdgeNeverFiredVerdicts.length > 0) {
     verdicts.listensEdgeNeverFired = combineVerdicts(listensEdgeNeverFiredVerdicts, 'listens-edge-never-fired');
@@ -995,7 +1003,7 @@ export async function runVerification<Ctx extends DriverContext>(
     // §98's last-writer-per-slot contract: the DOM's own `data-pattern`
     // marker disagrees with the firing transition's declared pattern AND
     // matches a DIFFERENT known writer's — a stale/foreign render.
-    const foreignRenderVerdicts = assertSlotShowsForeignTransitionRender(frames, normalPortalExpectations);
+    const foreignRenderVerdicts = assertSlotShowsForeignTransitionRender(frames, normalPortalExpectations, effectEmittedByTrait);
     if (foreignRenderVerdicts.length > 0) {
       verdicts.slotShowsForeignTransitionRender = combineVerdicts(foreignRenderVerdicts, 'slot-shows-foreign-transition-render');
     }
@@ -1062,6 +1070,7 @@ export async function runVerification<Ctx extends DriverContext>(
     verdicts,
     schemaTransitions,
     schemaTransitionKeys,
+    effectEmittedByTrait,
     ...(frontierSummary !== undefined && { frontier: frontierSummary }),
     ...(walkBudgetEntries.length > 0 && { walkBudget: walkBudgetEntries }),
     ...(traitScope !== null && { traits: traitScope }),

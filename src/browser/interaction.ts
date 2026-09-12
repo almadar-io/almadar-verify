@@ -214,8 +214,19 @@ export function declaredValuesOf(field: EntityFieldDef): readonly string[] | und
  * @param fields - Payload field declarations from the event schema
  * @param entityFields - Optional entity field definitions (with `values` arrays) for meaningful data
  */
+/** A payload field as the planners hand it in: the declared name/type, and,
+ *  for a nested object contract, its declared `properties` (recursed) or an
+ *  `entity` marker (expanded to a row like any entity-typed field). */
+export interface PayloadFieldSpec {
+  name: string;
+  type: string;
+  required?: boolean;
+  entity?: string;
+  properties?: ReadonlyArray<PayloadFieldSpec>;
+}
+
 export function buildMinimalPayload(
-  fields: Array<string | { name: string; type?: string }>,
+  fields: Array<string | PayloadFieldSpec>,
   entityFields?: EntityFieldDef[],
 ): EventPayload {
   const payload: EventPayload = {};
@@ -231,6 +242,13 @@ export function buildMinimalPayload(
   for (const field of fields) {
     const name = typeof field === 'string' ? field : field.name;
     const type = typeof field === 'string' ? 'string' : (field.type ?? 'string');
+
+    // A nested object contract (`data : { content!, channel! }`) is built
+    // from its own declared properties — never a shapeless placeholder.
+    if (typeof field !== 'string' && field.entity === undefined && field.properties !== undefined && field.properties.length > 0) {
+      payload[name] = buildMinimalPayload([...field.properties], entityFields);
+      continue;
+    }
 
     // Check if any entity field has predefined values that match this payload field.
     // For a field named "value", check if there's an entity field whose name appears

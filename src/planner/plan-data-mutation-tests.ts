@@ -30,7 +30,8 @@ import {
 } from './internal/persist-binding.js';
 import { planGuardPreconditionPreamble } from './internal/guard-precondition.js';
 import { collectEntityFields } from './internal/payload-synth.js';
-import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
+import { buildMinimalPayload, type EntityFieldDef, type PayloadFieldSpec } from '../browser/interaction.js';
+import { payloadFieldSpec } from './internal/payload-synth.js';
 import { deriveViewerRequirement, type ViewerRequirement } from './internal/viewer-requirement.js';
 import { crossEntityRestrictRelations, selfRelationFieldNames } from './internal/self-relation-fields.js';
 import { extractTraitWalkConfigs } from './extract-trait-walk-configs.js';
@@ -396,14 +397,9 @@ function synthesizeEventPayload(
 function extractPayloadSchema(
   trait: Trait,
   eventKey: string,
-): Array<{ name: string; type: string; required?: boolean; entity?: string }> {
+): PayloadFieldSpec[] {
   const event = trait.stateMachine?.events.find((e) => e.key === eventKey);
   if (event === undefined || event.payloadSchema === undefined) return [];
-  return event.payloadSchema.map((f) => ({
-    name: f.name,
-    type: f.type,
-    required: f.required,
-    entity: f.entity,
-  }));
+  return event.payloadSchema.map(payloadFieldSpec);
 }
 
