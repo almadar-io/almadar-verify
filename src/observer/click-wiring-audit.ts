@@ -36,7 +36,7 @@
 import type { OrbitalSchema, TraitEventListener, Transition } from '@almadar/core';
 import { collectEmbeddedTraitReferrers, isInlineTrait } from '@almadar/core';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
-import { configItemActionEvents } from './wiring-lint.js';
+import { configItemActionEvents } from './event-producers.js';
 
 /** For each trait, the set of events its own state machine transitions on. */
 export function buildTraitTransitions(orbital: OrbitalSchema): Map<string, Set<string>> {
@@ -53,7 +53,7 @@ export function buildTraitTransitions(orbital: OrbitalSchema): Map<string, Set<s
  * nothing, changes nothing, and the affordance routed to it is dead — even
  * though a transition on that event demonstrably exists.
  *
- * `lintWiring`'s `dead-bodiless-action` deliberately skips `from === to` arms
+ * `orb validate`'s `ORB_CIRCUIT_DEAD_BODILESS_ACTION` deliberately skips `from === to` arms
  * ("a self-transition leaves the current paint standing"), which is right about
  * the paint and wrong about the button. That blind spot is exactly this map's
  * job: `V-AUDIT-LISTENS-COUNTS-A-BODILESS-SELF-TRANSITION-AS-WIRED`.

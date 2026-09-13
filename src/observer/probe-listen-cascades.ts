@@ -17,7 +17,7 @@
  *     existing gate stays green, because every existing gate proves the
  *     LISTENER'S OWN transition is well-formed, never that the EMIT reaches
  *     it.
- *   - the compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED` (`wiring-lint.ts`'s own
+ *   - the compiler's `ORB_X_LISTEN_SOURCE_UNRESOLVED` (the JS static lint's
  *     `listens-source-never-emits` duplicated this and was retired
  *     2026-09-12) is the static sibling of this probe's
  *     `listen-source-cannot-emit` finding — it proves the source trait CAN
@@ -36,7 +36,7 @@
  * emits the listened-for event — a literal `(emit EVENT ...)` tuple anywhere
  * in the effect tree, OR a `fetch`/`persist` async-result `emit:{success,
  * failure}` option (the latter via `collectEffectEmittedEvents`, the same
- * helper `wiring-lint.ts`'s static checks use for that shape) — synthesize a
+ * helper `event-producers.ts`'s walkers use for that shape) — synthesize a
  * triggering payload with the SAME guard/payload synthesis every planner in
  * this package uses
  * (`buildGuardPayloads` from `@almadar/core`, `synthesizeSuccessPayload` from
@@ -73,7 +73,7 @@ import { collectEntityFields, synthesizeSuccessPayload } from '../planner/intern
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
 import { findPersistKind, findPersistWholeRowField } from '../planner/internal/persist-binding.js';
 import { crossEntityRestrictRelations, pickTargetRow, selfRelationFieldNames } from '../planner/internal/self-relation-fields.js';
-import { producibleEvents } from './wiring-lint.js';
+import { producibleEvents } from './event-producers.js';
 import { embedHostChain, embedHostsOf } from './click-wiring-audit.js';
 import { declaredEntityRow } from '../driver/declared-entity-row.js';
 import { resolveTraitNames } from '../planner/trait-scope.js';
@@ -284,9 +284,7 @@ function allInlineTraitsByName(schema: OrbitalSchema): Map<string, Trait> {
 /** True when `sourceTrait` (or an embedding host up its chain) can
  *  structurally produce `event` by ANY declared mechanism —
  *  `producibleEvents`'s full oracle (emits[]/effect-emit/registry
- *  event-outlet prop/config item-action descriptor), the same one
- *  `lintWiring`'s `listener-affordance-removed-by-config` static check
- *  already trusts.
+ *  event-outlet prop/config item-action descriptor).
  *  This is deliberately broader than {@link transitionEmittedEvents}: a
  *  render-action or config-item-action affordance is a real, declared
  *  producer a user can click, but its click routes through the CLIENT's own
@@ -301,9 +299,9 @@ function allInlineTraitsByName(schema: OrbitalSchema): Map<string, Trait> {
  *  this probe actually dispatches.
  *
  *  `producible` defaults to the full {@link producibleEvents} oracle (this
- *  probe's own use); exported so `wiring-lint.ts`'s `listener-affordance-
- *  removed-by-config` check can inject the narrower LIVE-only oracle and
- *  reuse the same embed-host-chain walk instead of forking it. */
+ *  probe's own use); the parameter stays open for a caller needing a
+ *  narrower LIVE-only oracle to reuse this same embed-host-chain walk
+ *  instead of forking it. */
 export function traitOrEmbedHostProduces(
   sourceTrait: Trait,
   sourceTraitName: string,

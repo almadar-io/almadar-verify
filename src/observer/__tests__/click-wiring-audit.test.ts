@@ -178,7 +178,7 @@ describe('auditListens', () => {
 
   // V-AUDIT-LISTENS-COUNTS-A-BODILESS-SELF-TRANSITION-AS-WIRED: the arm exists,
   // so the emit is routed — but it carries no effects, so the button paints
-  // nothing. `lintWiring`'s dead-bodiless-action deliberately skips from === to
+  // nothing. `orb validate`'s ORB_CIRCUIT_DEAD_BODILESS_ACTION deliberately skips from === to
   // arms, which is why this shape has no other home. Shape taken from
   // std-app-layout.lolo:52 (`NOTIFY_CLICK -> composing`), renamed onto by
   // std-fitness-studio.

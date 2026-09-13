@@ -2,8 +2,8 @@
  * `lintPluginWiring` — static, deterministic CROSS-REGISTRY lint of a
  * plugin's wiring against the host/capability atoms it targets.
  *
- * Sibling of `lintWiring` (`wiring-lint.ts`), not a case inside it:
- * `lintWiring` walks ONE resolved schema; this walks a plugin's resolved
+ * Cross-registry counterpart to the retired JS static wiring lint: that
+ * walked ONE resolved schema; this walks a plugin's resolved
  * schema against N separately-resolved TARGET schemas (the atoms the
  * plugin `uses` — a host-protocol atom like `studio-shell`, a capability
  * atom like `ui-code-block`/`std-modal-editor`). Both inputs must already
@@ -69,20 +69,21 @@
  *    name DOES match a target's bare consumption site, but a field that
  *    transition's own effects read via `@payload.<field>` is missing from
  *    every declared production site of the plugin's emit
- *    (`suppliedPayloadFields`, reused verbatim from `wiring-lint.ts`), or —
+ *    (`suppliedPayloadFields`, shared with the other observers via
+ *    `event-producers.ts`), or —
  *    where the field flows directly into `(set @entity.<F> ?<field>)` and
  *    the target's linked entity declares `<F>`'s type — the emit's own
  *    `payloadSchema` type for that field is a different primitive. A relay
  *    emit has no host consumer to mismatch against, so it is excluded here
- *    too. Mirrors the same payload-sufficiency contract `wiring-lint.ts`'s
- *    retired `payload-starved-route` used to check (2026-09-12 →
+ *    too. Mirrors the same payload-sufficiency contract the JS static
+ *    lint's retired `payload-starved-route` used to check (2026-09-12 →
  *    `ORB_LISTEN_ROUTE_STARVES_REQUIRED_FIELD` in `orb validate`), one
  *    registry over.
  *  - `plugin-listen-source-not-host` — a source-qualified `listens`
  *    (`X.EVENT`, `ListenSource.kind !== 'any'`) on a plugin trait whose
  *    source trait is neither declared in the plugin's own orbital(s) NOR in
  *    any target's orbitals — a dangling cross-registry reference that can
- *    never fire, undetectable by `lintWiring` (single-schema: it only knows
+ *    never fire, undetectable by a single-schema lint (which only knows
  *    the plugin's own traits) and undetectable by `orb validate` (which
  *    resolves `uses` per-file, not against an arbitrary target roster).
  *
@@ -97,8 +98,44 @@ import type {
   Trait,
 } from '@almadar/core';
 import { getTraitName, isEntityCall, isEntityReference, isInlineTrait } from '@almadar/core';
-import { suppliedPayloadFields } from './wiring-lint.js';
-import type { WiringLintFinding, WiringLintResult } from './wiring-lint.js';
+import { suppliedPayloadFields } from './event-producers.js';
+
+export type WiringLintSeverity = 'error' | 'warning';
+
+export interface WiringLintFinding {
+  check:
+    | 'groupby-enum-column-gap'
+    | 'listener-affordance-removed-by-config'
+    | 'unclaimed-main-writer'
+    | 'viewer-stranded'
+    | 'embedded-sibling-single-referrer'
+    | 'unscoped-owned-entity'
+    | 'app-theme-divergent'
+    | 'identity-roster-unwritable'
+    | 'page-absent-from-nav'
+    | 'relation-field-rendered-raw'
+    | 'plugin-emit-no-host-listener'
+    | 'plugin-emit-payload-mismatch'
+    | 'plugin-listen-source-not-host';
+  severity: WiringLintSeverity;
+  orbital: string;
+  trait: string;
+  message: string;
+  /** Ready-to-apply fix direction, phrased against the `.lolo` source. */
+  suggestion: string;
+  /**
+   * Set when the finding is about an ENTITY rather than a trait
+   * (`unscoped-owned-entity`). `trait` then carries the entity name too, so
+   * existing consumers that print `trait` still show something meaningful.
+   */
+  entity?: string;
+}
+
+export interface WiringLintResult {
+  findings: WiringLintFinding[];
+  errors: number;
+  warnings: number;
+}
 
 /** One host/capability atom the plugin may target, keyed by the name the
  *  caller resolved it under (its behavior name — `studio-shell`,
@@ -272,9 +309,9 @@ interface RequiredField {
 }
 
 /** Every `@payload.<field>` binding reachable anywhere under an effect tree
- *  — the same duck-typed recursive-array walk `wiring-lint.ts`'s own
- *  helpers use (`mainWriteOffersAWayOn`, `descriptorEvents`, …) rather
- *  than `@almadar/core`'s `collectBindings`: `Effect`'s variadic tuple arms
+ *  — the same duck-typed recursive-array walk `event-producers.ts`'s own
+ *  `descriptorEvents` helper uses, rather than `@almadar/core`'s
+ *  `collectBindings`: `Effect`'s variadic tuple arms
  *  (`AsyncAllEffect` et al.) are not structurally assignable to `SExpr`
  *  under TS's tuple/index-signature check, and this file's contract only
  *  needs the `@payload.` leaves, not a typed `SExpr` walk. */

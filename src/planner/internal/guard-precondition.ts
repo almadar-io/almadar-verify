@@ -145,11 +145,54 @@ export interface FieldSettingCandidate {
   trait: Trait;
   transition: Transition;
   /** The concrete state `trait` must be at before dispatching
-   *  `transition.event` — `atState` for a same-trait self-loop, or the
-   *  sibling's own initial state otherwise. Always concrete, even when
-   *  `transition.from === '*'` (a wildcard arm is still safely dispatched
-   *  from this state). */
+   *  {@link dispatchEvent} — `atState` for a same-trait self-loop, or the
+   *  sibling's own initial state otherwise, chased back further when
+   *  `dispatchEvent` differs from `transition.event` (RV-52). Always
+   *  concrete, even when `transition.from === '*'` (a wildcard arm is still
+   *  safely dispatched from this state). */
   establishAtState: string;
+  /**
+   * The event to actually `sendEvent` to make this candidate's `set`
+   * happen — `transition.event` itself, UNLESS that event is a fetch/persist
+   * RESULT (effect-emitted) on this same trait (RV-52): a result event
+   * settles as a side effect of the effect that produces it, so hand-
+   * dispatching it directly either no-ops (the runtime already moved past
+   * the state that accepts it) or fires a transition a real user action
+   * never triggers. `dispatchEvent` is resolved transitively to the first
+   * genuinely dispatchable (non-effect-emitted) ancestor on the chain of
+   * producing transitions — dispatching IT lets the real effect settle the
+   * result naturally.
+   */
+  dispatchEvent: string;
+}
+
+/**
+ * Chase a field-setting event back through its producing effect(s) to the
+ * first genuinely dispatchable ancestor — the shape RV-52 fixes: a
+ * fetch/persist RESULT event (`emit: { success, failure }`) cannot be
+ * hand-dispatched as a preamble, because the runtime only ever delivers it
+ * as the side effect of the transition that actually runs that fetch/
+ * persist. `event` is effect-emitted when SOME transition on `trait`
+ * declares an `emit:`/explicit-`emit` effect naming it — find that
+ * transition and recurse on ITS OWN triggering event, anchored at ITS OWN
+ * `from` (the trait's initial state for a wildcard arm, since a fresh
+ * dispatch always starts there). Cycle-guarded: every producer chain in the
+ * corpus today is a DAG, but a malformed one must terminate, not loop.
+ */
+function resolveEstablishingDispatch(
+  trait: Trait,
+  event: string,
+  atState: string,
+  visited: Set<string> = new Set(),
+): { event: string; atState: string } {
+  if (visited.has(event)) return { event, atState };
+  visited.add(event);
+  const machine = trait.stateMachine;
+  if (machine === undefined) return { event, atState };
+  const producer = machine.transitions.find((t) => collectEffectEmittedEvents([t]).has(event));
+  if (producer === undefined) return { event, atState };
+  const producerFrom = producer.from === '*' ? (findInitialState(machine) ?? atState) : producer.from;
+  return resolveEstablishingDispatch(trait, producer.event, producerFrom, visited);
 }
 
 /**
@@ -198,11 +241,13 @@ export function findFieldSettingCandidates(
     const effectEmitted = collectEffectEmittedEvents(trait.stateMachine.transitions);
     for (const transition of trait.stateMachine.transitions) {
       if (transition.event === 'INIT') continue;
-      if (effectEmitted.has(transition.event)) continue;
       if (transition.from !== requiredFrom && transition.from !== '*') continue;
       if (isSameTrait && transition.to !== atState) continue;
       if (!findEntityFieldSet(transition.effects ?? [], field).sets) continue;
-      out.push({ trait, transition, establishAtState: requiredFrom });
+      const dispatch = effectEmitted.has(transition.event)
+        ? resolveEstablishingDispatch(trait, transition.event, requiredFrom)
+        : { event: transition.event, atState: requiredFrom };
+      out.push({ trait, transition, establishAtState: dispatch.atState, dispatchEvent: dispatch.event });
     }
   }
   return out;
@@ -388,7 +433,10 @@ export function planGuardPreconditionPreamble(
   }
 
   const info = findEntityFieldSet(candidate.transition.effects ?? [], field);
-  const setterEvent = candidate.trait.stateMachine?.events.find((e) => e.key === candidate.transition.event);
+  // Synthesize against `dispatchEvent`'s OWN payload schema, not the field
+  // setter's — RV-52: when the two differ, `dispatchEvent` is the ancestor
+  // actually sent, so its declared payload is what the preamble must supply.
+  const setterEvent = candidate.trait.stateMachine?.events.find((e) => e.key === candidate.dispatchEvent);
   const payload = synthesizeSuccessPayload(
     setterEvent?.payloadSchema,
     candidate.trait.linkedEntity,
@@ -400,8 +448,13 @@ export function planGuardPreconditionPreamble(
     ? deriveViewerRequirement(orbital, setterPersist.entity, setterPersist.kind)
     : undefined;
 
+  // `info.payloadPath` names a field on `candidate.transition`'s OWN payload
+  // — only resolvable against `dispatchEvent` when the two coincide (the
+  // pre-existing, non-chased shape); a chased ancestor (RV-52) supplies a
+  // DIFFERENT payload (synthesized above from its own schema), so a
+  // `@payload.<x>` reference on the field setter has no counterpart there.
   let bindRowFrom: { entityName: string; payloadField: string } | undefined;
-  if (info.payloadPath !== null) {
+  if (info.payloadPath !== null && candidate.dispatchEvent === candidate.transition.event) {
     const referencedEntity = resolveReferencedEntityForPayloadField(
       orbital,
       candidate.trait,
@@ -415,7 +468,7 @@ export function planGuardPreconditionPreamble(
 
   return {
     establishesRow: {
-      event: candidate.transition.event,
+      event: candidate.dispatchEvent,
       payload,
       traitName: candidate.trait.name,
       beforeReplay: true,

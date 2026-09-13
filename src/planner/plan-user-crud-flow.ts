@@ -55,7 +55,7 @@ import { findAffordanceDisabledExpr } from './internal/affordance-disabled.js';
 import { collectEntityFields, hasRequiredPayloadFields, payloadFieldSpec } from './internal/payload-synth.js';
 import { buildMinimalPayload, declaredValuesOf, type EntityFieldDef, type PayloadFieldSpec } from '../browser/interaction.js';
 import { isPortalSlot } from '../browser/portal-slots.js';
-import { configItemActionEvents, renderActionEventsOf } from '../observer/wiring-lint.js';
+import { configItemActionEvents, renderActionEventsOf } from '../observer/event-producers.js';
 import { deriveViewerRequirement } from './internal/viewer-requirement.js';
 import { crossEntityRestrictRelations, selfRelationFieldNames } from './internal/self-relation-fields.js';
 

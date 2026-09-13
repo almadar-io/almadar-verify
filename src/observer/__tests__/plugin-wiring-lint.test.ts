@@ -6,8 +6,8 @@ import type { Orbital, OrbitalSchema, StateMachine, Trait, TraitEventContract, T
 import { lintPluginWiring, type PluginWiringTarget } from '../plugin-wiring-lint.js';
 
 // ── Fixture builders — every field the real types require is supplied, so
-// no `as unknown as X` boundary cast is needed (unlike the older sibling
-// `wiring-lint.test.ts`, which predates this convention). ──────────────────
+// no `as unknown as X` boundary cast is needed (unlike the retired JS
+// static wiring lint's own tests, which predated this convention). ──────
 
 function trait(partial: Partial<Trait> & { name: string }): Trait {
   return { scope: 'instance', ...partial };

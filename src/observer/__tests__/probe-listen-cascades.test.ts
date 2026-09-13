@@ -600,7 +600,7 @@ describe('probeListenCascades — synthetic fixtures', () => {
   });
 
   // The three fixtures below are the `producibleEvents`/embed-host
-  // convergence (wiring-lint's own emitter oracle): a source that can
+  // convergence (`event-producers.ts`'s own emitter oracle): a source that can
   // structurally produce the event by a mechanism this probe cannot
   // dispatch-and-observe server-side (only a literal `emit` effect or a
   // fetch/persist success|failure option lands in `response.emittedEvents`)

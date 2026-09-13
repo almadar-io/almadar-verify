@@ -302,3 +302,135 @@ describe('planGuardPreconditionPreamble — boot-established fields form the bas
     expect(plan.guardPreconditionUnreachable).toContain("'@entity.draft'");
   });
 });
+
+/**
+ * RV-52 — mirrors `DirectMessageStarter`'s real `creating` state exactly
+ * (`std-realtime-chat.lolo`): two independent persists fired from ONE
+ * transition (`DM_CHANNEL_READY`, itself a result of `START_DM`'s own
+ * persist) race to land `DM_OPENED`/`DM_MEMBER_ADDED`; whichever settles
+ * second finds the other's flag already set and opens the conversation, so
+ * each guard (`dmPeerReady`/`dmSelfReady`) is set ONLY by the sibling
+ * RESULT arm, never by a plain user-dispatchable event. The old code
+ * excluded every effect-emitted event from candidacy outright, so BOTH
+ * guards read as unreachable; the fix must instead resolve the setting
+ * event's own producing effect back to the first real, dispatchable
+ * ancestor (`START_DM`) and plan the preamble against THAT.
+ */
+function directMessageStarterSchema(): { schema: OrbitalSchema; starter: Trait } {
+  const starter: Trait = {
+    name: 'DirectMessageStarter',
+    scope: 'instance',
+    linkedEntity: 'ChannelMember',
+    stateMachine: {
+      states: [{ name: 'idle', isInitial: true }, { name: 'creating' }],
+      events: [
+        { key: 'INIT', name: 'Init' },
+        { key: 'START_DM', name: 'Start Dm', payloadSchema: [{ name: 'id', type: 'string', required: true }] },
+        { key: 'DM_CHANNEL_READY', name: 'Dm Channel Ready' },
+        { key: 'DM_OPENED', name: 'Dm Opened' },
+        { key: 'DM_MEMBER_ADDED', name: 'Dm Member Added' },
+      ],
+      transitions: [
+        { from: 'idle', to: 'idle', event: 'INIT' },
+        {
+          from: 'idle',
+          to: 'creating',
+          event: 'START_DM',
+          effects: [
+            ['set', '@entity.dmSelfReady', false],
+            ['set', '@entity.dmPeerReady', false],
+            ['persist', 'create', 'Channel', '@payload.data', { emit: { success: 'DM_CHANNEL_READY' } }],
+          ],
+        },
+        {
+          from: 'creating',
+          to: 'creating',
+          event: 'DM_CHANNEL_READY',
+          effects: [
+            ['persist', 'create', 'ChannelMember', '@payload.self', { emit: { success: 'DM_OPENED' } }],
+            ['persist', 'create', 'ChannelMember', '@payload.peer', { emit: { success: 'DM_MEMBER_ADDED' } }],
+          ],
+        },
+        { from: 'creating', to: 'idle', event: 'DM_OPENED', guard: '@entity.dmPeerReady' },
+        {
+          from: 'creating',
+          to: 'creating',
+          event: 'DM_OPENED',
+          guard: ['not', '@entity.dmPeerReady'],
+          effects: [['set', '@entity.dmSelfReady', true]],
+        },
+        { from: 'creating', to: 'idle', event: 'DM_MEMBER_ADDED', guard: '@entity.dmSelfReady' },
+        {
+          from: 'creating',
+          to: 'creating',
+          event: 'DM_MEMBER_ADDED',
+          guard: ['not', '@entity.dmSelfReady'],
+          effects: [['set', '@entity.dmPeerReady', true]],
+        },
+      ],
+    },
+  };
+
+  const schema: OrbitalSchema = {
+    name: 'dm-starter-guard-precondition-fixture',
+    designTokens: {},
+    customPatterns: {},
+    orbitals: [
+      {
+        name: 'DirectMessageOrbital',
+        entity: {
+          name: 'ChannelMember',
+          persistence: 'persistent',
+          fields: [
+            { name: 'id', type: 'string', required: true },
+            { name: 'dmSelfReady', type: 'boolean' },
+            { name: 'dmPeerReady', type: 'boolean' },
+          ],
+        },
+        auxiliaryEntities: [{ name: 'Channel', persistence: 'persistent', fields: [{ name: 'id', type: 'string', required: true }] }],
+        pages: [],
+        traits: [starter],
+      },
+    ],
+  };
+  return { schema, starter };
+}
+
+describe('planGuardPreconditionPreamble (RV-52 — sibling result-arm guard preconditions)', () => {
+  it('resolves a result-set field to its producing effect\'s real dispatchable ancestor, not a hand-dispatched result', () => {
+    const { schema, starter } = directMessageStarterSchema();
+    const dmOpenedGuarded = starter.stateMachine!.transitions.find(
+      (t) => t.event === 'DM_OPENED' && t.guard === '@entity.dmPeerReady',
+    )!;
+
+    const result = planGuardPreconditionPreamble(schema, starter, dmOpenedGuarded, 'creating', {});
+
+    expect(result.guardPreconditionUnreachable).toBeUndefined();
+    expect(result.establishesRow).toBeDefined();
+    // dmPeerReady is only ever set by DM_MEMBER_ADDED's arm, itself a
+    // persist result of DM_CHANNEL_READY, itself a persist result of
+    // START_DM — the only genuinely dispatchable event in the chain.
+    expect(result.establishesRow?.event).toBe('START_DM');
+    expect(result.establishesRow?.traitName).toBe('DirectMessageStarter');
+    expect(result.establishesRow?.establishAtState).toBe('idle');
+  });
+
+  it('positive control: a guard on a field no arm ever sets stays unreachable', () => {
+    const { schema, starter } = directMessageStarterSchema();
+    // Same trait/state as the case above, but guarding on a field nothing
+    // in the schema ever writes — must stay unreachable, not accidentally
+    // satisfied by the DM_OPENED/DM_MEMBER_ADDED chain resolved above.
+    const neverSatisfiable: Transition = {
+      from: 'creating',
+      to: 'idle',
+      event: 'DM_OPENED',
+      guard: '@entity.neverSet',
+    };
+
+    const result = planGuardPreconditionPreamble(schema, starter, neverSatisfiable, 'creating', {});
+
+    expect(result.establishesRow).toBeUndefined();
+    expect(result.guardPreconditionUnreachable).toBeDefined();
+    expect(result.guardPreconditionUnreachable).toContain('neverSet');
+  });
+});

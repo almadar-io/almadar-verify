@@ -272,8 +272,8 @@ export { assertPortalPerStep, assertTransientFailureArmPortals, assertSlotShowsF
 export { assertListensEdgeNeverFired } from './observer/listens-edge-never-fired.js';
 export { assertInteractionPattern } from './observer/assert-interaction-pattern.js';
 export { auditListens, embedHostChain, embedHostsOf, type ListensAuditResult } from './observer/click-wiring-audit.js';
-export { lintWiring, producibleEvents, renderActionEventsOf, suppliedPayloadFields, type WiringLintFinding, type WiringLintResult, type WiringLintSeverity } from './observer/wiring-lint.js';
-export { lintPluginWiring, type PluginWiringTarget } from './observer/plugin-wiring-lint.js';
+export { producibleEvents, renderActionEventsOf, suppliedPayloadFields } from './observer/event-producers.js';
+export { lintPluginWiring, type PluginWiringTarget, type WiringLintFinding, type WiringLintResult, type WiringLintSeverity } from './observer/plugin-wiring-lint.js';
 export { serviceManifest, type ServiceManifestEntry, type ServiceManifestResult, type ServiceManifestCredential } from './observer/service-manifest.js';
 export { report as buildFrameReport, type ReportInput } from './observer/report.js';
 export { verdictToChecks, type VerdictCheck } from './observer/verdict-checks.js';

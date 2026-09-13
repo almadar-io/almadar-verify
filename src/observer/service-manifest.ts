@@ -5,10 +5,10 @@
  * configuration truth in one table: registry status (typed actions,
  * declared-only, or unknown), backend grade ('simulated' means an in-memory
  * implementation — a green run proves nothing about a real provider), and
- * per-credential env presence. This is a REPORT, not a lintWiring gate
- * (wiring lints are last-resort; the gate candidate is ledger-noted in the
- * gaps doc) — but `unknown` + missing-required rows are surfaced as findings
- * text so runtime-verify prints them next to the wiring lint.
+ * per-credential env presence. This is a REPORT, not a gate
+ * (a hard gate candidate is ledger-noted in the gaps doc) — but `unknown` +
+ * missing-required rows are surfaced as findings text so runtime-verify
+ * prints them next to its other pre-walk findings.
  *
  * @packageDocumentation
  */
