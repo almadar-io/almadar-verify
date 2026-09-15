@@ -95,6 +95,16 @@ export { retry } from './util/retry.js';
 // orbital binary resolution (PATH-independent)
 export { resolveOrbitalBin, resetOrbitalBinCache } from './util/orbital-bin.js';
 
+// Behavior-registry discovery (std + io, structure-agnostic walk)
+export {
+  TIER_LEVELS,
+  walkRegistryBehaviors,
+  registryBases,
+  discoverAllBehaviors,
+  type RegistryTierLevel,
+  type DiscoveredBehavior,
+} from './util/registry-discovery.js';
+
 // Interaction utilities (Playwright-based form filling, button clicking, pattern classification)
 export {
   classifyTargetPattern,
