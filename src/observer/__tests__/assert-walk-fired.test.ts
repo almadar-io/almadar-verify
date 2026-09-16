@@ -79,3 +79,47 @@ describe('assertWalkStepsFired', () => {
     expect(verdict.detail).toContain('0 planned dispatch(es)');
   });
 });
+
+describe('PF-17c: one-shot initial state skip', () => {
+  it('skips a from-initial rejection when the trait had already advanced past a one-shot initial state', () => {
+    // InvoiceLifecycle `draft` has no incoming edge (REOPEN_INVOICE goes to
+    // `sent` by design); once ISSUE_INVOICE advanced the trait, the planned
+    // ACCRUE_BILLABLE-from-draft step fired from `sent` — a harness artifact.
+    const frames: Frame[] = [
+      {
+        ...frame(0, { traitName: 'InvoiceLifecycle', from: 'draft', event: 'ACCRUE_BILLABLE', to: 'draft', guardCase: null }, false, false),
+        stateBefore: 'sent',
+      },
+    ];
+    const verdict = assertWalkStepsFired(frames, new Map(), new Map([['InvoiceLifecycle', 'draft']]));
+    expect(verdict.passed).toBe(true);
+    expect(verdict.detail).toContain('from-initial step(s) skipped');
+    expect(verdict.detail).toContain('ACCRUE_BILLABLE');
+  });
+
+  it('skips the settled-elsewhere shape too: rejected with transitioned:false and the trait landed off `from`', () => {
+    // The real PF frame: stateBefore read 'draft' (fresh client after the
+    // hermetic reset), but the playground server's singleton FSM had already
+    // advanced to 'sent' — the dispatch was rejected and the settle read
+    // 'sent'. A rejection AT `draft` would have held the state there.
+    const frames: Frame[] = [
+      {
+        ...frame(0, { traitName: 'InvoiceLifecycle', from: 'draft', event: 'ACCRUE_BILLABLE', to: 'draft', guardCase: null }, false, false),
+        stateBefore: 'draft',
+        stateAfter: 'sent',
+      },
+    ];
+    const verdict = assertWalkStepsFired(frames, new Map(), new Map([['InvoiceLifecycle', 'draft']]));
+    expect(verdict.passed).toBe(true);
+    expect(verdict.detail).toContain('from-initial step(s) skipped');
+  });
+
+  it('still flags a from-initial rejection when the trait genuinely sat at the initial state', () => {
+    const frames: Frame[] = [
+      frame(0, { traitName: 'InvoiceLifecycle', from: 'draft', event: 'ACCRUE_BILLABLE', to: 'draft', guardCase: null }, false, false),
+    ];
+    const verdict = assertWalkStepsFired(frames, new Map(), new Map([['InvoiceLifecycle', 'draft']]));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.detail).toContain('transition-not-fired');
+  });
+});

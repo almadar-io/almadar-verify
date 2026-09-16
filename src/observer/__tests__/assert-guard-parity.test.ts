@@ -139,3 +139,29 @@ describe('assertGuardParity', () => {
     expect(verdict.detail).toContain('0 guard prediction(s) matched');
   });
 });
+
+describe('PF-17b: effect-emitted continuation exemption', () => {
+  it('skips fetch/persist continuation events the way assertWalkStepsFired does', () => {
+    // BudgetLifecycle.BudgetMatched's pass-frame was hand-dispatched while the
+    // trait sat at `open` (not `matching`) — the runtime correctly answered
+    // transitioned:false; the continuation's proof is the cascade credit.
+    const frames = [
+      frame(0, cause('BudgetLifecycle', 'matching', 'BudgetMatched', 'open', { guardCase: 'pass' }), false),
+      // A genuine divergence on a user-driven event in the same run is still caught.
+      frame(1, cause('T', 'idle', 'OPEN', 'open', { guardCase: 'pass' }), false),
+    ];
+    const verdict = assertGuardParity(frames, new Map([['BudgetLifecycle', new Set(['BudgetMatched'])]]));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.detail).toContain('1/1 guard prediction(s) diverged');
+    expect(verdict.evidence?.frameIndices).toEqual([1]);
+  });
+
+  it('passes when only effect-emitted continuations "diverge"', () => {
+    const frames = [
+      frame(0, cause('BudgetLifecycle', 'rolling', 'RolloverMatched', 'open', { guardCase: 'pass' }), false),
+    ];
+    const verdict = assertGuardParity(frames, new Map([['BudgetLifecycle', new Set(['RolloverMatched'])]]));
+    expect(verdict.passed).toBe(true);
+    expect(verdict.detail).toContain('0 guard prediction(s) matched');
+  });
+});

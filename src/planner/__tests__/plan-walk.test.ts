@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import type { EdgeWalkTransition, OrbitalSchema, Trait } from '@almadar/core';
 import { planWalk } from '../plan-walk.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
+import type { EntityFieldDef } from '../../browser/interaction.js';
 
 function transition(from: string, event: string, to: string): EdgeWalkTransition {
   return { from, event, to, hasGuard: false };
@@ -442,5 +443,70 @@ describe('planWalk — guarded pass variants carry their establishing preamble w
     const steps = planWalk({ trait: composerTrait, orbital: noSetter });
     const sendPass = steps.find((s) => s.event === 'SEND' && s.guardCase === 'pass');
     expect(sendPass?.unreachableRowReason).toContain('guard-precondition-unreachable');
+  });
+});
+
+describe('PF-17a: str/default-nonempty guard fail steering', () => {
+  it('steers the guard-fail variant to the str/default fallback so the guard genuinely fails', () => {
+    // EntryLockApply.LOCK_ENTRY: `when (!= (str/default ?entityId "") "")` —
+    // buildGuardPayloads can't see through str/default, so its fail payload
+    // left the synthesized non-empty entityId in place and the "fail"
+    // dispatch passed. The planner now forces the field to the fallback.
+    const lockGuarded: EdgeWalkTransition = {
+      from: 'open',
+      event: 'LOCK_ENTRY',
+      to: 'locked',
+      hasGuard: true,
+      guard: ['!=', ['str/default', '@payload.entityId', ''], ''],
+    };
+    const trait: TraitWalkConfig = {
+      traitName: 'EntryLockApply',
+      initialState: 'open',
+      events: [{ key: 'LOCK_ENTRY', name: 'Lock Entry', payloadSchema: [{ name: 'entityId', type: 'string', required: true }] }],
+      transitions: [lockGuarded],
+    };
+    const steps = planWalk({ trait, includeAutoInit: false });
+    const fail = steps.find((s) => s.payloadCase === 'guard-fail');
+    expect(fail?.payload['entityId']).toBe('');
+    const pass = steps.find((s) => s.guardCase === 'pass');
+    expect(pass).toBeDefined();
+    expect(pass?.payload['entityId'] === '').toBe(false);
+    expect(pass?.payload['entityId'] === undefined).toBe(false);
+  });
+});
+
+describe('PF-15(b): fetch-data injection', () => {
+  it('shapes a non-empty entity-row array for a guard reading (array/len ?data)', () => {
+    // DirectMessageStarter.AUTO_OPEN: `when (and (not @entity.openChannel)
+    // (> (array/len ?data) 0))` on `data : [ChannelMember]` — the pass payload
+    // must carry real ChannelMember-shaped rows, not bare mock-id objects.
+    const autoOpen: EdgeWalkTransition = {
+      from: 'idle',
+      event: 'AUTO_OPEN',
+      to: 'idle',
+      hasGuard: true,
+      guard: ['and', ['not', '@entity.openChannel'], ['>', ['array/len', '@payload.data'], 0]],
+    };
+    const trait: TraitWalkConfig = {
+      traitName: 'DirectMessageStarter',
+      initialState: 'idle',
+      linkedEntity: 'ChannelMember',
+      events: [{ key: 'AUTO_OPEN', name: 'Auto Open', payloadSchema: [{ name: 'data', type: '[ChannelMember]' }] }],
+      transitions: [autoOpen],
+    };
+    const entityFieldsByName: Record<string, EntityFieldDef[]> = {
+      ChannelMember: [
+        { name: 'id', type: 'string', required: true },
+        { name: 'channel', type: 'string' },
+        { name: 'lastMessageAt', type: 'string' },
+      ],
+    };
+    const steps = planWalk({ trait, includeAutoInit: false, entityFieldsByName });
+    const pass = steps.find((s) => s.guardCase === 'pass');
+    const data = pass?.payload['data'];
+    expect(Array.isArray(data)).toBe(true);
+    expect((data as ReadonlyArray<Record<string, unknown>>).length).toBeGreaterThan(0);
+    expect((data as ReadonlyArray<Record<string, unknown>>)[0]).toHaveProperty('channel');
+    expect((data as ReadonlyArray<Record<string, unknown>>)[0]).toHaveProperty('lastMessageAt');
   });
 });

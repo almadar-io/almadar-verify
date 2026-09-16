@@ -15,7 +15,7 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema, EventPayload, PayloadField } from '@almadar/core';
+import type { OrbitalSchema, EventPayload, PayloadField, SExpr } from '@almadar/core';
 import { isEntityReference, isEntityCall } from '@almadar/core';
 import { buildMinimalPayload, type EntityFieldDef, type PayloadFieldSpec } from '../../browser/interaction.js';
 
@@ -95,6 +95,81 @@ export function payloadFieldSpec(f: PayloadField): PayloadFieldSpec {
     entity: f.entity,
     ...(f.properties !== undefined && f.properties.length > 0 && { properties: f.properties.map(payloadFieldSpec) }),
   };
+}
+
+/**
+ * PF-15(b): fetch-data injection. A fetch-continuation guard like
+ * `AUTO_OPEN when (and (not @entity.openChannel) (> (array/len ?data) 0))`
+ * depends on fetch-provided ROWS, but the merged pass payload carries
+ * `buildGuardPayloads`'s bare `[{ id: 'mock-test-id-0' }]` rows — the guard
+ * passes, yet the transition's effects read real columns (`channel`,
+ * `lastMessageAt`) off those rows and settle on undefined. When the guard
+ * provably reads `(array/len @payload.<field>)`, rebuild that field as a
+ * non-empty array of rows shaped from the DECLARED entity's fields (the
+ * payloadSchema's `[Entity]` element type, else the trait's linked entity).
+ * Deterministic; every value comes from `buildMinimalPayload`'s mock
+ * conventions, so the rows read as synthesized, never as seeded data.
+ */
+export function injectFetchDataRows(
+  guard: SExpr | undefined,
+  payload: EventPayload,
+  payloadSchema: ReadonlyArray<PayloadField> | undefined,
+  linkedEntity: string | undefined,
+  entityFieldsByName: Record<string, EntityFieldDef[]>,
+): EventPayload {
+  if (guard === undefined) return payload;
+  const fields = guardArrayLenFields(guard);
+  if (fields.length === 0) return payload;
+  let out = payload;
+  for (const field of fields) {
+    const decl = payloadSchema?.find((f) => f.name === field);
+    const elementEntity = decl !== undefined ? arrayElementEntity(decl.type) : undefined;
+    const rowFields =
+      (elementEntity !== undefined ? entityFieldsByName[elementEntity] : undefined) ??
+      (linkedEntity !== undefined ? entityFieldsByName[linkedEntity] : undefined);
+    if (rowFields === undefined || rowFields.length === 0) continue;
+    const rows = buildMinimalPayload(
+      [{ name: field, type: elementEntity !== undefined ? `[${elementEntity}]` : 'array' }],
+      [...rowFields],
+    )[field];
+    if (Array.isArray(rows) && rows.length > 0) out = { ...out, [field]: rows };
+  }
+  return out;
+}
+
+/** Top-level `@payload.<field>` names the guard reads via `(array/len …)`. */
+function guardArrayLenFields(guard: SExpr): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = (node: SExpr): void => {
+    if (Array.isArray(node)) {
+      if (node.length === 2 && node[0] === 'array/len' && typeof node[1] === 'string') {
+        const match = /^@payload\.([A-Za-z0-9_]+)$/.exec(node[1]);
+        if (match !== null && !seen.has(match[1])) {
+          seen.add(match[1]);
+          out.push(match[1]);
+        }
+      }
+      for (const child of node) visit(child);
+      return;
+    }
+    if (node !== null && typeof node === 'object') {
+      for (const value of Object.values(node)) visit(value);
+    }
+  };
+  visit(guard);
+  return out;
+}
+
+/** The entity name inside a `[Entity]` array type; undefined for scalar/plain arrays. */
+function arrayElementEntity(type: string | undefined): string | undefined {
+  if (typeof type !== 'string') return undefined;
+  const match = /^\[(.+)\]$/.exec(type);
+  if (match === null) return undefined;
+  const inner = match[1];
+  return inner === 'string' || inner === 'number' || inner === 'integer' || inner === 'float' || inner === 'boolean'
+    ? undefined
+    : inner;
 }
 
 /**

@@ -434,3 +434,21 @@ describe('planGuardPreconditionPreamble (RV-52 — sibling result-arm guard prec
     expect(result.guardPreconditionUnreachable).toContain('neverSet');
   });
 });
+
+describe('planGuardPreconditionPreamble (PF-19 — same-trait sibling-arm flag sets are satisfiable)', () => {
+  it('treats the DM handshake not-guards as satisfiable — START_DM clears both flags on the way into creating', () => {
+    const { schema, starter } = directMessageStarterSchema();
+    // The two flagged arms: `creating+DM_OPENED->creating when (not @entity.dmPeerReady)`
+    // and `creating+DM_MEMBER_ADDED->creating when (not @entity.dmSelfReady)`. Each flag
+    // IS set (cleared) by the same-trait START_DM arm, so "unreachable" misreads the
+    // cross-edge flag protocol; no synthetic preamble is needed either.
+    for (const event of ['DM_OPENED', 'DM_MEMBER_ADDED'] as const) {
+      const waitingArm = starter.stateMachine!.transitions.find(
+        (t) => t.event === event && t.to === 'creating' && Array.isArray(t.guard),
+      )!;
+      const result = planGuardPreconditionPreamble(schema, starter, waitingArm, 'creating', {});
+      expect(result.guardPreconditionUnreachable).toBeUndefined();
+      expect(result.establishesRow).toBeUndefined();
+    }
+  });
+});

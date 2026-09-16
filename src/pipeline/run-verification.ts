@@ -775,17 +775,28 @@ export async function runVerification<Ctx extends DriverContext>(
   // ── Run observers ─────────────────────────────────────────────────
   const verdicts: RunVerificationOutput['verdicts'] = {};
 
-  // VG6 — ref-trait invariant (always runs).
-  verdicts.refTrait = assertRefTraitInvariantOverFrames(frames);
-
-  // GUARD-LAMBDA-DROP — in-run guard prediction vs runtime accept parity.
-  verdicts.guardParity = assertGuardParity(frames);
-
   // A planned dispatch the runtime rejected is a finding, never coverage.
   const effectEmittedByTrait = new Map<string, ReadonlySet<string>>(
     traits.map((t) => [t.traitName, t.effectEmittedEvents ?? new Set<string>()]),
   );
-  verdicts.walk = assertWalkStepsFired(frames, effectEmittedByTrait);
+
+  // PF-17c: initial states no transition leads back to (PF's
+  // InvoiceLifecycle `draft` — one-shot by design). Once the walk advances
+  // past one, later from-initial steps are unreachable whenever the reset
+  // didn't restore it; `assertWalkStepsFired` skips those with a note.
+  const oneShotInitialByTrait = new Map<string, string>();
+  for (const t of traits) {
+    const reenterable = t.transitions.some((tr) => tr.to === t.initialState && tr.from !== t.initialState);
+    if (!reenterable) oneShotInitialByTrait.set(t.traitName, t.initialState);
+  }
+
+  // VG6 — ref-trait invariant (always runs).
+  verdicts.refTrait = assertRefTraitInvariantOverFrames(frames);
+
+  // GUARD-LAMBDA-DROP — in-run guard prediction vs runtime accept parity.
+  verdicts.guardParity = assertGuardParity(frames, effectEmittedByTrait);
+
+  verdicts.walk = assertWalkStepsFired(frames, effectEmittedByTrait, oneShotInitialByTrait);
 
   // REPLAY-NONDET-DISPATCH — only surfaced when a reconcile hop diverged.
   if (replayDivergences.length > 0) {

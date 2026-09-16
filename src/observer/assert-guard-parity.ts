@@ -25,7 +25,10 @@
 import type { Frame } from '../frame/types.js';
 import type { Verdict } from './types.js';
 
-export function assertGuardParity(frames: ReadonlyArray<Frame>): Verdict {
+export function assertGuardParity(
+  frames: ReadonlyArray<Frame>,
+  effectEmittedByTrait: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+): Verdict {
   const failures: string[] = [];
   const indices: number[] = [];
   let checked = 0;
@@ -36,6 +39,14 @@ export function assertGuardParity(frames: ReadonlyArray<Frame>): Verdict {
 
     const predicted = frame.cause.guardCase;
     if (predicted !== 'pass' && predicted !== 'fail') continue;
+
+    // Effect-emitted continuation events (a fetch/persist success|failure
+    // route): the walker dispatches them by hand, but by then the effect has
+    // usually already fired them and moved the trait on, so the runtime
+    // correctly answers `transitioned: false` from the settled state —
+    // `assertWalkStepsFired` exempts them for the same reason. Their parity
+    // proof is the cascade credit, not this verdict.
+    if (effectEmittedByTrait.get(frame.cause.traitName)?.has(frame.cause.event) === true) continue;
 
     // Guards bound to `@entity.*` / `@config.*` can't be steered by the
     // dispatch payload — the planner marked the variant

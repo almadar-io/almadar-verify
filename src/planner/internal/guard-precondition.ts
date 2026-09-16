@@ -22,7 +22,7 @@
  */
 
 import { collectBindings, isFieldValue } from '@almadar/core';
-import type { Effect, FieldValue, OrbitalSchema, SExpr, Trait, Transition } from '@almadar/core';
+import type { Effect, EventPayload, FieldValue, OrbitalSchema, SExpr, Trait, Transition } from '@almadar/core';
 import { createMinimalContext, evaluate, evaluateGuard } from '@almadar/evaluator';
 import { eachInlineTrait, findInitialState } from './orbital-walk.js';
 import { collectEffectEmittedEvents } from './effect-emits.js';
@@ -295,12 +295,65 @@ function candidateSatisfiesGuard(
   }
 }
 
-function guardHolds(guard: SExpr, fields: Record<string, FieldValue>, atState: string): boolean {
+/**
+ * PF-19: a cross-edge flag protocol sets the flag in a SAME-TRAIT sibling
+ * arm of a different transition (std-realtime-chat's two-phase DM handshake:
+ * `START_DM` clears `dmSelfReady`/`dmPeerReady` on the way into `creating`,
+ * the persist-success arms set them). Such a setter is not a dispatchable
+ * preamble (it moves the trait, or is itself an effect-emitted result), but
+ * the trait's own walk reaches it — the hermetic replay to `atState` passes
+ * through the clearing/setting arm, so the guard IS satisfiable in the real
+ * run. Fail-open on unresolvable written values, same doctrine as
+ * {@link selectSatisfyingCandidate}.
+ */
+function sameTraitSetterSatisfies(
+  trait: Trait,
+  fields: ReadonlyArray<string>,
+  guard: SExpr,
+  atState: string,
+  baseline: Record<string, FieldValue>,
+): boolean {
+  const machine = trait.stateMachine;
+  if (machine === undefined) return false;
+  for (const transition of machine.transitions) {
+    if (transition.event === 'INIT') continue;
+    for (const field of fields) {
+      const info = findEntityFieldSet(transition.effects ?? [], field);
+      if (!info.sets || info.value === undefined) continue;
+      if (candidateSatisfiesGuard(info.value, field, guard, atState, baseline)) return true;
+    }
+  }
+  return false;
+}
+
+function guardHolds(guard: SExpr, fields: Record<string, FieldValue>, atState: string, payload: EventPayload = {}): boolean {
   try {
-    return evaluateGuard(guard, createMinimalContext(fields, {}, atState)) === true;
+    return evaluateGuard(guard, createMinimalContext(fields, payload, atState)) === true;
   } catch {
     return false;
   }
+}
+
+/**
+ * The linked entity's DECLARED defaults (`openChannel : string = ""`) for the
+ * guarded fields — the value every hermetic boot starts from. A guard that
+ * holds against these (plus the dispatch's real payload, when supplied)
+ * needs no setter at all: AUTO_OPEN's `(not @entity.openChannel)` is true at
+ * boot, and establishing `openChannel` via TRACK_SELECTION would be exactly
+ * backwards — the preamble would write the field the guard wants empty.
+ */
+function declaredFieldDefaults(
+  trait: Trait,
+  fields: ReadonlyArray<string>,
+  entityFieldsByName: Record<string, EntityFieldDef[]>,
+): Record<string, FieldValue> {
+  const out: Record<string, FieldValue> = {};
+  const defs = trait.linkedEntity !== undefined ? entityFieldsByName[trait.linkedEntity] ?? [] : [];
+  for (const field of fields) {
+    const def = defs.find((d) => d.name === field);
+    if (def !== undefined && 'default' in def && isFieldValue(def.default)) out[field] = def.default;
+  }
+  return out;
 }
 
 /**
@@ -398,6 +451,7 @@ export function planGuardPreconditionPreamble(
   transition: Transition,
   atState: string,
   entityFieldsByName: Record<string, EntityFieldDef[]>,
+  stepPayload?: EventPayload,
 ): { establishesRow?: GuardEstablishPreamble; guardPreconditionUnreachable?: string } {
   if (transition.guard === undefined) return {};
   if (trait.linkedEntity === undefined) return {};
@@ -406,11 +460,18 @@ export function planGuardPreconditionPreamble(
   const fields = entityFieldGuardBindings(transition.guard);
   if (fields.length === 0) return {};
 
-  // The boot's own literal writes are the baseline: when they already
-  // satisfy the guard nothing needs establishing; when they do not (a
-  // composer INIT resets `draft` to ""), a later setter must overwrite.
-  const baseline = initEstablishedFields(trait, fields);
-  if (Object.keys(baseline).length > 0 && guardHolds(transition.guard, baseline, atState)) return {};
+  // The boot's own literal writes over the entity's declared defaults are
+  // the baseline: when they already satisfy the guard nothing needs
+  // establishing; when they do not (a composer INIT resets `draft` to ""),
+  // a later setter must overwrite. `stepPayload` (the pass variant's real
+  // synthesized payload) supplies the `@payload.*` conjuncts — without it a
+  // fetch-dependent guard (`(> (array/len ?data) 0)`) reads as unsatisfied
+  // here even though the actual dispatch satisfies it.
+  const baseline = {
+    ...declaredFieldDefaults(trait, fields, entityFieldsByName),
+    ...initEstablishedFields(trait, fields),
+  };
+  if (Object.keys(baseline).length > 0 && guardHolds(transition.guard, baseline, atState, stepPayload ?? {})) return {};
 
   let field = fields[0];
   let candidate: FieldSettingCandidate | null = null;
@@ -424,6 +485,7 @@ export function planGuardPreconditionPreamble(
     }
   }
   if (candidate === null) {
+    if (sameTraitSetterSatisfies(trait, fields, transition.guard, atState, baseline)) return {};
     return {
       guardPreconditionUnreachable:
         `guard-precondition-unreachable: trait '${trait.name}' transition '${transition.from}+${transition.event}` +
