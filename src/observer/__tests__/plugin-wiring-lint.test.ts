@@ -368,7 +368,8 @@ function resolveOrb(relPath: string): OrbitalSchema {
   const abs = resolve(REPO_ROOT, relPath);
   const json = execFileSync(ORB_BIN, ['resolve', abs], {
     encoding: 'utf-8',
-    env: { ...process.env, ALMADAR_DEV: '1', ALMADAR_ROOT: REPO_ROOT },
+    env: { ...process.env },
+    cwd: REPO_ROOT,
     maxBuffer: 64 * 1024 * 1024,
   });
   return JSON.parse(json) as OrbitalSchema;

@@ -944,7 +944,8 @@ function resolveViaCli(schema: object): OrbitalSchema {
   try {
     const out = execFileSync(ORB_BIN, ['resolve', tmpFile], {
       encoding: 'utf-8',
-      env: { ...process.env, ALMADAR_DEV: '1', ALMADAR_ROOT: REPO_ROOT },
+      env: { ...process.env },
+      cwd: REPO_ROOT,
       maxBuffer: 32 * 1024 * 1024,
     });
     return JSON.parse(out) as OrbitalSchema;
