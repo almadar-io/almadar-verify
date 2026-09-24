@@ -293,3 +293,41 @@ function traitRefName(ref: TraitRef): string | null {
 function normalizeRoute(path: string): string {
   return path.startsWith('/') ? path.slice(1) : path;
 }
+
+/** `param → entity` for a `:param` route, read from its page traits' INIT `(fetch E { id: @payload.<param> })` — declared, never guessed. */
+export function findRouteParamEntities(orb: Orbital, route: string): Record<string, string> {
+  const params = new Set(
+    normalizeRoute(route)
+      .split('/')
+      .filter((segment) => segment.startsWith(':'))
+      .map((segment) => segment.slice(1)),
+  );
+  const out: Record<string, string> = {};
+  if (params.size === 0) return out;
+  const pageTraitNames = new Set<string>();
+  for (const ref of orb.pages ?? []) {
+    const path = pagePath(ref);
+    if (path === null || normalizeRoute(path) !== normalizeRoute(route)) continue;
+    for (const t of pageTraits(ref) ?? []) {
+      const name = traitRefName(t);
+      if (name !== null) pageTraitNames.add(name);
+    }
+  }
+  for (const t of orb.traits ?? []) {
+    if (!isInlineTrait(t) || !pageTraitNames.has(t.name) || t.stateMachine === undefined) continue;
+    for (const transition of t.stateMachine.transitions) {
+      if (transition.event !== 'INIT') continue;
+      for (const effect of transition.effects ?? []) {
+        if (!Array.isArray(effect) || effect[0] !== 'fetch' || typeof effect[1] !== 'string') continue;
+        const options = effect[2];
+        if (typeof options !== 'object' || options === null || !('id' in options)) continue;
+        const id = options.id;
+        if (typeof id !== 'string' || !id.startsWith('@payload.')) continue;
+        const param = id.slice('@payload.'.length);
+        const entity = effect[1] === '@entity' ? t.linkedEntity : effect[1];
+        if (params.has(param) && entity !== undefined && out[param] === undefined) out[param] = entity;
+      }
+    }
+  }
+  return out;
+}

@@ -47,6 +47,8 @@ export interface TraitWalkConfig {
   transitions: WalkTransition[];
   /** Route path for this trait's page (e.g., "products", "orders"). */
   route?: string;
+  /** For a `:param` route, the entity each param names (`findRouteParamEntities`), so a reset can fill it with a real row id. */
+  routeParamEntities?: Readonly<Record<string, string>>;
   /**
    * The event declarations from `trait.stateMachine.events`. Carries
    * each event's `payloadSchema` so planners can synthesize the

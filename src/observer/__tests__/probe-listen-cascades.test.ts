@@ -12,19 +12,10 @@
  * `packages/almadar-runtime/test/composed-trait-listen-eventid-routing.test.ts`
  * regression-tests directly against `OrbitalServerRuntime`. With
  * `@almadar/runtime` HEAD (the `resolveSourceEmitEventId` fix) the probe
- * reports 0 findings — end-to-end confirmation that the fix this rung was
- * built to catch actually holds. The negative control mutates the ONE field
- * the bug was about (`VimStudioBridge`'s `listens { Shell.PLUGIN_ENABLED ->
- * ENABLED }` entry carries no `eventId` of its own — see
- * `OrbitalServerRuntime.resolveSourceEmitEventId`'s doc comment): stamping a
- * WRONG explicit `eventId` on that listen bypasses the fix path entirely
- * (`listener.eventId ?? resolveSourceEmitEventId(...)` short-circuits on the
- * listener's own, now-wrong, value) — the exact "two different bus keys for
- * the same logical event" shape the pre-fix code produced for every
- * composed trait whose listen hadn't been id-stamped yet. The probe reports
- * `listen-cascade-not-delivered` for it, proving the check actually catches
- * the regression it exists to prevent (not just green on a fixture that
- * happens to pass).
+ * reports 0 findings. Per PF-16 (owner ruling on G-VERIFY-035, 2026-09-24) a listen's own
+ * `eventId` is not authoritative — delivery is by source + event name — so a stale id still
+ * receives the emit; the probe's negative control is a declared listen whose route the
+ * runtime never registered.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -45,7 +36,7 @@ import { probeListenCascades } from '../probe-listen-cascades.js';
  *  viewer that owns the row, so this fixture ALSO exercises the
  *  owner-column stamping fix — an unstamped seed row fails this policy and
  *  reports "not found" exactly like a genuinely missing row would. */
-function ownerScopedFetchApp(listenEventId?: string): OrbitalSchema {
+function ownerScopedFetchApp(listen: { eventId?: string; withListen?: boolean } = {}): OrbitalSchema {
   return {
     name: 'DetailApp',
     orbitals: [
@@ -95,13 +86,13 @@ function ownerScopedFetchApp(listenEventId?: string): OrbitalSchema {
               transitions: [{ from: 'active', to: 'active', event: 'RECEIVED', effects: [['emit', 'DONE', {}]] }],
             },
             emits: [{ event: 'DONE', scope: 'external' }],
-            listens: [
+            listens: listen.withListen === false ? [] : [
               {
                 event: 'WidgetLoaded',
                 triggers: 'RECEIVED',
                 scope: 'external',
                 source: { kind: 'trait', trait: 'Source' },
-                ...(listenEventId === undefined ? {} : { eventId: asEventId(listenEventId) }),
+                ...(listen.eventId === undefined ? {} : { eventId: asEventId(listen.eventId) }),
               },
             ],
           },
@@ -902,20 +893,24 @@ describe('probeListenCascades — persistence seeding (item B)', () => {
     expect(result.findings).toEqual([]);
   });
 
-  it('seeding does not mask a genuinely broken bus route (wrong eventId still reports listen-cascade-not-delivered)', async () => {
-    // Same owner-scoped by-id fetch (so WidgetLoaded genuinely fires this
-    // time — the "cannot emit" gate is not what's under test here) but the
-    // listen carries a WRONG explicit `eventId`, bypassing
-    // `resolveSourceEmitEventId` exactly like the vim-mode regression
-    // below: the emitter's own `emits[]` contract stamps no `eventId`, so
-    // it routes under the bare event name, while the listener now
-    // subscribes under an id key nothing emits under.
-    const schema = ownerScopedFetchApp('evt_01WRONGWRONGWRONGWRONGWRO');
+  it('a stale listen eventId still receives the emit (PF-16: delivery is by source + event name)', async () => {
+    const schema = ownerScopedFetchApp({ eventId: 'evt_01WRONGWRONGWRONGWRONGWRO' });
     const persistence = new InMemoryPersistence();
     const runtime = new OrbitalServerRuntime({ debug: false, persistence });
     await runtime.register(schema);
 
     const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.probed).toBe(1);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('seeding does not mask a route the runtime lost (declared listen, unregistered route)', async () => {
+    const declared = ownerScopedFetchApp();
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(ownerScopedFetchApp({ withListen: false }));
+
+    const result = await probeListenCascades(runtime, declared, persistence);
     const broken = result.findings.find(
       (f) => f.check === 'listen-cascade-not-delivered' && f.event === 'WidgetLoaded' && f.triggers === 'RECEIVED',
     );
@@ -991,26 +986,18 @@ describe.skipIf(!canRunRealPlugin)('probeListenCascades — vim-mode plugin (rea
     expect(result.findings).toEqual([]);
   });
 
-  it('negative control: a WRONG explicit eventId on that same listen reproduces the pre-fix break', async () => {
+  it('a stale explicit eventId on that same listen still receives the emit (PF-16)', async () => {
     const raw = JSON.parse(readFileSync(ORB_PATH, 'utf-8'));
     const resolved = resolveViaCli(raw);
 
     const listen = findPluginEnabledListen(resolved);
     expect(listen).toBeDefined();
-    // Bypasses `resolveSourceEmitEventId` entirely: `listener.eventId ??
-    // resolveSourceEmitEventId(...)` short-circuits on this now-wrong value,
-    // so the listener subscribes under a bus key the emitter never uses —
-    // exactly the pre-fix routing-key mismatch.
     if (listen) listen.eventId = asEventId('evt_01WRONGWRONGWRONGWRONGWRO');
 
     const runtime = new OrbitalServerRuntime({ mode: 'mock', debug: false });
     await runtime.register(resolved);
 
     const result = await probeListenCascades(runtime, resolved);
-    const broken = result.findings.find(
-      (f) => f.check === 'listen-cascade-not-delivered' && f.event === 'PLUGIN_ENABLED' && f.triggers === 'ENABLED',
-    );
-    expect(broken).toBeDefined();
-    expect(broken?.sourceTrait).toBe('Shell');
+    expect(result.findings).toEqual([]);
   });
 });

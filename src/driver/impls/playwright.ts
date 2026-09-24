@@ -28,6 +28,7 @@ import type { ExtendedWalkStep } from '../../planner/types.js';
 import { createDefaultSnapshot } from '../helpers/default-snapshot.js';
 import { createDefaultDomTrigger } from '../helpers/default-dom-trigger.js';
 import { dispatchInBrowser } from '../helpers/browser-send-event.js';
+import { fillRouteParams } from '../helpers/fill-route-params.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
 
 /** What the Playwright Driver carries on its context. */
@@ -161,7 +162,12 @@ export function createPlaywrightDriver(
       // `extractTraitWalkConfigs` (`findRouteForTrait` ?? `findDefaultRoute`),
       // so every trait knows its owning orbital's page. Without this,
       // sub-traits / non-default-orbital traits get tested on `/`.
-      const route = ctx.trait?.route;
+      const listRows = bridge.listEntityRows;
+      const route = await fillRouteParams(
+        ctx.trait?.route,
+        ctx.trait?.routeParamEntities,
+        listRows === undefined ? undefined : (entity) => listRows(ctx.page, entity),
+      );
       if (bridge.reset !== undefined) {
         return bridge.reset(ctx.page, route);
       }
