@@ -95,6 +95,8 @@ export class FakeRuntime {
    *  `success:false` serverResponse. Simulates the compiled server's
    *  payload-validator rejecting a malformed payload. */
   private rejected = new Set<string>();
+  /** `traitName::event` → the error its effects throw after advancing. */
+  private effectFailures = new Map<string, string>();
   /**
    * C1-V9 item A: the CURRENT viewer `executeEffects` sees at dispatch
    * time — `FakeDriver.getPersona`/`setPersona` read and write this
@@ -110,6 +112,12 @@ export class FakeRuntime {
     private options: FakeDriverOptions = {},
   ) {
     this.reset();
+  }
+
+  /** Make `(traitName, event)` dispatches advance, then fail while running
+   *  their effects — the runtime reports `success:false` with `error`. */
+  failEffects(traitName: string, event: string, error: string): void {
+    this.effectFailures.set(`${traitName}::${event}`, error);
   }
 
   /** Make `(traitName, event)` dispatches fail server-side validation. */
@@ -219,6 +227,23 @@ export class FakeRuntime {
       }
     } else {
       this.lastEffectResults = [];
+    }
+
+    const effectFailure = this.effectFailures.get(`${traitName}::${event}`);
+    if (effectFailure !== undefined) {
+      return {
+        to: transition.to,
+        serverResponse: {
+          orbitalName: traitName,
+          success: false,
+          transitioned: true,
+          clientEffects: 0,
+          dataEntities: {},
+          emittedEvents: [],
+          error: effectFailure,
+          timestamp: Date.now(),
+        },
+      };
     }
 
     return { to: transition.to, serverResponse: null };

@@ -16,9 +16,11 @@
  * @packageDocumentation
  */
 
-import type { Orbital, OrbitalSchema } from '@almadar/core';
+import type { EventPayload, Orbital, OrbitalSchema } from '@almadar/core';
 import { dispatchNavigates } from './internal/orbital-walk.js';
+import { collectEntityFields, synthesizeSuccessPayload } from './internal/payload-synth.js';
 import type { ExtendedWalkStep, PlanEmitInput } from './types.js';
+import type { TraitWalkConfig } from '../engine/types.js';
 
 export function planEmitSweep(input: PlanEmitInput): ExtendedWalkStep[] {
   const { trait, emits, schema, orb } = input;
@@ -27,19 +29,31 @@ export function planEmitSweep(input: PlanEmitInput): ExtendedWalkStep[] {
   // Deduplicate by `success` event name; failure events are still
   // captured but as separate steps so each gets fired once.
   const seen = new Set<string>();
+  const entityFieldsByName = schema !== undefined ? collectEntityFields(schema) : {};
+  const payloadOf = (eventName: string) => sweptPayload(trait, eventName, entityFieldsByName);
 
   for (const decl of emits) {
     if (decl.success !== undefined && !seen.has(decl.success)) {
       seen.add(decl.success);
-      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.success, schema, orb));
+      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.success, schema, orb, payloadOf(decl.success)));
     }
     if (decl.failure !== undefined && !seen.has(decl.failure)) {
       seen.add(decl.failure);
-      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.failure, schema, orb));
+      result.push(makeEmitStep(trait.traitName, trait.initialState, decl.failure, schema, orb, payloadOf(decl.failure)));
     }
   }
 
   return result;
+}
+
+/** A valid payload for a swept event, synthesized from its declared `payloadSchema` (G-VERIFY-042); `{}` when it declares none. */
+function sweptPayload(
+  trait: TraitWalkConfig,
+  eventName: string,
+  entityFieldsByName: ReturnType<typeof collectEntityFields>,
+): EventPayload {
+  const decl = trait.events?.find((e) => e.key === eventName);
+  return synthesizeSuccessPayload(decl?.payloadSchema, trait.linkedEntity, entityFieldsByName);
 }
 
 /**
@@ -70,6 +84,7 @@ function makeEmitStep(
   eventName: string,
   schema: OrbitalSchema | undefined,
   orb: Orbital | undefined,
+  payload: EventPayload,
 ): ExtendedWalkStep {
   const navigates = schema !== undefined && orb !== undefined
     && dispatchNavigates(schema, orb, traitName, eventName);
@@ -78,7 +93,7 @@ function makeEmitStep(
     event: eventName,
     to: initialState,
     guardCase: null,
-    payload: {},
+    payload,
     isRepositioning: false,
     traitName,
     triggerKind: 'bus',

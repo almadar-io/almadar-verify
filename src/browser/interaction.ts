@@ -15,6 +15,7 @@
 
 import type { Page } from 'playwright';
 import type { EntityField, EventPayload, EventPayloadValue } from '@almadar/core';
+import { payloadTypeContainer } from '@almadar/core';
 import { sampleFieldValue, type SampleContext } from '@almadar/core/mock';
 import {
   seedRandom,
@@ -244,9 +245,12 @@ export function buildMinimalPayload(
     const type = typeof field === 'string' ? 'string' : (field.type ?? 'string');
 
     // A nested object contract (`data : { content!, channel! }`) is built
-    // from its own declared properties — never a shapeless placeholder.
+    // from its own declared properties — never a shapeless placeholder. For
+    // a flattened array (`[object]` + element properties) the properties
+    // describe ONE element, so the value is an array of that row.
     if (typeof field !== 'string' && field.entity === undefined && field.properties !== undefined && field.properties.length > 0) {
-      payload[name] = buildMinimalPayload([...field.properties], entityFields);
+      const row = buildMinimalPayload([...field.properties], entityFields);
+      payload[name] = payloadTypeContainer(type).kind === 'array' ? [row] : row;
       continue;
     }
 
@@ -316,11 +320,9 @@ export function buildMinimalPayload(
     // pattern rendered empty even though VG checks all passed.
     // Detect the bracketed-entity shape `[Foo]` (or plain `array`) and
     // synthesize a one-element array using the entity's field types.
-    const arrayMatch = typeof type === 'string'
-      ? /^\[(.+)\]$/.exec(type) ?? (type === 'array' ? [type, ''] as const : null)
-      : null;
-    if (arrayMatch) {
-      const inner = arrayMatch[1] ?? '';
+    const container = payloadTypeContainer(type);
+    if (container.kind === 'array') {
+      const inner = container.element;
       // For a structured-entity array, build one mock row from the
       // entity field defs (same path used by `object`/`any` below).
       // For a scalar array (`[string]`/`[number]`), produce 2-3 random

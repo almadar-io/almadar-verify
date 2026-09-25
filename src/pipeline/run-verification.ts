@@ -486,8 +486,10 @@ export async function runVerification<Ctx extends DriverContext>(
       // moment and has no prior state to reset from).
       let preconditionUnreachable = false;
       let preconditionReason = '';
+      let liveState: string | null = null;
       if (step.triggerKind !== 'auto-init') {
         await input.driver.reset(ctx);
+        liveState = trait.initialState;
 
         // C1-V14 (F4): `beforeReplay` means this step's own replay path
         // (from the trait's initial state to `step.from`) never traverses
@@ -555,6 +557,7 @@ export async function runVerification<Ctx extends DriverContext>(
                   frames.push(establishReconcileFrame);
                   log(`  [${stepIdx + 1}/${plan.length}] establish-reconcile (${establishTraitName}) ${establishReconcileStep.from} --${establishReconcileStep.event}--> ${establishReconcileStep.to}`);
                   prev = establishReconcileFrame;
+                  if (establishReconcileFrame.cause.traitName === trait.traitName && establishReconcileFrame.stateAfter !== null) liveState = establishReconcileFrame.stateAfter;
                   const establishReconcileAccepted = establishReconcileStep.acceptStates ?? [establishReconcileStep.to];
                   if (
                     establishReconcileFrame.stateAfter !== null &&
@@ -598,6 +601,7 @@ export async function runVerification<Ctx extends DriverContext>(
             frames.push(establishFrame);
             log(`  [${stepIdx + 1}/${plan.length}] establish-row (${establishTraitName}) ${establishStep.from} --${establishStep.event}--> ${establishStep.to}`);
             prev = establishFrame;
+            if (establishFrame.cause.traitName === trait.traitName && establishFrame.stateAfter !== null) liveState = establishFrame.stateAfter;
             if ('unreachableRow' in resolved) {
               preconditionUnreachable = true;
               preconditionReason = `precondition '${step.from}' unreachable — row-establishing preamble '${preamble.event}' failed: ${resolved.unreachableRow}`;
@@ -640,6 +644,7 @@ export async function runVerification<Ctx extends DriverContext>(
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
             prev = reconcileFrame;
+            if (reconcileFrame.cause.traitName === trait.traitName && reconcileFrame.stateAfter !== null) liveState = reconcileFrame.stateAfter;
 
             // REPLAY-NONDET-DISPATCH: the preamble BFS assumes one target
             // per (from, event), but a guarded transition branches, or a
@@ -731,6 +736,16 @@ export async function runVerification<Ctx extends DriverContext>(
       // `idle` instead of `reviewing`) and report a misleading pass/fail
       // that says nothing about the transition itself. Skip it; the
       // divergence (if any) is already recorded via `replayDivergences`.
+      // G-VERIFY-043: a transient precondition the runtime settled past leaves no arm to test.
+      const settled = liveState;
+      if (
+        !preconditionUnreachable && settled !== null && settled !== step.from && step.from !== '*' &&
+        !trait.transitions.some((t) => (t.from === settled || t.from === '*') && t.event === step.event)
+      ) {
+        preconditionUnreachable = true;
+        preconditionReason = `precondition '${step.from}' is transient — the runtime settled at '${settled}', which has no ${step.event} arm`;
+      }
+
       if (preconditionUnreachable) {
         log(`  [${stepIdx + 1}/${plan.length}] SKIP ${step.from} --${step.event}--> ${step.to} | ${preconditionReason}`);
         preconditionSkips.push(`${trait.traitName}:${step.from}+${step.event}->${step.to} — ${preconditionReason}`);

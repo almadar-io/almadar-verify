@@ -176,4 +176,25 @@ describe('planEmitSweep', () => {
       expect(step.navigates).toBe(true);
     });
   });
+
+  it("sweeps an event with its declared payload filled, so the server's validator accepts it (G-VERIFY-042)", () => {
+    const withSchema: TraitWalkConfig = {
+      ...trait,
+      events: [
+        { key: 'ReviewLogged', name: 'ReviewLogged', payloadSchema: [{ name: 'id', type: 'string', required: true }, { name: 'round', type: 'number' }] },
+        { key: 'SyncFailed', name: 'SyncFailed', payloadSchema: [{ name: 'error', type: 'string', required: true }] },
+      ],
+    };
+    const steps = planEmitSweep({ trait: withSchema, emits: [{ success: 'ReviewLogged', failure: 'SyncFailed' }] });
+    const logged = steps.find((s) => s.event === 'ReviewLogged');
+    const failed = steps.find((s) => s.event === 'SyncFailed');
+    expect(typeof logged?.payload.id).toBe('string');
+    expect(String(logged?.payload.id).length).toBeGreaterThan(0);
+    expect(typeof failed?.payload.error).toBe('string');
+  });
+
+  it('control: an event with no declared payload is swept with {}', () => {
+    const [step] = planEmitSweep({ trait, emits: [{ success: 'PingEvent' }] });
+    expect(step.payload).toEqual({});
+  });
 });

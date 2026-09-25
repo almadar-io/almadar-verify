@@ -107,7 +107,9 @@ describe('runVerification — precondition-unreachable steps are skipped, not mi
       options: baseOptions,
     });
 
-    expect(result.verdicts.preconditionSkipped).toBeUndefined();
+    const skipped = result.verdicts.preconditionSkipped?.detail ?? '';
+    expect(skipped).not.toContain('APPROVE');
+    expect(skipped).toContain("ApprovalGateReview:loading+ApprovalRequestLoaded->reviewing — precondition 'loading' is transient");
     expect(result.verdicts.replayDiverged).toBeUndefined();
     const approveFrame = result.frames.find((f) => f.cause.event === 'APPROVE');
     expect(approveFrame).toBeDefined();

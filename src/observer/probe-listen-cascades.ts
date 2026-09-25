@@ -637,6 +637,8 @@ export async function probeListenCascades(
             }
           }
 
+          const deliveredHops: Array<{ traitName: string; event: string }> = [];
+          const unobserve = runtime.observeTransitions({ onTransition: (t) => { deliveredHops.push({ traitName: t.traitName, event: t.event }); } });
           const response = await runtime.processOrbitalEvent(sourceOrbitalName, {
             event: transition.event,
             payload,
@@ -645,6 +647,7 @@ export async function probeListenCascades(
 
           const sourceEmitted = response.success && response.emittedEvents.some((e) => e.event === listen.event);
           if (!sourceEmitted) {
+            unobserve();
             // C1-V19 (item 5): the chosen arm didn't fire — report the REAL
             // cause instead of blindly blaming the guard. `response.
             // effectResults` (unread until this fix) carries the actual
@@ -696,24 +699,12 @@ export async function probeListenCascades(
           // `composed-trait-listen-eventid-routing.test.ts`'s own wait.
           await new Promise((r) => setTimeout(r, 20));
 
-          const listenerAfter = readTraitState(runtime, orb.name, listenerName);
+          unobserve();
           const normalizedTriggers = normalizeEventKey(listen.triggers);
-          // Object-IDENTITY change, not a value comparison: `sendEvent` always
-          // stores a brand-new `TraitState` object on every EXECUTED transition
-          // (`StateMachineManager`'s `states.set(key, {...traitState, ...})`),
-          // even when the new values happen to equal the old ones — a listener
-          // whose own arm is a guardless self-transition (`from === to`, no
-          // state-changing effect) can legitimately have already landed on the
-          // SAME `(currentState, lastEvent)` pair from an earlier, unrelated
-          // probe in this same run (a coincidental side-channel: two different
-          // listens on this schema can share a downstream cascade target). A
-          // value comparison would then read that as "nothing happened" on
-          // this dispatch and misreport a working cascade as broken; reference
-          // inequality catches the second execution regardless.
-          const delivered =
-            listenerAfter !== undefined &&
-            listenerAfter !== listenerBefore &&
-            listenerAfter.lastEvent === normalizedTriggers;
+          // Per-hop evidence: the listener's final `lastEvent` is last-writer-wins across a multi-event dispatch.
+          const delivered = deliveredHops.some(
+            (h) => h.traitName === listenerName && normalizeEventKey(h.event) === normalizedTriggers,
+          );
 
           if (!delivered) {
             findings.push({

@@ -497,7 +497,7 @@ export async function tick<Ctx extends DriverContext>(
       ? []
       : crudAffordanceAbsent !== undefined
         ? [crudAffordanceAbsent]
-        : collectDispatchErrors(step, stateAfter, dispatchSent, allowStateless === true);
+        : collectDispatchErrors(step, stateAfter, dispatchSent, allowStateless === true, effectiveServerResponse);
   const accepted = unreachableRow !== undefined
     ? false
     : bareDispatchSkip !== undefined
@@ -751,11 +751,20 @@ function collectDispatchErrors(
   stateAfter: string | null,
   dispatchSent: boolean,
   allowStateless: boolean,
+  serverResponse: ServerResponseTrace | null,
 ): string[] {
   const errors: string[] = [];
   if (!dispatchSent) {
     errors.push(
       `dispatch failed: driver did not deliver event '${step.event}' to trait '${step.traitName}'`,
+    );
+  }
+  // The dispatch's own failure verdict (a thrown effect, a rejected payload)
+  // outranks the state it left behind: a self-loop that throws still "reaches"
+  // `to`. A malformed step expects the rejection, so it is judged elsewhere.
+  if (serverResponse?.success === false && step.payloadCase !== 'malformed') {
+    errors.push(
+      `dispatch failed: event '${step.event}' on trait '${step.traitName}' — ${serverResponse.error ?? 'runtime reported success:false'}`,
     );
   }
   // A navigate-carrying transition can swap the page and unmount the trait

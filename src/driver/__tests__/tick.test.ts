@@ -108,6 +108,29 @@ describe('tick', () => {
     expect(frame.accepted).toBe(false);
   });
 
+  it('rejects a step whose state reached `to` but whose dispatch failed', async () => {
+    const { driver, runtime } = createFakeDriver([trait]);
+    const ctx = { outputDir: '/tmp', trait, runtime };
+    // The arm fired, then its effects threw (ui-pirate-board-3d's FxDecay
+    // BURST self-loop: `(s ?? []).map is not a function`). Reaching `to`
+    // alone must not credit it — the dispatch's own failure verdict wins.
+    runtime.failEffects(trait.traitName, 'BrowseItemLoaded', 'TypeError: (s ?? []).map is not a function');
+
+    const frame = await tick(driver, ctx, null, step('loading', 'BrowseItemLoaded', 'browsing'));
+
+    expect(frame.stateAfter).toBe('browsing');
+    expect(frame.accepted).toBe(false);
+    expect(frame.errors?.some((e) => e.includes('(s ?? []).map is not a function'))).toBe(true);
+  });
+
+  it('control: a clean dispatch reaching `to` carries no errors', async () => {
+    const { driver, runtime } = createFakeDriver([trait]);
+    const ctx = { outputDir: '/tmp', trait, runtime };
+    const frame = await tick(driver, ctx, null, step('loading', 'BrowseItemLoaded', 'browsing'));
+    expect(frame.accepted).toBe(true);
+    expect(frame.errors).toEqual([]);
+  });
+
   it('accepts a settled state in the transient closure (acceptStates)', async () => {
     const { driver, runtime } = createFakeDriver([trait]);
     const ctx = { outputDir: '/tmp', trait, runtime };

@@ -22,7 +22,7 @@ import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
-function makeOrbital(): OrbitalSchema {
+function makeOrbital(extraTransitions: ReadonlyArray<{ from: string; to: string; event: string }> = []): OrbitalSchema {
   return {
     name: 'std-cache-aside-fixture',
     designTokens: {},
@@ -66,6 +66,7 @@ function makeOrbital(): OrbitalSchema {
                 },
                 { from: 'loading', to: 'cached', event: 'Loaded' },
                 { from: 'loading', to: 'error', event: 'Failed' },
+                ...extraTransitions,
               ],
             },
           },
@@ -154,5 +155,54 @@ describe('runVerification — reconcile hop transient-closure tolerance', () => 
     expect(result.verdicts.replayDiverged).toBeDefined();
     expect(result.verdicts.replayDiverged?.passed).toBe(false);
     expect(result.verdicts.replayDiverged?.detail).toContain('rogue-state');
+  });
+
+  const overshootOptions = {
+    enableInteractionTests: false,
+    enableContractEvents: false,
+    enableDataMutationTests: false,
+    enableClickPathSamples: false,
+    enablePortalPerStep: false,
+    enableUserCrudFlow: false,
+    enableTickTests: false,
+    enableEmitSweep: false,
+    log: () => {},
+  };
+
+  async function runWithFetchOvershoot(orbital: OrbitalSchema) {
+    const { driver, runtime } = createFakeDriver(
+      (await import('../../planner/extract-trait-walk-configs.js')).extractTraitWalkConfigs(orbital),
+    );
+    const originalSendEvent = driver.sendEvent.bind(driver);
+    driver.sendEvent = async (ctx, event, payload, scope) => {
+      const result = await originalSendEvent(ctx, event, payload, scope);
+      if (event === 'FETCH') runtime.setState(ctx.trait.traitName, 'cached');
+      return result;
+    };
+    return runVerification({
+      itemName: 'std-cache-aside-fixture',
+      orbital,
+      driver,
+      ctx: { outputDir: '', runtime },
+      options: overshootOptions,
+    });
+  }
+
+  const directLoadedFrames = (frames: ReadonlyArray<{ cause: { triggerKind?: string; event: string } }>) =>
+    frames.filter((f) => f.cause.triggerKind !== 'reconcile' && f.cause.event === 'Loaded');
+
+  it('skips a step whose transient precondition settles in a state with no arm for its event (G-VERIFY-043)', async () => {
+    const result = await runWithFetchOvershoot(makeOrbital());
+
+    expect(result.verdicts.preconditionSkipped?.detail).toContain("CacheEntryCacheManager:loading+Loaded->cached — precondition 'loading' is transient");
+    expect(result.verdicts.preconditionSkipped?.detail).toContain("settled at 'cached', which has no Loaded arm");
+    expect(directLoadedFrames(result.frames)).toHaveLength(0);
+  });
+
+  it('still fires the step from the settled state when that state declares an arm for its event', async () => {
+    const result = await runWithFetchOvershoot(makeOrbital([{ from: 'cached', to: 'cached', event: 'Loaded' }]));
+
+    expect(result.verdicts.preconditionSkipped?.detail ?? '').not.toContain('loading+Loaded->cached');
+    expect(directLoadedFrames(result.frames).length).toBeGreaterThan(0);
   });
 });

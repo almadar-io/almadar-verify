@@ -16,7 +16,7 @@
  */
 
 import type { OrbitalSchema, EventPayload, PayloadField, SExpr } from '@almadar/core';
-import { isEntityReference, isEntityCall } from '@almadar/core';
+import { isEntityReference, isEntityCall, payloadTypeContainer } from '@almadar/core';
 import { buildMinimalPayload, type EntityFieldDef, type PayloadFieldSpec } from '../../browser/interaction.js';
 
 /**
@@ -164,9 +164,9 @@ function guardArrayLenFields(guard: SExpr): string[] {
 /** The entity name inside a `[Entity]` array type; undefined for scalar/plain arrays. */
 function arrayElementEntity(type: string | undefined): string | undefined {
   if (typeof type !== 'string') return undefined;
-  const match = /^\[(.+)\]$/.exec(type);
-  if (match === null) return undefined;
-  const inner = match[1];
+  const container = payloadTypeContainer(type);
+  if (container.kind !== 'array' || container.element === '') return undefined;
+  const inner = container.element;
   return inner === 'string' || inner === 'number' || inner === 'integer' || inner === 'float' || inner === 'boolean'
     ? undefined
     : inner;
