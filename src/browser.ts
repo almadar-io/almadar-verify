@@ -25,6 +25,9 @@ export type { ConfigVariant } from './planner/enumerate-config-variants.js';
 // Driver contract (types + tick only — no Playwright impls)
 export type { Driver, DriverContext, SendResult, SnapshotResult } from './driver/types.js';
 export { tick } from './driver/tick.js';
+export { playCircuitStep, type PlayCircuitStepInput, type PlayCircuitStepResult } from './driver/play-step.js';
+export { createCircuitHooks, type CircuitHooks, type GuardVerdict } from './driver/circuit-hooks.js';
+export { declaredEntityRow } from './driver/declared-entity-row.js';
 export type { ExtendedWalkStep } from './planner/types.js';
 export type { TraitWalkConfig } from './engine/types.js';
 

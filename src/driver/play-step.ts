@@ -13,9 +13,10 @@
  * {@link createFakeDriver}'s default.
  */
 
-import type { Effect, EffectTrace, EventLogEntry, EventPayload, SExpr } from '@almadar/core';
+import type { CircuitStepResult, Effect, EffectTrace, EventPayload, GuardEvaluation, SExpr } from '@almadar/core';
 import type { TraitWalkConfig } from '../engine/types.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
+import type { GuardVerdict } from './circuit-hooks.js';
 import { createFakeDriver, type FakeDriverContext } from './impls/fake.js';
 import { tick } from './tick.js';
 
@@ -28,8 +29,8 @@ export interface PlayCircuitStepInput {
   expectTo?: string;
   /** Event payload — also the `@payload` binding a guard hook receives. */
   payload?: EventPayload;
-  /** Guard evaluator hook, forwarded to {@link createFakeDriver}. */
-  evaluateGuard?: (guard: SExpr, ctx: { traitName: string; event: string; payload: EventPayload }) => boolean;
+  /** Guard evaluator hook, forwarded to {@link createFakeDriver}. A {@link GuardVerdict} also records the guard's trace in the result. */
+  evaluateGuard?: (guard: SExpr, ctx: { traitName: string; event: string; payload: EventPayload }) => boolean | GuardVerdict;
   /**
    * Effect executor hook, forwarded to {@link createFakeDriver}. When the
    * fired arm declares effects, this runs them and reports what happened
@@ -42,20 +43,7 @@ export interface PlayCircuitStepInput {
   ) => { effects: EffectTrace[]; emitted: Array<{ event: string; payload?: EventPayload }> };
 }
 
-export interface PlayCircuitStepResult {
-  trait: string;
-  event: string;
-  /**
-   * A guard-fail always means no transition, even when `frame.accepted`
-   * can't tell (a self-loop's `from === to` makes "state held" and
-   * "state advanced" look identical from the outside).
-   */
-  transitionFired: boolean;
-  guard: 'pass' | 'fail' | 'none';
-  state: { before: string | null; after: string | null };
-  effects: ReadonlyArray<EffectTrace>;
-  emitted: ReadonlyArray<EventLogEntry>;
-}
+export type PlayCircuitStepResult = CircuitStepResult;
 
 /**
  * Play one step on `target`. Throws when the trait declares no
@@ -78,24 +66,35 @@ export async function playCircuitStep(
   // guard error counts as a fail and falls through. Playing only arms[0]
   // (the old behavior) reported a false "blocked" for the standard
   // guarded-arm → unguarded-fallback pattern.
+  const verdictOf = (guard: SExpr, ctx: { traitName: string; event: string; payload: EventPayload }): GuardVerdict | boolean =>
+    input.evaluateGuard ? input.evaluateGuard(guard, ctx) : true;
+  const guards: GuardEvaluation[] = [];
   let transition = arms[arms.length - 1];
+  let firedArm: number | undefined;
   let selection: 'pass' | 'fail' | 'none' = 'fail';
-  for (const arm of arms) {
+  for (const [index, arm] of arms.entries()) {
     if (arm.guard === undefined || arm.guard === null) {
       transition = arm;
+      firedArm = index;
       selection = 'none';
       break;
     }
     let passed = true;
     if (input.evaluateGuard) {
       try {
-        passed = input.evaluateGuard(arm.guard, { traitName: target.traitName, event: input.event, payload });
+        const verdict = verdictOf(arm.guard, { traitName: target.traitName, event: input.event, payload });
+        if (typeof verdict === 'boolean') passed = verdict;
+        else {
+          passed = verdict.passed;
+          guards.push({ ...verdict, arm: index, guard: arm.guard });
+        }
       } catch {
         passed = false;
       }
     }
     if (passed) {
       transition = arm;
+      firedArm = index;
       selection = input.evaluateGuard ? 'pass' : 'none';
       break;
     }
@@ -106,7 +105,12 @@ export async function playCircuitStep(
   const { driver, runtime } = createFakeDriver([target], {
     ...(input.evaluateGuard
       ? {
-          evaluateGuard: (guard, ctx) => input.evaluateGuard?.(guard, ctx) ?? true,
+          evaluateGuard: (guard, ctx) => {
+            const verdict = verdictOf(guard, ctx);
+            if (typeof verdict === 'boolean') return verdict;
+            if (verdict.error !== undefined) throw new Error(verdict.error);
+            return verdict.passed;
+          },
         }
       : {}),
     ...(input.executeEffects ? { executeEffects: input.executeEffects } : {}),
@@ -137,8 +141,10 @@ export async function playCircuitStep(
     event: input.event,
     transitionFired: selection === 'fail' ? false : frame.accepted,
     guard: selection,
+    ...(firedArm !== undefined ? { firedArm } : {}),
     state: { before: frame.stateBefore, after: frame.stateAfter },
     effects: frame.effectResults,
     emitted: frame.eventLogDelta.added,
+    ...(guards.length > 0 ? { guards } : {}),
   };
 }

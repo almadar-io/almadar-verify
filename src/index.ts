@@ -309,6 +309,7 @@ export {
   type PlayCircuitStepInput,
   type PlayCircuitStepResult,
 } from './driver/play-step.js';
+export { createCircuitHooks, type CircuitHooks, type GuardVerdict } from './driver/circuit-hooks.js';
 export { declaredEntityRow } from './driver/declared-entity-row.js';
 export {
   createPlaywrightDriver,
