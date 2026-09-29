@@ -19,8 +19,8 @@
  * fallback keep computing it themselves and pass the result in.
  */
 
-import { resolve } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 export type RegistryTierLevel = 'atom' | 'molecule' | 'organism' | 'template';
 
@@ -49,6 +49,29 @@ export interface DiscoveredBehavior {
   tier: string;
   /** Behavior level derived from the tier dir. */
   level: RegistryTierLevel;
+  /** The import prefix its package declares (`orb.prefix`): `uses X from "<prefix>/<name>"`.
+   *  Absent when no package declares this registry. */
+  prefix?: string;
+}
+
+/**
+ * The `orb.prefix` of the package whose `orb.registry` is `registryBase`: the nearest
+ * `package.json` above it, when it declares that registry. Null otherwise.
+ */
+export function registryPrefix(registryBase: string): string | null {
+  const base = resolve(registryBase);
+  let dir = dirname(base);
+  for (;;) {
+    const manifest = resolve(dir, 'package.json');
+    if (existsSync(manifest)) {
+      const parsed: { orb?: { prefix?: string; registry?: string } } = JSON.parse(readFileSync(manifest, 'utf8'));
+      const orb = parsed.orb;
+      return orb && typeof orb.prefix === 'string' && typeof orb.registry === 'string' && resolve(dir, orb.registry) === base ? orb.prefix : null;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /**
@@ -60,6 +83,7 @@ export interface DiscoveredBehavior {
  * topic `ui/game/2d`. New topics or deeper nesting are picked up automatically.
  */
 export function* walkRegistryBehaviors(registryBase: string): Generator<DiscoveredBehavior> {
+  const prefix = registryPrefix(registryBase);
   // `rel` is the current dir's path relative to the registry root, `/`-joined.
   function* descend(dir: string, rel: string): Generator<DiscoveredBehavior> {
     const dirName = rel === '' ? '' : (rel.split('/').pop() ?? '');
@@ -76,6 +100,7 @@ export function* walkRegistryBehaviors(registryBase: string): Generator<Discover
             topic,
             tier: dirName,
             level,
+            ...(prefix !== null ? { prefix } : {}),
           };
         }
       }

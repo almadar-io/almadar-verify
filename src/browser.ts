@@ -26,6 +26,8 @@ export type { ConfigVariant } from './planner/enumerate-config-variants.js';
 export type { Driver, DriverContext, SendResult, SnapshotResult } from './driver/types.js';
 export { tick } from './driver/tick.js';
 export { playCircuitStep, type PlayCircuitStepInput, type PlayCircuitStepResult } from './driver/play-step.js';
+export { stepVerdict, type StepExpectation, type StepVerdict } from './driver/step-verdict.js';
+export { walkTraitVerdict, stepExpectation, type TraitWalkOptions, type TraitWalkVerdict, type WalkedStep } from './driver/trait-walk.js';
 export { createCircuitHooks, type CircuitHooks, type GuardVerdict } from './driver/circuit-hooks.js';
 export { declaredEntityRow } from './driver/declared-entity-row.js';
 export type { ExtendedWalkStep } from './planner/types.js';

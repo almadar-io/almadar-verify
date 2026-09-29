@@ -255,6 +255,10 @@ export interface ExtendedWalkStep extends WalkStep {
    */
   guardSteerable?: boolean;
 
+  /** Position of this step's transition among the trait's `from --event-->` arms, numbered as
+   *  `CircuitStepResult.firedArm` numbers them. */
+  arm?: number;
+
   /**
    * Guard-fail variants only: the OTHER declared targets of this step's
    * `(from, event)` pair. When complementary guarded arms share an event,

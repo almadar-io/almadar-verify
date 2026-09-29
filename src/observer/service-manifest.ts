@@ -45,7 +45,7 @@ export interface ServiceManifestResult {
 interface RegistryService {
   backend?: string;
   actions: Array<{ name: string }>;
-  credentials?: Array<{ envVar: string; required: boolean; description: string }>;
+  credentials?: Array<{ envVar: string; required: boolean; oneOf?: string; description: string }>;
 }
 
 function loadServicesRegistry(): Record<string, RegistryService> {
@@ -120,6 +120,12 @@ export function serviceManifest(
       description: c.description,
     }));
     const missingRequired = credentials.filter((c) => c.required && !c.present);
+    // A `oneOf` group (use this OR that) is satisfied by any one member.
+    const groups = new Map<string, string[]>();
+    for (const c of reg?.credentials ?? []) {
+      if (c.oneOf !== undefined) groups.set(c.oneOf, [...(groups.get(c.oneOf) ?? []), c.envVar]);
+    }
+    const missingGroups = [...groups.values()].filter((members) => !members.some((m) => Boolean(env[m])));
     const backend = reg?.backend ?? 'unknown';
     const entry: ServiceManifestEntry = {
       service,
@@ -127,7 +133,7 @@ export function serviceManifest(
       registered,
       backend,
       credentials,
-      configured: missingRequired.length === 0,
+      configured: missingRequired.length === 0 && missingGroups.length === 0,
     };
     entries.push(entry);
 
@@ -140,6 +146,9 @@ export function serviceManifest(
       findings.push(
         `service '${service}' is missing required credentials: ${missingRequired.map((c) => c.envVar).join(', ')} — calls will be mock-satisfied in dev and FAIL in production`,
       );
+    }
+    for (const members of missingGroups) {
+      findings.push(`service '${service}' needs one of ${members.join(', ')} — calls will FAIL until one is set`);
     }
     if (backend === 'simulated') {
       findings.push(

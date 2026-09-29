@@ -148,7 +148,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
           transition,
           guardCase: 'fail',
           payloadCase: 'guard-fail',
-          payload: { ...successPayload, ...guardPayloads.fail, ...strDefaultFailOverrides(transition.guard) } as EventPayload,
+          payload: { ...successPayload, ...guardPayloads.fail } as EventPayload,
           entityFieldsByName,
           guardSteerable: steerable,
         }));
@@ -234,6 +234,7 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
     triggerKind: 'bus',
     coverageKey: buildCoverageKey(trait.traitName, transition.from, transition.event, transition.to, guardCase, payloadCase),
     payloadCase,
+    arm: trait.transitions.filter((t) => t.from === transition.from && t.event === transition.event).indexOf(transition),
     ...(input.guardSteerable !== undefined && { guardSteerable: input.guardSteerable }),
     ...(transition.navigates === true && { navigates: true }),
   };
@@ -270,43 +271,6 @@ function makeStep(input: MakeStepInput): ExtendedWalkStep {
     }
   }
   return step;
-}
-
-/**
- * PF-17a: steer a `(!= (str/default @payload.<field> D) V)` guard's fail
- * variant. `buildGuardPayloads` can't see through `str/default`, so its fail
- * payload leaves the synthesized success value in place and the "fail"
- * dispatch passes (EntryLockApply.LOCK_ENTRY's `entityId`). When D === V
- * (the canonical nonempty form, both `""`) forcing the field to D makes
- * `str/default` yield V and the guard genuinely fails. Any other shape is
- * left untouched.
- */
-function strDefaultFailOverrides(guard: SExpr | undefined): EventPayload {
-  const out: EventPayload = {};
-  if (guard !== undefined) collectStrDefaultFailOverrides(guard, out);
-  return out;
-}
-
-function collectStrDefaultFailOverrides(node: SExpr, out: EventPayload): void {
-  if (Array.isArray(node)) {
-    const op = String(node[0]);
-    if (op === '!=' || op === 'not-eq' || op === 'neq') {
-      for (const [expr, other] of [[node[1], node[2]], [node[2], node[1]]] as const) {
-        if (!Array.isArray(expr) || expr[0] !== 'str/default') continue;
-        const ref: unknown = expr[1];
-        const def: unknown = expr[2];
-        if (typeof ref !== 'string' || !ref.startsWith('@payload.')) continue;
-        if (typeof def !== 'string' || def !== other) continue;
-        const path = ref.slice('@payload.'.length);
-        if (!path.includes('.')) out[path] = def;
-      }
-    }
-    for (const child of node) collectStrDefaultFailOverrides(child, out);
-    return;
-  }
-  if (node !== null && typeof node === 'object') {
-    for (const value of Object.values(node)) collectStrDefaultFailOverrides(value, out);
-  }
 }
 
 /**
