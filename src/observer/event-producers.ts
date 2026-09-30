@@ -24,6 +24,7 @@ import type {
 } from '@almadar/core';
 import { eventKeyPropsOf, eventListPropsOf } from '@almadar/core';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
+import { stdOperatorLookup, valueLeaves, type OperatorLookup } from './value-leaves.js';
 
 /** Every IR value shape the walkers below traverse: S-expressions (state
  *  machines), call-site config values, render-ui pattern payloads, and
@@ -112,7 +113,7 @@ function scanRenderActionEvents(node: ScanNode, out: Set<string>): void {
   const patternType = record['type'];
   if (typeof patternType === 'string') {
     for (const prop of eventKeyPropsOf(patternType)) {
-      for (const leaf of conditionalLeafValues(record[prop])) {
+      for (const leaf of valueLeaves(record[prop])) {
         if (typeof leaf === 'string' && leaf.length > 0) out.add(leaf);
       }
     }
@@ -150,34 +151,21 @@ function collectRenderActionEvents(trait: Trait): Set<string> {
  *  because the registry is the only thing that knows a descriptor's event
  *  field is named something other than `event`.
  */
-function descriptorEvents(value: unknown, eventField: string): string[] {
-  if (!Array.isArray(value)) return [];
-  // A conditional (`(if cond A B)`) list contributes the UNION of its
-  // branches — only one renders at a time, but either is a live emitter
-  // (mirrors the compiler's conditional_leaf_values, 2026-08-30).
-  if (isConditionalNode(value)) {
-    return [...descriptorEvents(value[2], eventField), ...descriptorEvents(value[3], eventField)];
-  }
+function descriptorEvents(value: ScanNode, eventField: string, lookup: OperatorLookup): string[] {
+  // Every declared value source of the config contributes (both `if`
+  // branches, a sliced/sorted/concatenated list, a mapped lambda body) — only
+  // one renders at a time, but any is a live emitter (mirrors orbital-core's
+  // `SExpression::value_leaves`). A source is a descriptor list or one descriptor.
   const out: string[] = [];
-  for (const entry of value) {
-    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
-    const event = asRecordNode(entry)[eventField];
-    if (typeof event === 'string' && event.length > 0) out.push(event);
+  for (const leaf of valueLeaves(value, lookup)) {
+    const entries = Array.isArray(leaf) ? leaf : [leaf];
+    for (const entry of entries) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const event = asRecordNode(entry)[eventField];
+      if (typeof event === 'string' && event.length > 0) out.push(event);
+    }
   }
   return out;
-}
-
-/** `["if", cond, then, else?]` — the lowered shape of a `(if …)` config value. */
-function isConditionalNode(value: unknown[]): boolean {
-  return value[0] === 'if' && value.length >= 3 && value.length <= 4;
-}
-
-/** The value itself, or — for a conditional — every branch leaf, recursively. */
-function conditionalLeafValues(value: unknown): unknown[] {
-  if (Array.isArray(value) && isConditionalNode(value)) {
-    return [...conditionalLeafValues(value[2]), ...(value.length === 4 ? conditionalLeafValues(value[3]) : [])];
-  }
-  return [value];
 }
 
 /**
@@ -191,7 +179,7 @@ function conditionalLeafValues(value: unknown): unknown[] {
  * instead of a second hand-rolled check — one owner, per the project's
  * no-duplicates rule.
  */
-export function configItemActionEvents(trait: Trait): Set<string> {
+export function configItemActionEvents(trait: Trait, lookup: OperatorLookup = stdOperatorLookup): Set<string> {
   const out = new Set<string>();
   const scan = (node: ScanNode): void => {
     if (node === null || node === undefined) return;
@@ -211,7 +199,7 @@ export function configItemActionEvents(trait: Trait): Set<string> {
         raw !== null && typeof raw === 'object' && !Array.isArray(raw)
           ? asRecordNode(raw)['default']
           : raw;
-      for (const event of descriptorEvents(actions, declared.get(key) ?? 'event')) out.add(event);
+      for (const event of descriptorEvents(actions, declared.get(key) ?? 'event', lookup)) out.add(event);
     }
     for (const value of Object.values(record)) scan(value);
   };

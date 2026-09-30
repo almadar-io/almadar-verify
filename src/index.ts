@@ -24,6 +24,22 @@ export {
 } from './browser/screenshot.js';
 export { navigateWithRetry, waitForRuntime } from './browser/navigate.js';
 export {
+  checkLayout,
+  classifyLayout,
+  measureLayout,
+  type LayoutMeasurement,
+  type MeasuredBox,
+} from './browser/layout.js';
+export {
+  classifySettledRender,
+  measureSettledRender,
+  settledFindingMessage,
+  ENTITY_ROW_SELECTOR,
+  type SettledNode,
+  type SettledFinding,
+  type SettledRenderMeasurement,
+} from './browser/settled-render.js';
+export {
   Annotator,
   type Annotation,
   type AnnotationVerdict,
@@ -55,6 +71,7 @@ export { inspectEntityData, type EntityInspection } from './runtime/entity-inspe
 // DOM analysis
 export {
   inspectDOM, type DOMInspection,
+  propTypeErrorMessages, PROP_TYPE_ERROR_SELECTOR, type PropTypeErrorBox,
   detectViteErrorOverlay, type ViteOverlayResult,
 } from './analysis/dom-inspector.js';
 export { buildConsoleReport, type ConsoleReport } from './analysis/console-report.js';
@@ -84,6 +101,11 @@ export type {
   VerifyReport,
   VerifyCheck,
   ReportCoverage,
+  LayoutReport,
+  LayoutOffender,
+  LayoutScroller,
+  LayoutAttribution,
+  LayoutSquish,
 } from './util/types.js';
 
 // Noise filters

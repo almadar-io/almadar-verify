@@ -8,11 +8,12 @@ Every open gap this repo owns lives here. This file is the source of truth; the 
 - **Close by deleting.** Remove the entry in the same commit as the fix. There is no "closed" section; git history is the record.
 - **Cross-repo gaps don't go here.** If fixing it needs another repo, describe it in your report or PR body; the monorepo coordinator files it.
 
-Next code: `G-VERIFY-050`
+Next code: `G-VERIFY-052`
 
 ## Open gaps
 
 ### Verify / Rabit / Almadar-Tools tier
+
 
 - **G-VERIFY-044** — `guard-precondition-unreachable` ignores trait `ticks {}` as field writers. `findFieldSettingCandidates` / `sameTraitSetterSatisfies` (`planner/internal/guard-precondition.ts`) scan transitions only, so a guard whose field only a tick sets reads as unreachable and fails the walk. Example: `ui-platformer-board` `JUMP` (`@entity.player.grounded`) and `GAME_END -> won|lost` (`@entity.result`), both set by the 33 ms physics tick. The correct verdict is "established only by a tick — not plannable by the walk" (informational), not an error; the downstream `won|lost + PLAY_AGAIN` coverage gap then needs a tick-driven scene (play_scene) rather than a static preamble. `@almadar-io/verify` `[mechanical]` — found 2026-09-24 (game overhaul)
 - **G-VERIFY-040** — Verifier path divergence on standalone `ui-*` pattern factories: `orb verify --trait ButtonRender` (Rust) PASSES 5/5, while `runtime-verify --trait ButtonRender` FAILS `click-no-listener` ("ButtonRender DOM click emitted \"ACTION\" but no trait subscribed") — the factory's `action` is a call-site knob whose standalone default has no listener, which the Rust path treats as a content vessel and the JS path does not. Pre-existing (reproduced 2026-09-24 on the committed `ui-button.lolo`, identical with and without the new `@pattern` tag). Resolve together with G-VERIFY-039 (one declared vessel fact read by both paths). Prevention: rung 3 parity (both verifiers must agree). `[architectural]`

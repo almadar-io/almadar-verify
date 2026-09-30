@@ -8,6 +8,7 @@
  */
 
 import type { Page } from 'playwright';
+import { PATTERN_PROP_TYPE_ERROR_TESTID } from '@almadar/core';
 
 /** Vite error overlay detection result */
 export interface ViteOverlayResult {
@@ -47,6 +48,20 @@ export async function detectViteErrorOverlay(page: Page): Promise<ViteOverlayRes
   });
 }
 
+/** One rendered pattern-prop type error box (UISlotRenderer). */
+export interface PropTypeErrorBox {
+  pattern: string;
+  message: string;
+}
+
+/** Selects the box UISlotRenderer draws for a pattern prop of the wrong shape. */
+export const PROP_TYPE_ERROR_SELECTOR = `[data-testid="${PATTERN_PROP_TYPE_ERROR_TESTID}"]`;
+
+/** One failure per rendered prop type error box. */
+export function propTypeErrorMessages(boxes: readonly PropTypeErrorBox[]): string[] {
+  return boxes.map((b) => `Pattern prop type error (${b.pattern}): ${b.message}`);
+}
+
 /** DOM inspection result */
 export interface DOMInspection {
   /** Unknown pattern errors found in the DOM */
@@ -61,6 +76,8 @@ export interface DOMInspection {
   hasPreviewError: boolean;
   /** The preview error text, if any */
   previewErrorText: string;
+  /** Pattern props rendered with a value of the wrong shape. */
+  propTypeErrors: PropTypeErrorBox[];
 }
 
 /**
@@ -73,8 +90,12 @@ export async function inspectDOM(
   page: Page,
   previewSelector = '[class*="livePreviewBox"], [class*="opPreviewBox"]'
 ): Promise<DOMInspection> {
-  return page.evaluate((selector: string) => {
+  return page.evaluate(({ selector, propErrorSelector }: { selector: string; propErrorSelector: string }) => {
     const result: DOMInspection = {
+      propTypeErrors: Array.from(document.querySelectorAll(propErrorSelector)).map((el) => ({
+        pattern: el.getAttribute('data-orb-pattern') ?? '',
+        message: (el.textContent ?? '').trim(),
+      })),
       unknownPatterns: [],
       hasErrorBoundary: false,
       hasObjectRenderError: false,
@@ -117,5 +138,5 @@ export async function inspectDOM(
     }
 
     return result;
-  }, previewSelector);
+  }, { selector: previewSelector, propErrorSelector: PROP_TYPE_ERROR_SELECTOR });
 }
