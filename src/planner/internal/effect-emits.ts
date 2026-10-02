@@ -44,7 +44,10 @@ function collectFromNode(node: Effect | SExpr, out: Set<string>): void {
   if (node !== null && typeof node === 'object') {
     const emit = (node as Readonly<Record<string, SExpr>>)['emit'];
     if (emit !== null && typeof emit === 'object' && !Array.isArray(emit)) {
-      for (const v of Object.values(emit as Readonly<Record<string, SExpr>>)) {
+      for (const [key, v] of Object.entries(emit as Readonly<Record<string, SExpr>>)) {
+        // `onMessage` names a call-service live message (delivered to the
+        // origin while the call runs), never the effect's outcome.
+        if (key === 'onMessage') continue;
         if (typeof v === 'string' && v !== '') out.add(v);
       }
     }

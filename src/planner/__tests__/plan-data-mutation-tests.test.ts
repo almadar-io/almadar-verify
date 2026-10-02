@@ -231,7 +231,7 @@ describe('planDataMutationTests', () => {
                     from: 'loading',
                     to: 'browsing',
                     event: 'BrowseItemLoaded',
-                    effects: [['render-ui', 'main', { type: 'entity-table', columns: ['name'] }]],
+                    effects: [['render-ui', 'main', { type: 'table-view', columns: ['name'] }]],
                   },
                   { from: 'browsing', to: 'browsing', event: 'UNREAD_CLEARED' },
                 ],

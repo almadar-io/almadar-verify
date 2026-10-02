@@ -768,10 +768,7 @@ export function probeEntityRowContent(input: {
 const LIST_PATTERN_TYPES: ReadonlySet<string> = new Set([
   'data-grid',
   'data-list',
-  'data-table',
-  'entity-cards',
-  'entity-table',
-  'card-grid',
+  'table-view',
 ]);
 
 /**
@@ -876,8 +873,8 @@ export async function probeListRender(
       // Strategy 1: explicit row markers.
       const direct = scope.querySelectorAll('[data-entity-row], [data-entity-id]');
       if (direct.length > 0) return direct.length;
-      // Strategy 2: data-grid / data-table tbody tr.
-      const gridRows = scope.querySelectorAll('[data-pattern="data-grid"] tbody tr, [data-pattern="data-table"] tbody tr, [data-pattern="entity-table"] tbody tr');
+      // Strategy 2: data-grid / table-view tbody tr.
+      const gridRows = scope.querySelectorAll('[data-pattern="data-grid"] tbody tr, [data-pattern="table-view"] tbody tr');
       if (gridRows.length > 0) return gridRows.length;
       // Strategy 3: any visible tbody tr inside the slot (fallback for
       // custom patterns that don't stamp data-pattern).

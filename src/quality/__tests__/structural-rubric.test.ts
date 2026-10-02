@@ -4,8 +4,8 @@ import { scoreStructuralQuality } from '../structural-rubric.js';
 
 /**
  * A rich, std-flashcards-like orbital: a deep (≥4) render tree mixing atoms
- * (stack/typography/button/icon), a molecule (data-grid), and an organism
- * (entity-table); two layout axes; a static children array, a `renderItem`
+ * (stack/typography/button/icon), molecules (data-grid, table-view), and an organism
+ * (detail-panel); two layout axes; a static children array, a `renderItem`
  * lambda and an FC-5 `array/map` child; tiered config knobs (domain +
  * presentation); and a guarded state machine.
  */
@@ -62,8 +62,9 @@ function richSchema(): OrbitalSchema {
                             ],
                           },
                           { type: 'divider' },
+                          { type: 'detail-panel', entity: '@payload.data' },
                           {
-                            type: 'entity-table',
+                            type: 'table-view',
                             entity: '@payload.data',
                             children: [
                               {

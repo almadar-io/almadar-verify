@@ -100,15 +100,15 @@ describe('classifyLayout — what counts as a responsive break', () => {
   it('lists a clipping container whose content is wider than it, with its mode', () => {
     const r = classify([
       box(-1, 0, VW),
-      contents(0, 'data-table', 'OrderBrowse'),
+      contents(0, 'table-view', 'OrderBrowse'),
       box(1, 0, VW, { clipsX: true, overflowX: 'auto', scrollOverflowX: 525, className: 'overflow-x-auto' }),
       box(2, 0, 900),
     ]);
     expect(r.offenders).toEqual([]);
     expect(r.scrollers).toEqual([
       {
-        pattern: 'data-table',
-        patternPath: 'root.data-table',
+        pattern: 'table-view',
+        patternPath: 'root.table-view',
         trait: 'OrderBrowse',
         tag: 'div',
         testId: null,

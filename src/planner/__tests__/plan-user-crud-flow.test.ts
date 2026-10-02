@@ -691,7 +691,7 @@ describe('planUserCrudFlow — viewer requirement (C1-V10 item 1)', () => {
 /**
  * C1-V18 — mirrors std-realtime-chat's real defect: `ChannelRail` (a Browse
  * trait) reaches its `browsing` state via a fetch-success arm
- * (`BrowseItemLoaded`, effect-emitted, rendering an `entity-table` into
+ * (`BrowseItemLoaded`, effect-emitted, rendering an `table-view` into
  * `main`) — structurally identical to "first non-INIT transition off the
  * source trait's initial state, landing elsewhere", exactly what a real
  * modal's OPEN transition looks like. `ChannelMemberPersistor` listens for
@@ -734,7 +734,7 @@ describe('planUserCrudFlow — C1-V18 negative gate (a Browse fetch-success arm 
                     from: 'loading',
                     to: 'browsing',
                     event: 'BrowseItemLoaded',
-                    effects: [['render-ui', 'main', { type: 'entity-table', columns: ['name'] }]],
+                    effects: [['render-ui', 'main', { type: 'table-view', columns: ['name'] }]],
                   },
                   { from: 'browsing', to: 'browsing', event: 'UNREAD_CLEARED' },
                 ],

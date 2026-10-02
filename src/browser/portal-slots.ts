@@ -16,28 +16,14 @@
  */
 
 import type { Page } from 'playwright';
-import type { ResolvedTrait, ResolvedTraitTransition, SExpr } from '@almadar/core';
+import { RENDERED_SLOTS } from '@almadar/core';
+import type { ResolvedTrait, ResolvedTraitTransition, SExpr, UISlot } from '@almadar/core';
 
-/** Canonical portal slot names — mirrors `UISlot` in `@almadar/ui`'s
- *  `hooks/useUISlots.ts`. Must include every slot the runtime stamps
- *  as `id="slot-{name}"`, otherwise per-slot verdicts (VG1, portal
- *  presence) silently skip transitions targeting the missing slot. */
-export const PORTAL_SLOTS = [
-  'main',
-  'sidebar',
-  'modal',
-  'drawer',
-  'overlay',
-  'center',
-  'toast',
-  'hud-top',
-  'hud-bottom',
-  'hud-left',
-  'hud-right',
-  'floating',
-] as const;
+/** The slots a renderer mounts as `#slot-{name}` — core's `RENDERED_SLOTS`, so
+ *  a new slot is probed the moment the language gains it. */
+export const PORTAL_SLOTS = RENDERED_SLOTS;
 
-export type PortalSlot = (typeof PORTAL_SLOTS)[number];
+export type PortalSlot = UISlot;
 
 export function isPortalSlot(slot: string): slot is PortalSlot {
   return (PORTAL_SLOTS as readonly string[]).includes(slot);

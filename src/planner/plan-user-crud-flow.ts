@@ -520,7 +520,7 @@ function deltaFor(kind: 'create' | 'edit' | 'delete'): number {
  * actually originate from that SAME render, or from the source trait's
  * own declared `itemActions`/`browseItemActions`-shaped config? A Browse
  * trait's fetch-success arm (`loading -> browsing`, rendering an
- * `entity-table` into `main`) structurally matches "first non-INIT
+ * `table-view` into `main`) structurally matches "first non-INIT
  * transition off the source trait's initial state" exactly the way a real
  * modal's OPEN arm does, but fires from a FETCH, not a click —
  * `submitEvent` there (`UNREAD_CLEARED`, `START_DM`, …) is produced by

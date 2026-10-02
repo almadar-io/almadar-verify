@@ -776,7 +776,7 @@ export async function clickSubmitAction(
 /**
  * Count entity rows currently visible on the page.
  * Uses multiple selector strategies to find entity rows across different
- * pattern types (data-grid, data-list, entity-cards, entity-table, etc.).
+ * pattern types (data-grid, data-list, table-view, etc.).
  *
  * Returns the count of visible entity rows, or -1 if no entity container
  * is found (page doesn't have a list/grid pattern).
@@ -797,13 +797,13 @@ export async function countEntityRows(page: Page): Promise<number> {
   const listCount = await listItems.count();
   if (listCount > 0) return listCount;
 
-  // Strategy 4: entity-cards pattern
-  const cardItems = page.locator('[data-pattern="entity-cards"] [data-entity-id]');
+  // Strategy 4: data-grid card items
+  const cardItems = page.locator('[data-pattern="data-grid"] [data-entity-id]');
   const cardCount = await cardItems.count();
   if (cardCount > 0) return cardCount;
 
-  // Strategy 5: entity-table rows
-  const tableRows = page.locator('[data-pattern="entity-table"] tbody tr');
+  // Strategy 5: table-view rows
+  const tableRows = page.locator('[data-pattern="table-view"] tbody tr');
   const tableCount = await tableRows.count();
   if (tableCount > 0) return tableCount;
 
