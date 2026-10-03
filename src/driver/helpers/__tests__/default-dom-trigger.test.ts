@@ -98,3 +98,67 @@ describe('createDefaultDomTrigger — shell dismiss fallback', () => {
     await page.close();
   });
 });
+
+describe('createDefaultDomTrigger — a form\'s own submit affordance', () => {
+  let browser: Browser;
+
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+  }, 30000);
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  const submitStep = (payloadCase?: ExtendedWalkStep['payloadCase']): ExtendedWalkStep => ({
+    from: 'editing',
+    event: 'SUBMIT_KEY',
+    to: 'idle',
+    guardCase: null,
+    payload: {},
+    isRepositioning: false,
+    triggerKind: 'dom',
+    coverageKey: 'Panel:editing+SUBMIT_KEY->idle',
+    traitName: 'CredentialPanel',
+    testKind: 'interaction',
+    ...(payloadCase !== undefined && { payloadCase }),
+  });
+
+  const FORM = `
+    <div data-pattern="form-section">
+      <input name="value" type="password" required />
+      <button data-testid="action-SUBMIT_KEY" onclick="window.__submitted = document.querySelector('input[name=value]').value">Save</button>
+    </div>
+  `;
+
+  it('fills the form before clicking its submit, so the submit carries valid data', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FORM);
+    const result = await createDefaultDomTrigger()(page, submitStep());
+    expect(result).toBe(true);
+    const submitted = await page.evaluate(() => (window as Window & { __submitted?: string }).__submitted);
+    expect(submitted).not.toBe('');
+    expect(submitted).toBeDefined();
+    await page.close();
+  });
+
+  it('control: a malformed-payload probe submits the form as it stands', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FORM);
+    await createDefaultDomTrigger()(page, submitStep('malformed'));
+    const submitted = await page.evaluate(() => (window as Window & { __submitted?: string }).__submitted);
+    expect(submitted).toBe('');
+    await page.close();
+  });
+
+  it('control: an affordance outside any form leaves inputs untouched', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <input name="search" type="text" />
+      <button data-testid="action-SUBMIT_KEY" onclick="window.__submitted = 'clicked'">Go</button>
+    `);
+    await createDefaultDomTrigger()(page, submitStep());
+    expect(await page.inputValue('input[name=search]')).toBe('');
+    await page.close();
+  });
+});

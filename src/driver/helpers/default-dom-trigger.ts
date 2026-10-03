@@ -37,7 +37,7 @@ import type { Page } from 'playwright';
 import { isEventPayloadValue, type EventPayload } from '@almadar/core';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import type { DomTriggerResult } from '../types.js';
-import { fillFormFieldsFromMap } from '../../browser/interaction.js';
+import { fillContainerFields, fillFormFieldsFromMap } from '../../browser/interaction.js';
 import { dispatchInBrowser } from './browser-send-event.js';
 import { createLogger } from '@almadar/logger';
 
@@ -169,6 +169,16 @@ export function createDefaultDomTrigger(
     try {
       visibleProbe = await locator.isVisible({ timeout: 250 });
       if (visibleProbe) {
+        // A form's own submit sends what the form holds: fill it first, or the
+        // form answers VALIDATION_FAILED and the frame measures the validator,
+        // not the event. A malformed-payload probe submits the form as it stands.
+        if (step.payloadCase !== 'malformed') {
+          const owningForm = locator.locator(`xpath=ancestor::*[@data-pattern="form-section"][1]`);
+          if ((await owningForm.count()) > 0) {
+            const filled = await fillContainerFields(owningForm);
+            domLog.debug('dom:fill:owning-form', { step: step.coverageKey, filled: filled.count });
+          }
+        }
         await locator.click({ timeout: clickTimeoutMs });
         clicked = true;
       }

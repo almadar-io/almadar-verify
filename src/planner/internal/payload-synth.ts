@@ -15,7 +15,7 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema, EventPayload, PayloadField, SExpr } from '@almadar/core';
+import type { EntityRow, OrbitalSchema, EventPayload, FieldProjection, PayloadField, SExpr } from '@almadar/core';
 import { isEntityReference, isEntityCall, payloadTypeContainer } from '@almadar/core';
 import { buildMinimalPayload, type EntityFieldDef, type PayloadFieldSpec } from '../../browser/interaction.js';
 
@@ -83,6 +83,42 @@ export function synthesizeSuccessPayload(
     }
   }
   return { ...buildMinimalPayload(rest, [...entityFields]), ...foreign };
+}
+
+/** A payload field typed `T.f`: its name, its source, and whether it is an array of them. */
+export interface ProjectedPayloadField {
+  name: string;
+  from: FieldProjection;
+  array: boolean;
+}
+
+/** The payload's `T.f`-typed fields (`projectedFrom`), in declaration order. */
+export function projectedPayloadFields(payloadSchema: ReadonlyArray<PayloadField> | undefined): ProjectedPayloadField[] {
+  return (payloadSchema ?? []).flatMap((f) =>
+    f.projectedFrom === undefined
+      ? []
+      : [{ name: f.name, from: f.projectedFrom, array: payloadTypeContainer(f.type).kind === 'array' }],
+  );
+}
+
+/**
+ * Fill each `T.f` field from a seeded `T` row — its `f` (wrapped in an array for an array
+ * field) — so a filter or lookup keyed by it matches real data. A target with no seeded rows
+ * leaves the synthesized value. Twin of orbital-verify `synth_field`'s projection rule.
+ */
+export async function applyProjectedPayload(
+  payload: EventPayload,
+  fields: ReadonlyArray<ProjectedPayloadField>,
+  rowsFor: (entity: string) => Promise<ReadonlyArray<EntityRow>>,
+): Promise<EventPayload> {
+  const out: EventPayload = { ...payload };
+  for (const field of fields) {
+    const [row] = await rowsFor(field.from.type);
+    if (row === undefined) continue;
+    const value = row[field.from.field] ?? null;
+    out[field.name] = field.array ? [value] : value;
+  }
+  return out;
 }
 
 /** The declared payload field, nested `properties` included, in the shape

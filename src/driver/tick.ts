@@ -32,6 +32,7 @@ import type { Frame, FrameCause } from '../frame/types.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import type { ViewerRequirement } from '../planner/internal/viewer-requirement.js';
 import { pickTargetRow, type PickTargetRowFailureCode } from '../planner/internal/self-relation-fields.js';
+import { applyProjectedPayload } from '../planner/internal/payload-synth.js';
 import type { Driver, DriverContext } from './types.js';
 
 export async function tick<Ctx extends DriverContext>(
@@ -375,6 +376,10 @@ export async function tick<Ctx extends DriverContext>(
       // which only happens to work when the two names coincide.
       step.payload[payloadField] = wholeRow ? seedRow : (seedRow['id'] as FieldValue);
     }
+  }
+
+  if (step.projectedPayload !== undefined && step.projectedPayload.length > 0) {
+    step.payload = await applyProjectedPayload(asEventPayload(step.payload), step.projectedPayload, serverRowsFor);
   }
 
   // C1-V8: dispatch the row-establishing preamble FIRST, in the SAME live

@@ -14,6 +14,7 @@ import type { TriggerKind } from '../frame/types.js';
 import type { TraitWalkConfig } from '../engine/types.js';
 import type { EmitDeclaration } from '../browser/catalog-probes.js';
 import type { EntityFieldDef } from '../browser/interaction.js';
+import type { ProjectedPayloadField } from './internal/payload-synth.js';
 import type { ViewerRequirement } from './internal/viewer-requirement.js';
 import type { AffordanceDisabledExpr } from './internal/affordance-disabled.js';
 
@@ -202,6 +203,9 @@ export interface ExtendedWalkStep extends WalkStep {
    * silently held the transition.
    */
   payloadRowShape?: ReadonlyArray<{ name: string; wholeRow: boolean }>;
+
+  /** The event's `T.f`-typed payload fields, filled from a seeded `T` row at dispatch. */
+  projectedPayload?: ReadonlyArray<ProjectedPayloadField>;
 
   /**
    * I-23: the step's open event declares REQUIRED payload fields, so the

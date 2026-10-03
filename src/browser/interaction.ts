@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import type { EntityField, EventPayload, EventPayloadValue } from '@almadar/core';
 import { payloadTypeContainer } from '@almadar/core';
 import { sampleFieldValue, type SampleContext } from '@almadar/core/mock';
@@ -450,7 +450,11 @@ export async function fillFormFieldsWithValues(
   page: Page,
   containerSelector: string
 ): Promise<FilledFormResult> {
-  const container = page.locator(containerSelector).first();
+  return fillContainerFields(page.locator(containerSelector).first());
+}
+
+/** {@link fillFormFieldsWithValues} over an already-located container. */
+export async function fillContainerFields(container: Locator): Promise<FilledFormResult> {
   const containerVisible = await container.isVisible({ timeout: 500 }).catch(() => false);
   if (!containerVisible) return { count: 0, values: {} };
 

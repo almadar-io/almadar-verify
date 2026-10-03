@@ -28,7 +28,7 @@ import { pickTargetRow } from '../planner/internal/self-relation-fields.js';
 import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { resolveTraitNames } from '../planner/trait-scope.js';
-import { collectEntityFields } from '../planner/internal/payload-synth.js';
+import { collectEntityFields, projectedPayloadFields } from '../planner/internal/payload-synth.js';
 import { eachInlineTrait, findInitialState, traitBootRenderSlots } from '../planner/internal/orbital-walk.js';
 import { scanRenderUiEffect } from '../planner/internal/render-ui-scan.js';
 import { planTransientFailureProbes, type TransientFailureProbeResult } from '../planner/plan-transient-failure-probes.js';
@@ -133,6 +133,7 @@ export async function runVerification<Ctx extends DriverContext>(
 
   // ── Derive everything from the parsed orbital ─────────────────────
   const traits = extractTraitWalkConfigs(input.orbital);
+  const traitsByName = new Map(traits.map((t) => [t.traitName, t]));
   // C1-V15 item A: `establishesRow.traitName` (guard-precondition.ts) may
   // name a SIBLING trait to dispatch the preamble against, not the guarded
   // step's own trait — this map is how the `beforeReplay` block below
@@ -552,7 +553,7 @@ export async function runVerification<Ctx extends DriverContext>(
                     coverageKey: `${establishTraitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[establish-reconcile]`,
                   };
                   const establishReconcileFrame: Frame = await tick(
-                    input.driver, ctx, prev, establishReconcileStep, orbitalsByTrait, allowStateless, defaultPersona,
+                    input.driver, ctx, prev, withProjectedPayload(establishReconcileStep, traitsByName), orbitalsByTrait, allowStateless, defaultPersona,
                   );
                   frames.push(establishReconcileFrame);
                   log(`  [${stepIdx + 1}/${plan.length}] establish-reconcile (${establishTraitName}) ${establishReconcileStep.from} --${establishReconcileStep.event}--> ${establishReconcileStep.to}`);
@@ -597,7 +598,7 @@ export async function runVerification<Ctx extends DriverContext>(
               ...('unreachableRow' in resolved && { unreachableRowReason: resolved.unreachableRow }),
               ...(preamble.viewerRequirement !== undefined && { viewerRequirement: preamble.viewerRequirement }),
             };
-            const establishFrame: Frame = await tick(input.driver, ctx, prev, establishStep, orbitalsByTrait, allowStateless, defaultPersona);
+            const establishFrame: Frame = await tick(input.driver, ctx, prev, withProjectedPayload(establishStep, traitsByName), orbitalsByTrait, allowStateless, defaultPersona);
             frames.push(establishFrame);
             log(`  [${stepIdx + 1}/${plan.length}] establish-row (${establishTraitName}) ${establishStep.from} --${establishStep.event}--> ${establishStep.to}`);
             prev = establishFrame;
@@ -640,7 +641,7 @@ export async function runVerification<Ctx extends DriverContext>(
             // Captured before `prev` is reassigned below — the entity/state
             // the dispatch actually saw, for `siblingGuardSatisfiable`.
             const beforeReconcileFrame = prev;
-            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, reconcileStep, orbitalsByTrait, allowStateless, defaultPersona);
+            const reconcileFrame: Frame = await tick(input.driver, ctx, prev, withProjectedPayload(reconcileStep, traitsByName), orbitalsByTrait, allowStateless, defaultPersona);
             frames.push(reconcileFrame);
             log(`  [${stepIdx + 1}/${plan.length}] reconcile ${reconcileStep.from} --${reconcileStep.event}--> ${reconcileStep.to}`);
             prev = reconcileFrame;
@@ -764,7 +765,7 @@ export async function runVerification<Ctx extends DriverContext>(
         idSeedRow,
         persistWriteByKey.get(`${trait.traitName}:${step.from}+${step.event}->${step.to}`)?.kind,
       );
-      const frame: Frame = await tick(input.driver, ctx, prev, seededStep, orbitalsByTrait, allowStateless, defaultPersona);
+      const frame: Frame = await tick(input.driver, ctx, prev, withProjectedPayload(seededStep, traitsByName), orbitalsByTrait, allowStateless, defaultPersona);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';
       log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
@@ -1259,6 +1260,13 @@ function attachRowContextFromDataMutation(
     if (match.bindRowFrom !== undefined) step.bindRowFrom = match.bindRowFrom;
     if (match.unreachableRowReason !== undefined) step.unreachableRowReason = match.unreachableRowReason;
   }
+}
+
+/** The step, carrying its event's `T.f`-typed payload fields for `tick()` to fill from seeded rows. */
+function withProjectedPayload(step: ExtendedWalkStep, traitsByName: ReadonlyMap<string, TraitWalkConfig>): ExtendedWalkStep {
+  const declared = traitsByName.get(step.traitName)?.events?.find((e) => e.key === step.event);
+  const projectedPayload = projectedPayloadFields(declared?.payloadSchema);
+  return projectedPayload.length === 0 ? step : { ...step, projectedPayload };
 }
 
 function combineVerdicts(verdicts: ReadonlyArray<Verdict>, label: string): Verdict {
