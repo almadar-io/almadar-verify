@@ -14,7 +14,13 @@
  */
 
 // Browser utilities
-export { launchBrowser, type LaunchOptions } from './browser/launch.js';
+export {
+  launchBrowser,
+  launchBrowserWithExtensions,
+  extensionWorker,
+  type LaunchOptions,
+  type ExtensionLaunchOptions,
+} from './browser/launch.js';
 export { ConsoleCollector } from './browser/console.js';
 export {
   takeScreenshot,
@@ -374,3 +380,13 @@ export {
   type AggregateStructuralFacts,
   type VisionQualityReport,
 } from './quality/index.js';
+
+// Verify sandboxes: swap installed @almadar packages for the local workspace builds
+export {
+  WORKSPACE_OVERRIDE_ROOTS,
+  overrideWithWorkspaceBuilds,
+  workspaceOverrideClosure,
+} from './util/workspace-overrides.js';
+
+// The Node toolchain (pnpm, node) for spawned processes, resolved without relying on PATH
+export { resolvePnpmBin, toolchainEnv, type ToolchainSource } from './util/node-toolchain.js';

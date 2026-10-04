@@ -27,7 +27,7 @@ export type RegistryTierLevel = 'atom' | 'molecule' | 'organism' | 'template';
 /**
  * Canonical tier-dir → behavior level. The four tier dir names are the ONLY
  * structural assumption the registry walk makes: a `.orb` is a behavior iff
- * its parent directory is one of these. Everything above the tier dir is the
+ * it sits at or below one of these. Everything above the tier dir is the
  * topic.
  */
 export const TIER_LEVELS: Readonly<Record<string, RegistryTierLevel>> = {
@@ -92,23 +92,30 @@ export function* walkRegistryBehaviors(registryBase: string): Generator<Discover
       // This dir IS a tier dir: its `.orb` files are behaviors whose topic is
       // the parent path (rel minus the trailing tier segment).
       const topic = rel.split('/').slice(0, -1).join('/');
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith('.orb')) {
-          yield {
-            name: entry.name.replace(/\.orb$/, ''),
-            orbPath: resolve(dir, entry.name),
-            topic,
-            tier: dirName,
-            level,
-            ...(prefix !== null ? { prefix } : {}),
-          };
-        }
-      }
-      return; // tier dirs hold only behaviors — no nested topics below them
+      yield* behaviorsIn(dir, topic, dirName, level);
+      return;
     }
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
         yield* descend(resolve(dir, entry.name), rel === '' ? entry.name : `${rel}/${entry.name}`);
+      }
+    }
+  }
+  // Below a tier dir every folder only groups behaviors (a site's blog posts):
+  // they keep the tier dir's topic and level.
+  function* behaviorsIn(dir: string, topic: string, tier: string, level: RegistryTierLevel): Generator<DiscoveredBehavior> {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        yield* behaviorsIn(resolve(dir, entry.name), topic, tier, level);
+      } else if (entry.isFile() && entry.name.endsWith('.orb')) {
+        yield {
+          name: entry.name.replace(/\.orb$/, ''),
+          orbPath: resolve(dir, entry.name),
+          topic,
+          tier,
+          level,
+          ...(prefix !== null ? { prefix } : {}),
+        };
       }
     }
   }

@@ -39,4 +39,14 @@ describe('classifySettledRender', () => {
   it('edge: a trait the schema does not know is skipped, not guessed', () => {
     expect(classifySettledRender([{ kind: 'loading', traits: ['Unknown'] }], entityOf, { StockLevel: 6 })).toEqual([]);
   });
+
+  it('a list rendering rows with no field values is a finding (std-contract after a save: audit rows under contract columns)', () => {
+    const entity = new Map([['ContractBrowseList', 'Contract']]);
+    const f = classifySettledRender([{ kind: 'blank', traits: ['ContractBrowseList'], rows: 7 }], entity, { Contract: 4 });
+    expect(f).toEqual([{ kind: 'blank', trait: 'ContractBrowseList', entity: 'Contract', rows: 7 }]);
+  });
+
+  it('control: a blank list for a trait the schema does not know is skipped', () => {
+    expect(classifySettledRender([{ kind: 'blank', traits: ['Unknown'], rows: 3 }], entityOf, {})).toEqual([]);
+  });
 });

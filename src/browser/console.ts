@@ -7,12 +7,13 @@
  * @packageDocumentation
  */
 
-import type { Page, ConsoleMessage } from 'playwright';
+import type { Page, ConsoleMessage, Worker } from 'playwright';
 import type { ConsoleEntry } from '../util/types.js';
 import { isNoiseError, isNoiseWarning } from '../util/filter.js';
 
 /**
- * Collects and categorizes console messages from a Playwright page.
+ * Collects and categorizes console messages from a Playwright page or worker (a worker has no
+ * `pageerror`; its uncaught errors reach the console).
  *
  * Usage:
  * ```ts
@@ -25,12 +26,12 @@ import { isNoiseError, isNoiseWarning } from '../util/filter.js';
 export class ConsoleCollector {
   private entries: ConsoleEntry[] = [];
   private uncaughtErrors: string[] = [];
-  private page: Page;
+  private target: Page | Worker;
   private consoleHandler: (msg: ConsoleMessage) => void;
   private errorHandler: (err: Error) => void;
 
-  constructor(page: Page) {
-    this.page = page;
+  constructor(target: Page | Worker) {
+    this.target = target;
 
     this.consoleHandler = (msg: ConsoleMessage) => {
       const text = msg.text();
@@ -52,8 +53,12 @@ export class ConsoleCollector {
       this.entries.push({ type: 'error', text: `Uncaught: ${err.message}`, timestamp: Date.now() });
     };
 
-    page.on('console', this.consoleHandler);
-    page.on('pageerror', this.errorHandler);
+    if (isPage(target)) {
+      target.on('console', this.consoleHandler);
+      target.on('pageerror', this.errorHandler);
+    } else {
+      target.on('console', this.consoleHandler);
+    }
   }
 
   /** Get all collected entries */
@@ -78,7 +83,14 @@ export class ConsoleCollector {
 
   /** Remove event listeners from the page */
   dispose(): void {
-    this.page.removeListener('console', this.consoleHandler);
-    this.page.removeListener('pageerror', this.errorHandler);
+    const target = this.target;
+    if (isPage(target)) {
+      target.removeListener('console', this.consoleHandler);
+      target.removeListener('pageerror', this.errorHandler);
+    } else {
+      target.removeListener('console', this.consoleHandler);
+    }
   }
 }
+
+const isPage = (target: Page | Worker): target is Page => 'mainFrame' in target;

@@ -37,3 +37,32 @@ describe('walkRegistryBehaviors', () => {
     expect(b && 'prefix' in b).toBe(false);
   });
 });
+
+describe('walkRegistryBehaviors — grouping folders under a tier', () => {
+  function grouped(): string {
+    const root = mkdtempSync(path.join(tmpdir(), 'registry-group-'));
+    const atoms = path.join(root, 'websites', 'atoms');
+    mkdirSync(path.join(atoms, 'almadar-blog', 'deeper'), { recursive: true });
+    writeFileSync(path.join(atoms, 'site-home.orb'), '{}');
+    writeFileSync(path.join(atoms, 'almadar-blog', 'post-a-en.orb'), '{}');
+    writeFileSync(path.join(atoms, 'almadar-blog', 'post-a-en.ar.json'), '{}');
+    writeFileSync(path.join(atoms, 'almadar-blog', 'deeper', 'post-b-en.orb'), '{}');
+    return root;
+  }
+
+  it('a behavior in a folder under a tier dir keeps that tier and topic', () => {
+    const found = [...walkRegistryBehaviors(grouped())];
+    expect(found.find((b) => b.name === 'post-a-en')).toMatchObject({ topic: 'websites', tier: 'atoms', level: 'atom' });
+  });
+
+  it('control: a behavior directly in the tier dir is still found', () => {
+    const found = [...walkRegistryBehaviors(grouped())];
+    expect(found.find((b) => b.name === 'site-home')).toMatchObject({ topic: 'websites', tier: 'atoms' });
+  });
+
+  it('edge: nested grouping folders are walked too, and non-.orb files are not behaviors', () => {
+    const names = [...walkRegistryBehaviors(grouped())].map((b) => b.name).sort();
+    expect(names).toEqual(['post-a-en', 'post-b-en', 'site-home']);
+  });
+});
+

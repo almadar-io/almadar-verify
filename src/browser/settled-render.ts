@@ -18,14 +18,17 @@ import { EMPTY_STATE_MARKER, LOADING_STATE_MARKER, type TransitionTrace } from '
 /** Elements that are one rendered entity row. */
 export const ENTITY_ROW_SELECTOR = '[data-entity-row], [data-entity-id], [data-pattern="data-grid"] tbody tr, [data-pattern="data-list"] > *';
 
-/** One empty or loading view, with the traits that painted it (innermost first). */
+/** One empty, loading or blank view, with the traits that painted it (innermost first). */
 export interface SettledNode {
-  kind: 'empty' | 'loading';
+  /** `blank`: a list rendering rows none of which shows a field value. */
+  kind: 'empty' | 'loading' | 'blank';
   traits: string[];
+  /** Rendered row count, for a `blank` view. */
+  rows?: number;
 }
 
 export interface SettledFinding {
-  kind: 'empty' | 'loading';
+  kind: 'empty' | 'loading' | 'blank';
   trait: string;
   entity: string;
   rows: number;
@@ -48,7 +51,7 @@ export function classifySettledRender(
   for (const node of nodes) {
     for (const trait of node.traits) {
       const entity = entityOfTrait.get(trait);
-      const rows = entity !== undefined ? fetchedRows[entity] ?? 0 : 0;
+      const rows = node.kind === 'blank' ? node.rows ?? 0 : entity !== undefined ? fetchedRows[entity] ?? 0 : 0;
       if (entity === undefined || rows === 0) continue;
       const key = `${node.kind}:${trait}`;
       if (!seen.has(key)) {
@@ -62,6 +65,7 @@ export function classifySettledRender(
 }
 
 export function settledFindingMessage(f: SettledFinding): string {
+  if (f.kind === 'blank') return `${f.trait} renders ${f.rows} ${f.entity} row(s) with no field values`;
   return f.kind === 'loading'
     ? `${f.trait} still shows a loading view after its fetch returned ${f.rows} ${f.entity} row(s)`
     : `${f.trait} shows an empty view though its fetch returned ${f.rows} ${f.entity} row(s)`;
@@ -69,7 +73,7 @@ export function settledFindingMessage(f: SettledFinding): string {
 
 export async function measureSettledRender(page: Page): Promise<SettledRenderMeasurement> {
   return page.evaluate(({ emptyMarker, loadingMarker, rowSelector }) => {
-    const nodes: Array<{ kind: 'empty' | 'loading'; traits: string[] }> = [];
+    const nodes: Array<{ kind: 'empty' | 'loading' | 'blank'; traits: string[]; rows?: number }> = [];
     const collect = (marker: string, kind: 'empty' | 'loading'): void => {
       for (const el of Array.from(document.querySelectorAll(`[${marker}]`))) {
         if (el.parentElement?.closest(`[${marker}]`)) continue;
@@ -90,6 +94,17 @@ export async function measureSettledRender(page: Page): Promise<SettledRenderMea
     };
     collect(emptyMarker, 'empty');
     collect(loadingMarker, 'loading');
+    // A list whose every rendered row is textless shows rows of nothing.
+    for (const list of Array.from(document.querySelectorAll('[data-pattern="data-grid"], [data-pattern="data-list"]'))) {
+      const rows = Array.from(list.querySelectorAll(rowSelector));
+      if (rows.length === 0 || rows.some((row) => (row.textContent ?? '').trim() !== '')) continue;
+      const traits: string[] = [];
+      for (let a = list.parentElement; a; a = a.parentElement) {
+        const trait = a.getAttribute('data-orb-trait');
+        if (trait !== null) traits.push(trait);
+      }
+      if (traits.length > 0) nodes.push({ kind: 'blank', traits, rows: rows.length });
+    }
 
     const fetchedRows: Record<string, number> = {};
     const w = window as Window & { __orbitalVerification?: { getTransitions?: () => ReadonlyArray<TransitionTrace> } };
