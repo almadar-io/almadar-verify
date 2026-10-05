@@ -75,6 +75,8 @@ export interface ConsoleEntry {
   type: 'error' | 'warning' | 'info';
   text: string;
   timestamp: number;
+  /** URL of the script that logged it, when the browser reports one (absent for uncaught page errors). */
+  source?: string;
 }
 
 /** A single verification check result (used by orbital-verify) */

@@ -36,15 +36,17 @@ export class ConsoleCollector {
     this.consoleHandler = (msg: ConsoleMessage) => {
       const text = msg.text();
       const timestamp = Date.now();
+      const url = msg.location().url;
+      const source = url !== '' ? { source: url } : {};
 
       if (msg.type() === 'error') {
         if (isNoiseError(text)) return;
-        this.entries.push({ type: 'error', text, timestamp });
+        this.entries.push({ type: 'error', text, timestamp, ...source });
       } else if (msg.type() === 'warning') {
         if (isNoiseWarning(text)) return;
-        this.entries.push({ type: 'warning', text, timestamp });
+        this.entries.push({ type: 'warning', text, timestamp, ...source });
       } else {
-        this.entries.push({ type: 'info', text, timestamp });
+        this.entries.push({ type: 'info', text, timestamp, ...source });
       }
     };
 
