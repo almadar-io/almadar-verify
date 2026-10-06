@@ -67,7 +67,8 @@ import {
   ownerFieldsFromSchema,
   roleSatisfyingPolicy,
 } from '@almadar/core/mock';
-import { normalizeEventKey, type InMemoryPersistence, type TraitState } from '@almadar/runtime';
+import { normalizeEventKey, type TraitState } from '@almadar/runtime';
+import type { InMemoryPersistence } from '@almadar/db/mock';
 import type { OrbitalServerRuntime } from '@almadar/runtime/OrbitalServerRuntime';
 import { collectEntityFields, synthesizeSuccessPayload } from '../planner/internal/payload-synth.js';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';

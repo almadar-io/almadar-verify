@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import type { OrbitalSchema, SExpr, TraitEventListener } from '@almadar/core';
 import { asEventId } from '@almadar/core';
 import { OrbitalServerRuntime } from '@almadar/runtime/OrbitalServerRuntime';
-import { InMemoryPersistence } from '@almadar/runtime';
+import { InMemoryPersistence } from '@almadar/db/mock';
 import { probeListenCascades } from '../probe-listen-cascades.js';
 
 /** Owner-scoped by-id-fetch fixture shared by the two `persistence` seeding
