@@ -194,3 +194,26 @@ describe('assertClickNoListener', () => {
     expect(assertClickNoListener(frames, selfOrbital)).toEqual([]);
   });
 });
+
+
+describe('source-scoped declared click routes', () => {
+  const frames = [frame(0, domCause('Browse', 'INIT'), []), frame(1, domCause('Browse', 'ADD_ITEM'), [])];
+  it('refuses a listener scoped to an unrelated orbital', () => {
+    const value = fixtureSchema([
+      fixtureOrbital({ name: 'Cart', traits: [fixtureTrait({ name: 'Browse' })] }),
+      fixtureOrbital({ name: 'Checkout', traits: [fixtureTrait({ name: 'Wizard', listens: [{ event: 'ADD_ITEM', triggers: 'START', source: { kind: 'orbital', orbital: 'Elsewhere', trait: 'Browse' } }] })] }),
+    ]);
+    expect(assertClickNoListener(frames, value)).toHaveLength(1);
+  });
+  it('does not credit an ambiguous name unless every candidate has a route', () => {
+    const value = fixtureSchema([
+      fixtureOrbital({ name: 'Cart', traits: [fixtureTrait({ name: 'Browse' })] }),
+      fixtureOrbital({ name: 'Other', traits: [fixtureTrait({ name: 'Browse' })] }),
+      fixtureOrbital({ name: 'Checkout', traits: [fixtureTrait({ name: 'Wizard', listens: [{ event: 'ADD_ITEM', triggers: 'START', source: { kind: 'orbital', orbital: 'Cart', trait: 'Browse' } }] })] }),
+    ]);
+    expect(assertClickNoListener(frames, value)).toHaveLength(1);
+    value.orbitals.pop();
+    value.orbitals.push(fixtureOrbital({ name: 'Checkout', traits: [fixtureTrait({ name: 'Wizard', listens: [{ event: 'ADD_ITEM', triggers: 'START', source: { kind: 'any' } }] })] }));
+    expect(assertClickNoListener(frames, value)).toEqual([]);
+  });
+});

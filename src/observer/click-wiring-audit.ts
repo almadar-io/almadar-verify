@@ -33,10 +33,11 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema, TraitEventListener, Transition } from '@almadar/core';
-import { collectEmbeddedTraitReferrers, isInlineTrait } from '@almadar/core';
+import type { OrbitalSchema, Transition } from '@almadar/core';
+import { collectEmbeddedTraitReferrers, isInlineTrait, joinEventAddress } from '@almadar/core';
+import { buildSourceMatcher } from '@almadar/runtime';
 import { collectEffectEmittedEvents } from '../planner/internal/effect-emits.js';
-import { configItemActionEvents } from './event-producers.js';
+import { configItemActionEvents, explicitEmitEvents, renderActionEventsOf } from './event-producers.js';
 
 /** For each trait, the set of events its own state machine transitions on. */
 export function buildTraitTransitions(orbital: OrbitalSchema): Map<string, Set<string>> {
@@ -82,30 +83,31 @@ function collectTraitEvents(orbital: OrbitalSchema, effectfulOnly: boolean): Map
           events.add(arm.event);
         }
       }
-      map.set(traitName, events);
+      map.set(joinEventAddress('', { kind: 'orbital', orbital: orb.name, trait: traitName }), events);
     }
   }
   return map;
 }
 
-/** For each event, the set of emitter trait names some trait's `listens`
- *  block subscribes to. `'*'` means any source is accepted. */
+/** Event route keys mapped to fully qualified emitter addresses. */
 export function buildDeclaredListeners(orbital: OrbitalSchema): Map<string, Set<string>> {
   const map = new Map<string, Set<string>>();
   for (const orb of orbital.orbitals) {
     for (const traitRef of orb.traits) {
-      if (typeof traitRef !== 'object' || !('name' in traitRef)) continue;
-      const listens = (traitRef as { listens?: ReadonlyArray<TraitEventListener> }).listens ?? [];
-      for (const listener of listens) {
-        if (typeof listener.event !== 'string') continue;
-        const sources = map.get(listener.event) ?? new Set<string>();
-        const source = listener.source;
-        if (source !== undefined && 'kind' in source && source.kind === 'trait' && typeof source.trait === 'string') {
-          sources.add(source.trait);
-        } else {
-          sources.add('*');
+      if (!isInlineTrait(traitRef)) continue;
+      for (const listener of traitRef.listens ?? []) {
+        if (listener.source === undefined || !listener.triggers) continue;
+        const key = listener.event;
+        const sources = map.get(key) ?? new Set<string>();
+        const matches = buildSourceMatcher(listener.source, orb.name);
+        for (const emitterOrbital of orbital.orbitals) {
+          for (const emitter of emitterOrbital.traits) {
+            if (!isInlineTrait(emitter)) continue;
+            const source = { orbital: emitterOrbital.name, orbitalId: emitterOrbital.id, trait: emitter.name, traitId: emitter.id };
+            if (matches(source)) sources.add(joinEventAddress('', { kind: 'orbital', ...source }));
+          }
         }
-        map.set(listener.event, sources);
+        map.set(key, sources);
       }
     }
   }
@@ -149,6 +151,7 @@ export function embedHostChain(trait: string, hosts: ReadonlyMap<string, string>
  * `wired: true` is what let four dead controls through the gate in W6.
  */
 export interface ListensAuditEmitter {
+  orbital: string;
   trait: string;
   event: string;
   wired: boolean | 'bodiless';
@@ -162,27 +165,28 @@ export interface ListensAuditResult {
   /** Every button-ish emitter found (excludes fetch/persist success|failure auto-emits). */
   emitters: ListensAuditEmitter[];
   /** The unrouted subset, each with a ready-to-paste `listens` line. */
-  missing: Array<{ trait: string; event: string; suggestion: string }>;
+  missing: Array<{ orbital: string; trait: string; event: string; suggestion: string }>;
   /**
    * The routed-but-effect-less subset. Distinct from `missing` because the fix
    * is the opposite one: give the existing arm a body. Adding a `listens` line
    * here would route the event a second time and still paint nothing.
    */
-  bodiless: Array<{ trait: string; event: string; handler: string; suggestion: string }>;
+  bodiless: Array<{ orbital: string; trait: string; event: string; handler: string; suggestion: string }>;
 }
 
 /** Static audit — no server, no browser. Walks the schema's declared
  *  `emits`/`listens` contracts only. */
-export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
+export function auditListens(orbital: OrbitalSchema, options: { includeEffectEmits?: boolean | 'with-declared-handler' } = {}): ListensAuditResult {
   const traitTransitions = buildTraitTransitions(orbital);
   const effectfulTransitions = buildTraitEffectfulTransitions(orbital);
   const declaredListeners = buildDeclaredListeners(orbital);
-  const embedHosts = collectEmbeddedTraitReferrers(orbital);
   const emitters: ListensAuditEmitter[] = [];
   const missing: ListensAuditResult['missing'] = [];
   const bodiless: ListensAuditResult['bodiless'] = [];
 
   for (const orb of orbital.orbitals) {
+    const embedHosts = collectEmbeddedTraitReferrers({ ...orbital, orbitals: [orb] });
+    const address = (name: string): string => joinEventAddress('', { kind: 'orbital', orbital: orb.name, trait: name });
     for (const traitRef of orb.traits) {
       if (typeof traitRef !== 'object' || !('name' in traitRef)) continue;
       const traitName = traitRef.name as string;
@@ -194,7 +198,9 @@ export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
           ? traitRef.stateMachine.transitions
           : [];
       const effectEmitted = collectEffectEmittedEvents(transitions);
-      const selfEvents = traitTransitions.get(traitName) ?? new Set<string>();
+      const broadcasts = new Set(transitions.flatMap((transition) => [...explicitEmitEvents(transition.effects)]));
+      const renderEvents = new Set(transitions.flatMap((transition) => [...renderActionEventsOf(transition)]));
+      const selfEvents = traitTransitions.get(address(traitName)) ?? new Set<string>();
 
       // The trait's own resolved config-item-action events (e.g.
       // `itemActions`/`browseItemActions` descriptor arrays) — non-empty
@@ -205,24 +211,29 @@ export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
 
       for (const emit of emits) {
         const event = emit.event;
-        if (effectEmitted.has(event)) continue;
+        if (!options.includeEffectEmits && effectEmitted.has(event)) continue;
+        if (options.includeEffectEmits === 'with-declared-handler' && (effectEmitted.has(event) || broadcasts.has(event)) && !renderEvents.has(event) && !itemActionEvents.has(event)) {
+          const hasHandler = declaredListeners.has(event) || [...traitTransitions].some(([owner, events]) => owner !== address(traitName) && events.has(event));
+          if (!hasHandler) continue;
+        }
 
         const selfHandled = selfEvents.has(event);
-        const selfEffectful = effectfulTransitions.get(traitName)?.has(event) === true;
+        const selfEffectful = effectfulTransitions.get(address(traitName))?.has(event) === true;
         const sources = declaredListeners.get(event);
+        const listensTo = (name: string): boolean => sources?.has(joinEventAddress('', { kind: 'orbital', orbital: orb.name, trait: name })) === true;
         const chain = embedHostChain(traitName, embedHosts);
         // An effect-carrying host outranks a bodiless one: a real route anywhere
         // up the chain IS the wiring, and reporting the nearest dead host instead
         // would invent a defect.
         const effectfulHost = chain.find(
-          (host) => effectfulTransitions.get(host)?.has(event) === true || sources?.has(host) === true,
+          (host) => effectfulTransitions.get(address(host))?.has(event) === true || listensTo(host),
         );
         const hostHandler =
           effectfulHost ??
-          chain.find((host) => traitTransitions.get(host)?.has(event) === true || sources?.has(host) === true);
+          chain.find((host) => traitTransitions.get(address(host))?.has(event) === true || listensTo(host));
         // A `listens` subscriber is an explicit opt-in by another trait; whether
         // THAT trait's own arm has a body is its own audit row, not this one's.
-        const listenerHandled = sources !== undefined && (sources.has('*') || sources.has(traitName));
+        const listenerHandled = listensTo(traitName);
 
         const routed = selfHandled || hostHandler !== undefined || listenerHandled;
         // A trait whose pattern IS config-item-action driven (itemActions/
@@ -246,9 +257,10 @@ export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
               ? 'listens'
               : null;
 
-        emitters.push({ trait: traitName, event, wired, via, ...(hostHandler ? { host: hostHandler } : {}) });
+        emitters.push({ orbital: orb.name, trait: traitName, event, wired, via, ...(hostHandler ? { host: hostHandler } : {}) });
         if (wired === false) {
           missing.push({
+            orbital: orb.name,
             trait: traitName,
             event,
             suggestion: `listens { ${traitName}.${event} -> ${event} }`,
@@ -256,6 +268,7 @@ export function auditListens(orbital: OrbitalSchema): ListensAuditResult {
         } else if (wired === 'bodiless') {
           const handler = selfHandled ? traitName : (hostHandler ?? traitName);
           bodiless.push({
+            orbital: orb.name,
             trait: traitName,
             event,
             handler,

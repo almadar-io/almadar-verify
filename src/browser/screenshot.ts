@@ -160,7 +160,7 @@ export async function takeScreenshot(
     // `100vh` shell with inner scrollers.
     await flattenScrollersForCapture(page);
     try {
-      await page.screenshot({ path: outputPath, fullPage: true }).catch(() => undefined);
+      await page.screenshot({ path: outputPath, fullPage: true });
     } finally {
       await restoreScrollersAfterCapture(page);
     }

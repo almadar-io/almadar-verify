@@ -13,7 +13,10 @@
  * @packageDocumentation
  */
 
+export { applyRowAccess, checkMutationAccess } from '@almadar/runtime';
+
 // Browser utilities
+export { listBrowserPersonas, signInBrowserPersona, readBrowserCurrentUid, type PersonaHostKind, type PersonaBrowserWindow } from './browser/persona.js';
 export {
   launchBrowser,
   launchBrowserWithExtensions,
@@ -140,6 +143,7 @@ export {
   buildMinimalPayload,
   fillFormFields,
   fillFormFieldsWithValues,
+  fillFormFieldsFromMap,
   type FilledFormValues,
   type FilledFormResult,
   generateFieldValue,
@@ -375,10 +379,14 @@ export {
   scoreStructuralQuality,
   gradeScreenshotQuality,
   VisionQualityGradingError,
+  validateStudyQuality,
   type StructuralQualityReport,
   type OrbitalStructuralFacts,
   type AggregateStructuralFacts,
   type VisionQualityReport,
+  type StudyQualityInput,
+  type StudyQualityEvidence,
+  type StudyQualityReport,
 } from './quality/index.js';
 
 // Verify sandboxes: swap installed @almadar packages for the local workspace builds

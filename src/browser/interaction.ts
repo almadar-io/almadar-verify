@@ -592,21 +592,36 @@ export async function fillFormFieldsFromMap(
   page: Page,
   containerSelector: string,
   formData: Record<string, FieldValue>,
+  options: { strict?: boolean; fieldSelectors?: Record<string, string> } = {},
 ): Promise<number> {
   const expectedKeys = Object.keys(formData);
+  const fieldSelectors = options.fieldSelectors;
+  const exactTargets = options.strict || fieldSelectors !== undefined;
+  if (fieldSelectors !== undefined) {
+    const selectorKeys = Object.keys(fieldSelectors);
+    if (selectorKeys.length !== expectedKeys.length || expectedKeys.some(key => !Object.hasOwn(fieldSelectors, key))) {
+      throw new Error('Field selector keys must exactly match value keys');
+    }
+    if (Object.values(fieldSelectors).some(selector => selector.trim().length === 0)) {
+      throw new Error('Field selectors must not be empty');
+    }
+  }
   domLog.debug('dom:fill:enter', {
     containerSelector,
     expectedKeyCount: expectedKeys.length,
     expectedKeys: expectedKeys.join(','),
   });
 
-  const container = page.locator(containerSelector).first();
+  const containers = page.locator(containerSelector);
+  if (exactTargets && await containers.count() !== 1) throw new Error(`Expected one form container: ${containerSelector}`);
+  const container = containers.first();
   const containerVisible = await container.isVisible({ timeout: 500 }).catch(() => false);
   domLog.debug('dom:fill:container-visible', {
     containerSelector,
     visible: containerVisible,
   });
   if (!containerVisible) {
+    if (exactTargets) throw new Error(`Form container is not visible: ${containerSelector}`);
     domLog.debug('dom:fill:exit', {
       containerSelector,
       attempted: 0,
@@ -622,24 +637,25 @@ export async function fillFormFieldsFromMap(
 
   for (const [name, value] of Object.entries(formData)) {
     if (value === null || value === undefined) {
+      if (options.strict) throw new Error(`Field '${name}' requires an explicit scalar value`);
       domLog.debug('dom:fill:field-result', { name, result: 'skipped-null-value' });
       continue;
     }
     const stringValue = fieldValueToString(value);
     if (stringValue === null) {
+      if (options.strict) throw new Error(`Field '${name}' has an unsupported value`);
       domLog.debug('dom:fill:field-result', { name, result: 'skipped-no-string-form' });
       continue;
     }
 
     attempted++;
 
-    // ONE deterministic selector: `data-field-name="<name>"`. Every
-    // form-rendering path in `@almadar/ui` (Form.tsx commonProps,
-    // InputPattern/TextareaPattern/SelectPattern) stamps this attribute
-    // at source. If a render is missing it, that's a UI bug to fix in
-    // `@almadar/ui` — never add fallback strategies here.
-    const fieldSelector = `[data-field-name="${name}"]`;
-    const field = container.locator(fieldSelector).first();
+    const fieldSelector = fieldSelectors === undefined
+      ? `[data-field-name=${JSON.stringify(name)}]`
+      : fieldSelectors[name];
+    const fields = container.locator(fieldSelector);
+    if (exactTargets && await fields.count() !== 1) throw new Error(`Expected one field '${name}'`);
+    const field = fields.first();
     const visible = await field.isVisible({ timeout: 200 }).catch(() => false);
     const tag = visible
       ? await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => null)
@@ -659,6 +675,7 @@ export async function fillFormFieldsFromMap(
       inputType,
     });
     if (!visible) {
+      if (exactTargets) throw new Error(`Field '${name}' is not visible`);
       domLog.debug('dom:fill:field-result', {
         name,
         result: 'skipped-not-visible',
@@ -666,9 +683,18 @@ export async function fillFormFieldsFromMap(
       });
       continue;
     }
+    if (exactTargets) {
+      if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') throw new Error(`Field '${name}' is not a native form control`);
+      if (inputType !== null && ['button', 'submit', 'reset', 'image', 'file', 'hidden'].includes(inputType)) throw new Error(`Field '${name}' is not a fillable control`);
+      if (!await field.isEnabled() || !await field.isEditable()) throw new Error(`Field '${name}' is disabled or read-only`);
+    }
     let filledValue = stringValue;
     try {
       if (tag === 'select') {
+        if (options.strict) {
+          const values = await field.locator('option').evaluateAll(opts => opts.map(o => (o as HTMLOptionElement).value));
+          if (!values.includes(stringValue)) throw new Error(`Field '${name}' has no option '${stringValue}'`);
+        }
         // The synthesized value may not be one of the `<select>`'s options:
         // the form field is typed `string`, which loses the entity's enum
         // values, so a status/category select gets a random string.
@@ -678,6 +704,7 @@ export async function fillFormFieldsFromMap(
         try {
           await field.selectOption(stringValue);
         } catch {
+          if (options.strict) throw new Error(`Cannot select '${stringValue}' for '${name}'`);
           const optionValues = await field
             .locator('option')
             .evaluateAll((opts) => opts
@@ -687,13 +714,15 @@ export async function fillFormFieldsFromMap(
           await field.selectOption(optionValues[0]);
         }
       } else if (inputType === 'checkbox' || inputType === 'radio') {
+        if (options.strict && typeof value !== 'boolean') throw new Error(`Field '${name}' requires a boolean`);
         // A boolean field is SET, not typed. Leaving it untouched (the old
         // behaviour of the generic scanner) silently drops the key from the
         // submitted payload.
         await field.setChecked(!FALSEY_FORM_VALUES.has(stringValue.toLowerCase()));
       } else {
-        filledValue = coerceValueForInputType(stringValue, inputType, name);
+        filledValue = options.strict ? stringValue : coerceValueForInputType(stringValue, inputType, name);
         await field.fill(filledValue);
+        if (options.strict && await field.inputValue() !== stringValue) throw new Error(`Field '${name}' did not retain its exact value`);
       }
       count++;
       domLog.debug('dom:fill:field-result', {
@@ -704,6 +733,7 @@ export async function fillFormFieldsFromMap(
         inputType,
       });
     } catch (err) {
+      if (exactTargets) throw err;
       // Field exists with the right tag but value couldn't be set
       // (e.g. select option not in the list). Surface as 0 contribution
       // to count — the planner needs to align with the entity's enum.

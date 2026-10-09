@@ -217,7 +217,7 @@ export function configItemActionEvents(trait: Trait, lookup: OperatorLookup = st
  *  `{emit: {success, failure}}` fetch/persist options-object shape). Shared
  *  by both scan sites below so a transition's and a tick's explicit emits
  *  are read by the one walk, not two copies that could drift. */
-function explicitEmitEvents(effects: ReadonlyArray<Effect> | undefined): Set<string> {
+export function explicitEmitEvents(effects: ReadonlyArray<Effect> | undefined): Set<string> {
   const out = new Set<string>();
   for (const effect of effects ?? []) {
     if (Array.isArray(effect) && effect[0] === 'emit' && typeof effect[1] === 'string') out.add(effect[1]);

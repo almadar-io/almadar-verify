@@ -4,8 +4,10 @@ export {
   VisionQualityGradingError,
   buildGradingPrompt,
   dimensionsSchema,
+  studyQualitySchema,
+  validateStudyQuality,
 } from './vision-grader.js';
-export type { VisionQualityReport } from './vision-grader.js';
+export type { VisionQualityReport, StudyQualityInput, StudyQualityEvidence, StudyQualityReport } from './vision-grader.js';
 export type {
   StructuralQualityReport,
   OrbitalStructuralFacts,

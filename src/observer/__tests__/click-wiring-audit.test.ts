@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Effect, OrbitalSchema, StateMachine, Trait, Transition } from '@almadar/core';
+import { OrbitalIdSchema, TraitIdSchema, EventIdSchema } from '@almadar/core';
 import { auditListens } from '../click-wiring-audit.js';
 
 /** A complete `StateMachine` from just its transitions — states and events are
@@ -48,7 +49,7 @@ describe('auditListens', () => {
     expect(result.missing).toEqual([]);
     expect(result.bodiless).toEqual([]);
     expect(result.emitters).toEqual([
-      { trait: 'Browse', event: 'REQUEST_DELETE', wired: true, via: 'listens' },
+      { orbital: 'Fixture', trait: 'Browse', event: 'REQUEST_DELETE', wired: true, via: 'listens' },
     ]);
   });
 
@@ -68,7 +69,7 @@ describe('auditListens', () => {
     expect(result.missing).toEqual([]);
     expect(result.bodiless).toEqual([]);
     expect(result.emitters).toEqual([
-      { trait: 'Timer', event: 'PAUSE', wired: true, via: 'self-transition' },
+      { orbital: 'Fixture', trait: 'Timer', event: 'PAUSE', wired: true, via: 'self-transition' },
     ]);
   });
 
@@ -83,11 +84,12 @@ describe('auditListens', () => {
 
     const result = auditListens(orbital);
     expect(result.emitters).toEqual([
-      { trait: 'Browse', event: 'ORPHAN_EVENT', wired: false, via: null },
+      { orbital: 'Fixture', trait: 'Browse', event: 'ORPHAN_EVENT', wired: false, via: null },
     ]);
     expect(result.bodiless).toEqual([]);
     expect(result.missing).toEqual([
       {
+        orbital: 'Fixture',
         trait: 'Browse',
         event: 'ORPHAN_EVENT',
         suggestion: 'listens { Browse.ORPHAN_EVENT -> ORPHAN_EVENT }',
@@ -120,6 +122,7 @@ describe('auditListens', () => {
     expect(result.bodiless).toEqual([]);
     expect(result.emitters).toEqual([
       {
+        orbital: 'Fixture',
         trait: 'InlineButtonRender5',
         event: 'CLOSE_OVERLAY',
         wired: true,
@@ -145,7 +148,7 @@ describe('auditListens', () => {
 
     const result = auditListens(orbital);
     expect(result.emitters).toEqual([
-      { trait: 'InlineButtonRender1', event: 'ORPHAN_EVENT', wired: false, via: null },
+      { orbital: 'Fixture', trait: 'InlineButtonRender1', event: 'ORPHAN_EVENT', wired: false, via: null },
     ]);
     expect(result.bodiless).toEqual([]);
     expect(result.missing).toHaveLength(1);
@@ -198,7 +201,7 @@ describe('auditListens', () => {
     const result = auditListens(orbital);
     expect(result.missing).toEqual([]);
     expect(result.emitters).toEqual([
-      { trait: 'AppLayout', event: 'NOTIFY_CLICK', wired: 'bodiless', via: 'self-transition' },
+      { orbital: 'Fixture', trait: 'AppLayout', event: 'NOTIFY_CLICK', wired: 'bodiless', via: 'self-transition' },
     ]);
     expect(result.bodiless).toHaveLength(1);
     expect(result.bodiless[0]).toMatchObject({
@@ -228,7 +231,7 @@ describe('auditListens', () => {
     const result = auditListens(orbital);
     expect(result.bodiless).toEqual([]);
     expect(result.emitters).toEqual([
-      { trait: 'Panel', event: 'OPEN', wired: true, via: 'self-transition' },
+      { orbital: 'Fixture', trait: 'Panel', event: 'OPEN', wired: true, via: 'self-transition' },
     ]);
   });
 
@@ -264,6 +267,7 @@ describe('auditListens', () => {
     expect(result.bodiless).toEqual([]);
     expect(result.emitters).toEqual([
       {
+        orbital: 'Fixture',
         trait: 'InlineButtonRender9',
         event: 'ACT',
         wired: true,
@@ -300,6 +304,76 @@ describe('auditListens', () => {
     });
 
     const result = auditListens(schema([browse]));
-    expect(result.missing).toEqual([{ trait: 'Browse', event: 'EDIT_ROW', suggestion: 'listens { Browse.EDIT_ROW -> EDIT_ROW }' }]);
+    expect(result.missing).toEqual([{ orbital: 'Fixture', trait: 'Browse', event: 'EDIT_ROW', suggestion: 'listens { Browse.EDIT_ROW -> EDIT_ROW }' }]);
+  });
+});
+
+describe('declared listener source identity', () => {
+  const emitter = trait({ name: 'Cart', emits: [{ event: 'CHECKOUT_STARTED', scope: 'external' }] });
+  const handler = (source?: NonNullable<Trait['listens']>[number]['source']) => trait({ name: 'Checkout', listens: [{ event: 'CHECKOUT_STARTED', triggers: 'START', ...(source ? { source } : {}) }] });
+  const app = (listener: Trait): OrbitalSchema => ({ name: 'Store', orbitals: [
+    { name: 'CartPage', entity: 'CartItem', pages: [], traits: [emitter] },
+    { name: 'CheckoutPage', entity: 'Checkout', pages: [], traits: [listener] },
+  ] });
+  it('rejects a listener aimed at another orbital', () => {
+    expect(auditListens(app(handler({ kind: 'orbital', orbital: 'OtherPage', trait: 'Cart' }))).missing).toHaveLength(1);
+  });
+  it('rejects a trait-local source in another orbital', () => {
+    expect(auditListens(app(handler({ kind: 'trait', trait: 'Cart' }))).missing).toHaveLength(1);
+  });
+  it('does not count a payload declaration as a subscription', () => {
+    expect(auditListens(app(handler())).missing).toHaveLength(1);
+  });
+  it('does not credit another orbital same-name self-transition', () => {
+    expect(auditListens(app(trait({ name: 'Cart', stateMachine: machine([{ from: 'idle', event: 'CHECKOUT_STARTED', to: 'active', effects: [['set', '@entity.active', true]] }]) }))).missing).toHaveLength(1);
+  });
+  it('accepts an exact declared cross-orbital route', () => {
+    expect(auditListens(app(handler({ kind: 'orbital', orbital: 'CartPage', trait: 'Cart' }))).missing).toEqual([]);
+  });
+  it('accepts an explicit wildcard route', () => {
+    expect(auditListens(app(handler({ kind: 'any' }))).missing).toEqual([]);
+  });
+});
+
+
+describe('identity and effect emit audit controls', () => {
+  const orbitalId = OrbitalIdSchema.parse('orb_cart');
+  const traitId = TraitIdSchema.parse('trt_cart');
+  const eventId = EventIdSchema.parse('evt_checkout');
+  const source = { kind: 'orbital' as const, orbital: 'OldCart', trait: 'OldBrowse', orbitalId, traitId };
+  const app = (id = eventId): OrbitalSchema => ({ name: 'Store', orbitals: [
+    { name: 'RenamedCart', id: orbitalId, entity: 'CartItem', pages: [], traits: [trait({ name: 'RenamedBrowse', id: traitId, emits: [{ event: 'RENAMED_CHECKOUT', eventId, scope: 'external' }] })] },
+    { name: 'Checkout', entity: 'Checkout', pages: [], traits: [trait({ name: 'Wizard', listens: [{ event: 'RENAMED_CHECKOUT', eventId: id, triggers: 'START', source }] })] },
+  ] });
+  it('credits stable source identities after source renames', () => {
+    expect(auditListens(app()).missing).toEqual([]);
+  });
+  it('preserves canonical name-based fanout across different event identities', () => {
+    expect(auditListens(app(EventIdSchema.parse('evt_other'))).missing).toEqual([]);
+  });
+  it('does not substitute source names when an identity is missing', () => {
+    const value = app();
+    delete value.orbitals[0].id;
+    expect(auditListens(value).missing).toHaveLength(1);
+  });
+  it('includes effect outcome emits only when requested by composition', () => {
+    const value = schema([trait({ name: 'Cart', emits: [{ event: 'CHECKOUT_STARTED', scope: 'external' }],
+      stateMachine: machine([{ from: 'idle', event: 'BUY', to: 'idle', effects: [['persist', 'create', 'Checkout', { emit: { success: 'CHECKOUT_STARTED' } }]] }]),
+    })]);
+    expect(auditListens(value).missing).toEqual([]);
+    expect(auditListens(value, { includeEffectEmits: true }).missing).toEqual([{ orbital: 'Fixture', trait: 'Cart', event: 'CHECKOUT_STARTED', suggestion: 'listens { Cart.CHECKOUT_STARTED -> CHECKOUT_STARTED }' }]);
+    value.orbitals[0].traits.push(trait({ name: 'Checkout', listens: [{ event: 'CHECKOUT_STARTED', triggers: 'START', source: { kind: 'trait', trait: 'Cart' } }] }));
+    expect(auditListens(value, { includeEffectEmits: true }).missing).toEqual([]);
+  });
+});
+
+describe('composition required effect routes', () => {
+  it('preserves unused outcomes and broadcasts, then reports an existing unconnected handler', () => {
+    const value = schema([trait({ name: 'Cart', emits: [{ event: 'CHECKOUT_STARTED', scope: 'external' }, { event: 'SAVED', scope: 'external' }],
+      stateMachine: machine([{ from: 'idle', event: 'BUY', to: 'idle', effects: [['emit', 'CHECKOUT_STARTED'], ['persist', 'create', 'Checkout', { emit: { success: 'SAVED' } }]] }]),
+    })]);
+    expect(auditListens(value, { includeEffectEmits: 'with-declared-handler' }).missing).toEqual([]);
+    value.orbitals[0].traits.push(trait({ name: 'CheckoutRules', stateMachine: machine([{ from: 'idle', event: 'CHECKOUT_STARTED', to: 'active', effects: [['set', '@entity.started', true]] }]) }));
+    expect(auditListens(value, { includeEffectEmits: 'with-declared-handler' }).missing.map((finding) => finding.event)).toEqual(['CHECKOUT_STARTED']);
   });
 });

@@ -96,8 +96,10 @@ import type {
   Orbital,
   OrbitalSchema,
   Trait,
+  TraitEventContract,
 } from '@almadar/core';
-import { getTraitName, isEntityCall, isEntityReference, isInlineTrait } from '@almadar/core';
+import { getTraitName, joinEventAddress, isEntityCall, isEntityReference, isInlineTrait } from '@almadar/core';
+import { buildSourceMatcher } from '@almadar/runtime';
 import { suppliedPayloadFields } from './event-producers.js';
 
 export type WiringLintSeverity = 'error' | 'warning';
@@ -148,6 +150,7 @@ export interface PluginWiringTarget {
 /** One inline trait plus the orbital that declares it. */
 interface OwnedTrait {
   orbitalName: string;
+  orbitalId?: Orbital['id'];
   trait: Trait;
 }
 
@@ -169,15 +172,14 @@ function pluginOwnOrbitals(plugin: OrbitalSchema, targets: readonly PluginWiring
 }
 
 /** Every inline trait declared across a schema's orbitals, keyed by name
- *  (last declaration wins — orbital/trait names are unique per schema in
- *  practice). REF stubs (unresolved `uses` imports) are skipped: a caller
+ *  keyed by its qualified orbital/trait address. REF stubs (unresolved `uses` imports) are skipped: a caller
  *  that hands in a raw, unresolved `.orb` gets no findings rather than
  *  false ones — the contract requires resolved inputs (see file header). */
 function inlineTraitsOf(orbitals: readonly Orbital[]): Map<string, OwnedTrait> {
   const out = new Map<string, OwnedTrait>();
   for (const orb of orbitals) {
     for (const ref of orb.traits ?? []) {
-      if (isInlineTrait(ref)) out.set(ref.name, { orbitalName: orb.name, trait: ref });
+      if (isInlineTrait(ref)) out.set(joinEventAddress('', { kind: 'orbital', orbital: orb.name, trait: ref.name }), { orbitalName: orb.name, orbitalId: orb.id, trait: ref });
     }
   }
   return out;
@@ -190,20 +192,17 @@ function inlineTraitsOf(orbitals: readonly Orbital[]): Map<string, OwnedTrait> {
  *  subscription (see `ListenSource` doc), and does not count. */
 function consumedWithinPlugin(
   pluginTraits: ReadonlyMap<string, OwnedTrait>,
-  sourceOrbitalName: string,
-  sourceTraitName: string,
-  event: string,
+  emitter: OwnedTrait,
+  event: TraitEventContract,
 ): boolean {
-  for (const { trait } of pluginTraits.values()) {
+  for (const { orbitalName, trait } of pluginTraits.values()) {
     for (const listen of trait.listens ?? []) {
-      if (listen.event !== event) continue;
-      const source = listen.source;
-      if (source === undefined) continue;
-      if (source.kind === 'any') return true;
-      if (source.kind === 'trait' && source.trait === sourceTraitName) return true;
-      if (source.kind === 'orbital' && source.trait === sourceTraitName && source.orbital === sourceOrbitalName) {
-        return true;
-      }
+      if (listen.event !== event.event) continue;
+      if (listen.source === undefined || !listen.triggers) continue;
+      if (buildSourceMatcher(listen.source, orbitalName)({
+        orbital: emitter.orbitalName, orbitalId: emitter.orbitalId,
+        trait: emitter.trait.name, traitId: emitter.trait.id,
+      })) return true;
     }
   }
   return false;
@@ -396,11 +395,13 @@ export function lintPluginWiring(
   const pluginTraits = inlineTraitsOf(ownOrbitals);
 
   // --- plugin-emit-no-host-listener + plugin-emit-payload-mismatch -------
-  for (const [traitName, { orbitalName, trait }] of pluginTraits) {
+  for (const owner of pluginTraits.values()) {
+    const { orbitalName, trait } = owner;
+    const traitName = trait.name;
     for (const emit of trait.emits ?? []) {
       if (emit.scope !== 'external') continue;
       if (isRelayEmit(trait, emit.event)) continue;
-      if (consumedWithinPlugin(pluginTraits, orbitalName, traitName, emit.event)) continue;
+      if (consumedWithinPlugin(pluginTraits, owner, emit)) continue;
 
       const matches = targetTraitsConsuming(targets, emit.event);
       if (matches.length === 0) {
@@ -459,18 +460,18 @@ export function lintPluginWiring(
   }
 
   // --- plugin-listen-source-not-host --------------------------------------
-  for (const [traitName, { orbitalName, trait }] of pluginTraits) {
+  for (const { orbitalName, trait } of pluginTraits.values()) {
+    const traitName = trait.name;
     for (const listen of trait.listens ?? []) {
       const source = listen.source;
       if (source === undefined || source.kind === 'any') continue;
 
       const sourceTraitName = source.trait;
-      const inPlugin =
-        source.kind === 'trait'
-          ? pluginTraits.has(sourceTraitName)
-          : plugin.orbitals.some(
-              (orb) => orb.name === source.orbital && (orb.traits ?? []).some((ref) => getTraitName(ref) === sourceTraitName),
-            );
+      const matches = buildSourceMatcher(source, orbitalName);
+      const inPlugin = [...pluginTraits.values()].some((owner) => matches({
+        orbital: owner.orbitalName, orbitalId: owner.orbitalId,
+        trait: owner.trait.name, traitId: owner.trait.id,
+      }));
       if (inPlugin) continue;
 
       const inTarget = targets.some((target) =>

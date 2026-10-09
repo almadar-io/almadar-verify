@@ -145,4 +145,39 @@ describe('gradeScreenshotQuality', () => {
       gradeScreenshotQuality({ screenshotPaths: [], userPrompt: 'x' }),
     ).rejects.toBeInstanceOf(VisionQualityGradingError);
   });
+
+  it('grades four study criteria from supplied check/frame evidence without replacing visual dimensions', async () => {
+    const criterion = { score: 8, rationale: 'The declared flow is observed', citations: ['check:save', 'frame:desktop'] };
+    const study = { criteria: { completion: criterion, design: criterion, utility: criterion, intentFit: criterion } };
+    callWithVision.mockResolvedValueOnce({ data: { dimensions: validDimensions, study }, raw: '', finishReason: 'stop', usage: null });
+    const report = await gradeScreenshotQuality({
+      screenshotPaths: [tempScreenshot()], userPrompt: 'a task app',
+      study: { turnPrompt: 'save a task', evidence: [
+        { id: 'check:save', kind: 'check', observation: { passed: true, expected: { rows: 1 }, evidence: [{ rows: 1 }] } },
+        { id: 'frame:desktop', kind: 'frame', observation: { route: '/tasks', viewport: { width: 1440, height: 900 } } },
+      ] },
+    });
+    expect(report.dimensions).toEqual(validDimensions);
+    expect(report.study).toEqual(study);
+    expect(callWithVision.mock.calls[0][0].userText).toContain('save a task');
+    expect(callWithVision.mock.calls[0][0].userText).toContain('check:save');
+    expect(callWithVision.mock.calls[0][0].userText).toContain('frame:desktop');
+  });
+
+  it('retries and rejects invented citations, missing evidence and out-of-range study scores', async () => {
+    const criterion = { score: 8, rationale: 'Observed', citations: ['invented'] };
+    const input: Parameters<typeof gradeScreenshotQuality>[0] = {
+      screenshotPaths: [tempScreenshot()], userPrompt: 'a task app',
+      study: { turnPrompt: 'save a task', evidence: [
+        { id: 'check:save', kind: 'check' as const, observation: { passed: true } },
+        { id: 'frame:desktop', kind: 'frame' as const, observation: { route: '/tasks' } },
+      ] },
+    };
+    for (const invalid of [criterion, { ...criterion, citations: [] }, { ...criterion, score: 11, citations: ['check:save', 'frame:desktop'] }]) {
+      callWithVision.mockReset();
+      callWithVision.mockResolvedValue({ data: { dimensions: validDimensions, study: { criteria: { completion: invalid, design: invalid, utility: invalid, intentFit: invalid } } } });
+      await expect(gradeScreenshotQuality(input)).rejects.toBeInstanceOf(VisionQualityGradingError);
+      expect(callWithVision).toHaveBeenCalledTimes(2);
+    }
+  });
 });

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { OrbitalIdSchema, TraitIdSchema, EventIdSchema } from '@almadar/core';
 import type { Orbital, OrbitalSchema, StateMachine, Trait, TraitEventContract, TraitEventListener } from '@almadar/core';
 import { lintPluginWiring, type PluginWiringTarget } from '../plugin-wiring-lint.js';
 
@@ -455,4 +456,56 @@ describe.skipIf(!orbAvailable)('lintPluginWiring — real files: vim-mode agains
     // whole roster is clean.
     expect(result.findings).toEqual([]);
   });
+});
+
+describe('same-plugin listener source matching', () => {
+  it('does not credit an intra-orbital listener in a different orbital', () => {
+    const plugin = schema({ name: 'Scopes', orbitals: [
+      orbital({ name: 'Producer', traits: [trait({ name: 'Emitter', emits: emitsExternal('TICK') })] }),
+      orbital({ name: 'Consumer', traits: [trait({ name: 'Listener', listens: [{ event: 'TICK', triggers: 'TICK', source: { kind: 'trait', trait: 'Emitter' } }] })] }),
+    ] });
+    expect(lintPluginWiring(plugin, []).findings.some((finding) => finding.check === 'plugin-emit-no-host-listener')).toBe(true);
+  });
+  it('credits an exact cross-orbital listener', () => {
+    const plugin = schema({ name: 'Scopes', orbitals: [
+      orbital({ name: 'Producer', traits: [trait({ name: 'Emitter', emits: emitsExternal('TICK') })] }),
+      orbital({ name: 'Consumer', traits: [trait({ name: 'Listener', listens: [{ event: 'TICK', triggers: 'TICK', source: { kind: 'orbital', orbital: 'Producer', trait: 'Emitter' } }] })] }),
+    ] });
+    expect(lintPluginWiring(plugin, []).findings).toEqual([]);
+  });
+});
+
+
+describe('same-plugin source identity controls', () => {
+  const orbitalId = OrbitalIdSchema.parse('orb_producer');
+  const traitId = TraitIdSchema.parse('trt_emitter');
+  const eventId = EventIdSchema.parse('evt_tick');
+  const value = (): OrbitalSchema => schema({ name: 'Identity', orbitals: [
+    orbital({ name: 'Producer', id: orbitalId, traits: [trait({ name: 'Emitter', id: traitId, emits: [{ event: 'TICK', eventId, scope: 'external' }] })] }),
+    orbital({ name: 'Consumer', traits: [trait({ name: 'Listener', listens: [{ event: 'TICK', eventId, triggers: 'TICK', source: { kind: 'orbital', orbital: 'Producer', trait: 'Emitter', orbitalId, traitId } }] })] }),
+  ] });
+  it('credits declared matching identities', () => {
+    expect(lintPluginWiring(value(), []).findings).toEqual([]);
+  });
+  it('does not substitute names when the source identity is absent', () => {
+    const plugin = value();
+    delete plugin.orbitals[0].id;
+    expect(lintPluginWiring(plugin, []).findings.some((finding) => finding.check === 'plugin-emit-no-host-listener')).toBe(true);
+  });
+  it('preserves canonical name-based fanout when event identity is absent', () => {
+    const plugin = value();
+    const producer = plugin.orbitals[0].traits[0];
+    if (typeof producer !== 'object' || !('emits' in producer) || !producer.emits?.[0]) throw new Error('Fixture emit missing');
+    delete producer.emits[0].eventId;
+    expect(lintPluginWiring(plugin, []).findings).toEqual([]);
+  });
+});
+
+
+it('retains same-name traits from different plugin orbitals', () => {
+  const plugin = schema({ name: 'DuplicateDisplayNames', orbitals: [
+    orbital({ name: 'Producer', traits: [trait({ name: 'Shared', emits: emitsExternal('TICK') })] }),
+    orbital({ name: 'Consumer', traits: [trait({ name: 'Shared' })] }),
+  ] });
+  expect(lintPluginWiring(plugin, []).findings).toMatchObject([{ check: 'plugin-emit-no-host-listener', orbital: 'Producer', trait: 'Shared' }]);
 });

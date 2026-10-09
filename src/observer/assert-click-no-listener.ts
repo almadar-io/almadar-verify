@@ -31,7 +31,7 @@
  */
 
 import type { OrbitalSchema } from '@almadar/core';
-import { collectEmbeddedTraitReferrers } from '@almadar/core';
+import { collectEmbeddedTraitReferrers, isInlineTrait, joinEventAddress } from '@almadar/core';
 import type { Frame } from '../frame/types.js';
 import type { Verdict } from './types.js';
 import { buildDeclaredListeners, buildTraitTransitions } from './click-wiring-audit.js';
@@ -48,7 +48,6 @@ export function assertClickNoListener(
   // child's own key. Walk the embed chain upward and credit the click when
   // any host handles or subscribes to the event; a chain with no handler
   // anywhere is still a dead affordance.
-  const embedHosts = collectEmbeddedTraitReferrers(orbital);
   const verdicts: Verdict[] = [];
 
   for (let i = 1; i < frames.length; i++) {
@@ -58,40 +57,47 @@ export function assertClickNoListener(
 
     const traitName = frame.cause.traitName;
     const event = frame.cause.event;
+    const candidatesFor = (name: string) => orbital.orbitals.flatMap((orb) => orb.traits
+      .filter(isInlineTrait).filter((trait) => trait.name === name)
+      .map((trait) => ({ orb, trait })));
+    const selfHandles = (name: string): boolean => {
+      const candidates = candidatesFor(name);
+      return candidates.length > 0 && candidates.every(({ orb }) => traitTransitions
+        .get(joinEventAddress('', { kind: 'orbital', orbital: orb.name, trait: name }))?.has(event));
+    };
+    const listensTo = (name: string): boolean => {
+      const candidates = candidatesFor(name);
+      return candidates.length > 0 && candidates.every(({ orb }) => {
+        const sources = declaredListeners.get(event);
+        return sources?.has(joinEventAddress('', { kind: 'orbital', orbital: orb.name, trait: name })) === true;
+      });
+    };
 
     // Self-targeting: does the emitting trait handle this event itself?
-    const selfEvents = traitTransitions.get(traitName);
-    if (selfEvents?.has(event)) {
+    if (selfHandles(traitName)) {
       continue;
     }
 
     // Embed-chain delivery: does an embedding host (transitively) handle or
     // subscribe to the event? Mirrors the runtime's embed routing.
-    let embedWired = false;
-    const seenHosts = new Set<string>([traitName]);
-    for (
-      let host = embedHosts.get(traitName);
-      host !== undefined && !seenHosts.has(host);
-      host = embedHosts.get(host)
-    ) {
-      seenHosts.add(host);
-      const hostSources = declaredListeners.get(event);
-      if (
-        traitTransitions.get(host)?.has(event) === true ||
-        (hostSources !== undefined && hostSources.has(host))
-      ) {
-        embedWired = true;
-        break;
+    const emitters = candidatesFor(traitName);
+    const embedWired = emitters.length > 0 && emitters.every(({ orb }) => {
+      const embedHosts = collectEmbeddedTraitReferrers({ ...orbital, orbitals: [orb] });
+      const seenHosts = new Set<string>([traitName]);
+      for (let host = embedHosts.get(traitName); host !== undefined && !seenHosts.has(host); host = embedHosts.get(host)) {
+        seenHosts.add(host);
+        const address = joinEventAddress('', { kind: 'orbital', orbital: orb.name, trait: host });
+        if (traitTransitions.get(address)?.has(event) || declaredListeners.get(event)?.has(address)) return true;
       }
-    }
+      return false;
+    });
     if (embedWired) continue;
 
     // Declared cross-trait: does any trait subscribe to this event from this
     // emitter (or from any source)? The schema-level `listens` wiring is the
     // subscription contract — credit it even when the runtime path can't
     // surface `cascadeReceived` (the compiled snapshot hardcodes it empty).
-    const sources = declaredListeners.get(event);
-    if (sources !== undefined && (sources.has('*') || sources.has(traitName))) {
+    if (listensTo(traitName)) {
       continue;
     }
 
@@ -121,9 +127,11 @@ export function assertClickNoListener(
     }
 
     if (!hasListener) {
+      const candidates = candidatesFor(traitName);
+      const ambiguity = candidates.length > 1 ? `; ambiguous emitter candidates: ${candidates.map(({ orb }) => joinEventAddress(event, { kind: 'orbital', orbital: orb.name, trait: traitName })).join(', ')}` : '';
       verdicts.push({
         passed: false,
-        detail: `bus:click-no-listener — ${traitName} DOM click emitted "${event}" but no trait subscribed (self-targeting: no, embed-chain: no, cross-trait cascade: no)`,
+        detail: `bus:click-no-listener — ${traitName} DOM click emitted "${event}" but no trait subscribed (self-targeting: no, embed-chain: no, cross-trait cascade: no)${ambiguity}`,
         evidence: {
           frameIndices: [frame.index],
         },
