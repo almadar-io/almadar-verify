@@ -84,6 +84,21 @@ describe('assertEmitPayloadAlwaysEmpty', () => {
     expect(verdicts[0].detail).toContain('3 time(s)');
   });
 
+  it('an attributed firing counts only for the trait it names: another trait\u2019s same-named event is not this emitter\u2019s', () => {
+    const frames: Frame[] = [
+      frame(0, [{ type: 'CONVERSATION_OPENED', payload: {}, source: { trait: 'SomeListView' }, timestamp: 1 }]),
+      frame(1, [{ type: 'CONVERSATION_OPENED', payload: {}, source: { trait: 'SomeListView' }, timestamp: 2 }]),
+    ];
+    expect(assertEmitPayloadAlwaysEmpty(frames, schemaWithEmitter())).toEqual([]);
+  });
+
+  it('control: a firing attributed to the declaring trait itself is still judged', () => {
+    const frames: Frame[] = [
+      frame(0, [{ type: 'CONVERSATION_OPENED', payload: { channel: '' }, source: { trait: 'DirectMessageStarter' }, timestamp: 1 }]),
+    ];
+    expect(assertEmitPayloadAlwaysEmpty(frames, schemaWithEmitter())).toHaveLength(1);
+  });
+
   it('is silent when at least one firing carries a real value', () => {
     const frames: Frame[] = [
       frame(0, [{ type: 'CONVERSATION_OPENED', payload: { channel: '' }, timestamp: 1 }]),

@@ -15,10 +15,13 @@
  *       forward window — missing this (no declared route, or a declared
  *       route that never fired) is `effect-failure-unrouted`: the effect
  *       has no failure route at all.
- *   (b) a toast/alert mounted in the `toast` portal slot
- *       (`frame.domSnapshot.portals`) within the same window — missing
- *       this, with (a) satisfied, is `effect-failure-not-surfaced`: the
- *       failure fired on the bus but never reached the user.
+ *   (b) the failure reached the user within the same window: a toast
+ *       mounted in the `toast` portal slot, OR an alert-like pattern
+ *       (`FAILURE_SURFACE_PATTERNS`) mounted in ANY slot by the failure
+ *       event's own transition (the frame whose cause is the declared
+ *       failure event). Missing both, with (a) satisfied, is
+ *       `effect-failure-not-surfaced`: the failure fired on the bus but
+ *       never reached the user.
  *
  * The forward window (`MAX_SURFACE_LOOKAHEAD`) mirrors
  * `assert-crud-flow.ts`'s `MAX_CASCADE_LOOKAHEAD` — the failure event's own
@@ -44,6 +47,21 @@ import type { Verdict } from './types.js';
 
 /** Forward-scan bound for the failure-event + toast checks. */
 const MAX_SURFACE_LOOKAHEAD = 4;
+
+/**
+ * Registry patterns (`@almadar/core` patterns-registry) whose job is to tell
+ * the viewer something went wrong, read by the portal's own `data-pattern`
+ * marker:
+ * - `alert`: the generic message box with an `error` variant.
+ * - `error-state`: the error-message display std-browse paints on its
+ *   `error` state.
+ * - `violation-alert`: composes `Alert` to show structured violations; its
+ *   only job is an error/warning message.
+ * Excluded: `error-boundary` (a render-crash fallback wrapper, not an
+ * effect-failure message) and `notification` (toast-shaped, already counted
+ * through the `toast` slot).
+ */
+export const FAILURE_SURFACE_PATTERNS: ReadonlySet<string> = new Set(['alert', 'error-state', 'violation-alert']);
 
 const FAILABLE_EFFECT_TYPES: ReadonlySet<string> = new Set(['persist', 'fetch', 'call-service']);
 
@@ -138,6 +156,17 @@ function toastMounted(frame: Frame): boolean {
   return frame.domSnapshot.portals.some((p) => p.slot === 'toast' && p.mounted && p.childCount > 0);
 }
 
+/** The failure event's own transition rendered an alert-like pattern in any
+ *  slot: a settled (non-guard-rejected) frame caused by `failureEvent`. */
+function inPlaceFailureSurface(frame: Frame, failureEvent: string): string | undefined {
+  if (frame.cause.event !== failureEvent || frame.cause.guardCase === 'fail') return undefined;
+  if (frame.cause.payloadCase === 'malformed') return undefined;
+  const portal = frame.domSnapshot.portals.find(
+    (p) => p.mounted && p.childCount > 0 && p.pattern !== undefined && FAILURE_SURFACE_PATTERNS.has(p.pattern),
+  );
+  return portal === undefined ? undefined : `${portal.pattern} in "${portal.slot}"`;
+}
+
 export function assertEffectFailureNotSurfaced(
   frames: ReadonlyArray<Frame>,
   orbital: OrbitalSchema,
@@ -196,11 +225,16 @@ export function assertEffectFailureNotSurfaced(
       }
 
       const toastSeen = window.some(toastMounted);
-      if (!toastSeen) {
+      let inPlace: string | undefined;
+      for (const f of window) {
+        inPlace = inPlaceFailureSurface(f, failureEvent);
+        if (inPlace !== undefined) break;
+      }
+      if (!toastSeen && inPlace === undefined) {
         verdicts.push({
           passed: false,
-          detail: `effect-failure-not-surfaced: ${label} — '${failureEvent}' fired but no toast/alert mounted `
-            + `in the "toast" slot within ${MAX_SURFACE_LOOKAHEAD} frame(s) — the failure never reached the user`,
+          detail: `effect-failure-not-surfaced: ${label} — '${failureEvent}' fired but no toast mounted in the "toast" slot `
+            + `and no alert-like pattern rendered by the failure transition within ${MAX_SURFACE_LOOKAHEAD} frame(s) — the failure never reached the user`,
           evidence: { frameIndices: [frame.index] },
         });
         continue;
@@ -208,8 +242,8 @@ export function assertEffectFailureNotSurfaced(
 
       verdicts.push({
         passed: true,
-        detail: `effect-failure-not-surfaced: ${label} — '${failureEvent}' fired and a toast mounted `
-          + `within the settle window`,
+        detail: `effect-failure-not-surfaced: ${label} — '${failureEvent}' fired and `
+          + `${toastSeen ? 'a toast mounted' : `${inPlace} was rendered by its transition`} within the settle window`,
         evidence: { frameIndices: [frame.index] },
       });
     }

@@ -18,7 +18,7 @@
  */
 
 // node:fs is loaded dynamically below so browser bundles don't pull it in.
-import { collectEmbeddedTraitReferrers } from '@almadar/core';
+import { collectEmbeddedTraitReferrers, constTruth } from '@almadar/core';
 import type { EntityData, EntityRow, EventPayload, Orbital } from '@almadar/core';
 import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
 import type { Frame } from '../frame/types.js';
@@ -738,6 +738,12 @@ export async function runVerification<Ctx extends DriverContext>(
       // that says nothing about the transition itself. Skip it; the
       // divergence (if any) is already recorded via `replayDivergences`.
       // G-VERIFY-043: a transient precondition the runtime settled past leaves no arm to test.
+      // Read where the runtime actually rests: a reset boots the host, whose own INIT cascade
+      // (e.g. a fetch landing `loading -> browsing`) may already have moved past `initialState`.
+      if (!preconditionUnreachable && step.triggerKind !== 'auto-init') {
+        await input.driver.settle(ctx);
+        liveState = (await input.driver.getState(ctx, trait.traitName)) ?? liveState;
+      }
       const settled = liveState;
       if (
         !preconditionUnreachable && settled !== null && settled !== step.from && step.from !== '*' &&
@@ -1071,6 +1077,9 @@ export async function runVerification<Ctx extends DriverContext>(
     // trait(s) — an unscoped run (`traitScope === null`) keeps every trait.
     if (traitScope !== null && !traitScope.includes(trait.name)) continue;
     for (const t of trait.stateMachine?.transitions ?? []) {
+      // A guard the bound config folded to a false literal cannot fire in this program; the
+      // planner still walks its fail variant (proving the rejection), but it is no coverage debt.
+      if (t.guard !== undefined && t.guard !== null && constTruth(t.guard) === false) continue;
       schemaTransitions += 1;
       schemaTransitionKeys.push(`${trait.name}:${t.from}+${t.event}->${t.to}`);
     }

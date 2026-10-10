@@ -15,7 +15,8 @@
 
 import type { Locator, Page } from 'playwright';
 import type { EntityField, EventPayload, EventPayloadValue } from '@almadar/core';
-import { payloadTypeContainer } from '@almadar/core';
+import { payloadTypeContainer, actionTestId, VERIFICATION_DOM_ATTRS } from '@almadar/core';
+import { fieldNameSelector, hasAttr, patternSelector, testIdSelector } from './dom-contract.js';
 import { sampleFieldValue, type SampleContext } from '@almadar/core/mock';
 import {
   seedRandom,
@@ -651,7 +652,7 @@ export async function fillFormFieldsFromMap(
     attempted++;
 
     const fieldSelector = fieldSelectors === undefined
-      ? `[data-field-name=${JSON.stringify(name)}]`
+      ? fieldNameSelector(name)
       : fieldSelectors[name];
     const fields = container.locator(fieldSelector);
     if (exactTargets && await fields.count() !== 1) throw new Error(`Expected one field '${name}'`);
@@ -791,7 +792,7 @@ export async function clickSubmitAction(
   submitEvent: string,
 ): Promise<boolean> {
   const container = page.locator(containerSelector).first();
-  const btn = container.locator(`[data-testid="action-${submitEvent}"]`).first();
+  const btn = container.locator(testIdSelector(actionTestId(submitEvent))).first();
   try {
     if (await btn.isVisible({ timeout: 1000 })) {
       await btn.click();
@@ -817,27 +818,27 @@ export async function clickSubmitAction(
  */
 export async function countEntityRows(page: Page): Promise<number> {
   // Strategy 1: explicit entity-row markers
-  const entityRows = page.locator('[data-entity-row]');
+  const entityRows = page.locator(hasAttr(VERIFICATION_DOM_ATTRS.entityRow));
   const directCount = await entityRows.count();
   if (directCount > 0) return directCount;
 
   // Strategy 2: data-grid table rows (tbody tr)
-  const gridRows = page.locator('[data-pattern="data-grid"] tbody tr');
+  const gridRows = page.locator(`${patternSelector('data-grid')} tbody tr`);
   const gridCount = await gridRows.count();
   if (gridCount > 0) return gridCount;
 
   // Strategy 3: data-list items (each item is a direct child of the list container)
-  const listItems = page.locator('[data-pattern="data-list"] [data-entity-id]');
+  const listItems = page.locator(`${patternSelector('data-list')} ${hasAttr(VERIFICATION_DOM_ATTRS.entityId)}`);
   const listCount = await listItems.count();
   if (listCount > 0) return listCount;
 
   // Strategy 4: data-grid card items
-  const cardItems = page.locator('[data-pattern="data-grid"] [data-entity-id]');
+  const cardItems = page.locator(`${patternSelector('data-grid')} ${hasAttr(VERIFICATION_DOM_ATTRS.entityId)}`);
   const cardCount = await cardItems.count();
   if (cardCount > 0) return cardCount;
 
   // Strategy 5: table-view rows
-  const tableRows = page.locator('[data-pattern="table-view"] tbody tr');
+  const tableRows = page.locator(`${patternSelector('table-view')} tbody tr`);
   const tableCount = await tableRows.count();
   if (tableCount > 0) return tableCount;
 
@@ -860,8 +861,8 @@ export async function clickCloseAction(
   containerSelector: string
 ): Promise<boolean> {
   // Strategy 1: data-testid
-  for (const testId of ['action-CLOSE', 'action-CANCEL']) {
-    const btn = page.locator(`${containerSelector} [data-testid="${testId}"]`).first();
+  for (const testId of [actionTestId('CLOSE'), actionTestId('CANCEL')]) {
+    const btn = page.locator(`${containerSelector} ${testIdSelector(testId)}`).first();
     try {
       if (await btn.isVisible({ timeout: 1000 })) {
         await btn.click();

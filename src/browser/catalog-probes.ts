@@ -17,6 +17,8 @@
  */
 
 import type { Page } from 'playwright';
+import { VERIFICATION_DOM_ATTRS } from '@almadar/core';
+import { hasAttr, patternSelector } from './dom-contract.js';
 import type { Effect, EntityRow, EventPayload, FieldValue, SExpr, TraitConfig } from '@almadar/core';
 
 /** Recursive IR value the probes walk: render trees, config values, payloads. */
@@ -868,19 +870,23 @@ export async function probeListRender(
     // are deliberately permissive — `[data-entity-id]` /
     // `[data-entity-row]` / `tbody tr` cover every list pattern in
     // @almadar/ui without requiring a per-pattern selector list here.
-    const observedRows = await page.evaluate((slotName: string) => {
-      const scope = document.getElementById(`slot-${slotName}`) ?? document.body;
+    const observedRows = await page.evaluate((args: { slotName: string; direct: string; tables: string }) => {
+      const scope = document.getElementById(`slot-${args.slotName}`) ?? document.body;
       // Strategy 1: explicit row markers.
-      const direct = scope.querySelectorAll('[data-entity-row], [data-entity-id]');
+      const direct = scope.querySelectorAll(args.direct);
       if (direct.length > 0) return direct.length;
       // Strategy 2: data-grid / table-view tbody tr.
-      const gridRows = scope.querySelectorAll('[data-pattern="data-grid"] tbody tr, [data-pattern="table-view"] tbody tr');
+      const gridRows = scope.querySelectorAll(args.tables);
       if (gridRows.length > 0) return gridRows.length;
       // Strategy 3: any visible tbody tr inside the slot (fallback for
       // custom patterns that don't stamp data-pattern).
       const tableRows = scope.querySelectorAll('tbody tr');
       return tableRows.length;
-    }, binding.slot);
+    }, {
+      slotName: binding.slot,
+      direct: `${hasAttr(VERIFICATION_DOM_ATTRS.entityRow)}, ${hasAttr(VERIFICATION_DOM_ATTRS.entityId)}`,
+      tables: `${patternSelector('data-grid')} tbody tr, ${patternSelector('table-view')} tbody tr`,
+    });
 
     const passed = observedRows >= 1;
     results.push({

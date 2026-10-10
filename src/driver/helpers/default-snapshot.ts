@@ -16,6 +16,7 @@
  */
 
 import type { Page } from 'playwright';
+import { VERIFICATION_DOM_ATTRS } from '@almadar/core';
 import type {
   EffectTrace,
   EntityData,
@@ -28,7 +29,8 @@ import type { DomSnapshot } from '../../frame/types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import type { ConsoleCollector } from '../../browser/console.js';
 import { readVerificationSnapshot, readEventLogState } from '../../runtime/state-bridge.js';
-import { takeScreenshot, safeFileName } from '../../browser/screenshot.js';
+import { takeScreenshot } from '../../browser/screenshot.js';
+import { frameScreenshotFileName } from './frame-screenshot-name.js';
 import { PORTAL_SLOTS, type PortalSlot } from '../../browser/portal-slots.js';
 import { createLogger } from '@almadar/logger';
 import { join } from 'node:path';
@@ -162,24 +164,7 @@ export function createDefaultSnapshot(
     // Optional screenshot.
     let screenshotPath: string | null = null;
     if (screenshots && step !== null) {
-      // safeFileName strips dots, so sanitize the basename then append
-      // the extension. Otherwise `.png` becomes `_png` and playwright
-      // rejects with `unsupported mime type "null"`.
-      //
-      // Multiple steps with the same `from_event_to` cause (e.g. base
-      // walk and interaction-test for the same transition) would
-      // collide on the same filename, last-write-wins. Suffix with
-      // testKind (extension planners) OR payloadCase (planWalk variants:
-      // malformed/success/guard-fail) OR triggerKind=reconcile so each
-      // variant gets its own screenshot file. Without the payloadCase /
-      // reconcile suffix, planWalk's three-variant emission + the
-      // hermetic-mode reconcile preamble would all overwrite the same
-      // path, hiding which variant the user is actually seeing.
-      let variant = '';
-      if (step.testKind !== undefined) variant = `__${step.testKind}`;
-      else if (step.triggerKind === 'reconcile') variant = '__reconcile';
-      else if (step.payloadCase !== undefined) variant = `__${step.payloadCase}`;
-      const fileName = `${safeFileName(`${traitName}_${step.from}_${step.event}_${step.to}${variant}`)}.png`;
+      const fileName = frameScreenshotFileName(traitName, step);
       screenshotPath = join(outputDir, 'frames', fileName);
       await takeScreenshot(page, screenshotPath);
     }
@@ -362,14 +347,14 @@ async function probePortals(page: Page): Promise<ReadonlyArray<{ slot: PortalSlo
   try {
     const slots = PORTAL_SLOTS as ReadonlyArray<PortalSlot>;
     const readOnce = async (): Promise<ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number; pattern?: string }>> => {
-      const results = await page.evaluate((slotNames: ReadonlyArray<string>) => {
+      const results = await page.evaluate(({ slotNames, patternAttr }) => {
         return slotNames.map((name) => {
           const el = document.getElementById(`slot-${name}`);
           if (el === null) return { slot: name, mounted: false, childCount: 0 };
-          const pattern = el.children[0]?.getAttribute('data-pattern') ?? undefined;
+          const pattern = el.children[0]?.getAttribute(patternAttr) ?? undefined;
           return { slot: name, mounted: true, childCount: el.children.length, ...(pattern !== undefined && { pattern }) };
         });
-      }, [...slots]);
+      }, { slotNames: [...slots], patternAttr: VERIFICATION_DOM_ATTRS.pattern });
       return results as ReadonlyArray<{ slot: PortalSlot; mounted: boolean; childCount: number; pattern?: string }>;
     };
     let prev = await readOnce();

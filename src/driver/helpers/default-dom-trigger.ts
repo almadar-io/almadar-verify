@@ -34,7 +34,8 @@
  */
 
 import type { Page } from 'playwright';
-import { isEventPayloadValue, type EventPayload } from '@almadar/core';
+import { isEventPayloadValue, actionTestId, ACTION_OVERFLOW_TESTID, ACTION_TESTID_PREFIX, FORM_PATTERN, VERIFICATION_DOM_ATTRS, type EventPayload } from '@almadar/core';
+import { entityRowSelector, eventSelector, patternSelector, rowIdSelector, testIdSelector, ENTITY_ROW_SELECTOR } from '../../browser/dom-contract.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 import type { DomTriggerResult } from '../types.js';
 import { fillContainerFields, fillFormFieldsFromMap } from '../../browser/interaction.js';
@@ -62,12 +63,11 @@ const DEFAULT_TIMEOUT_MS = 2000;
 // render. Pre-fix this was a 600ms `waitForTimeout`, which raced the
 // modal mount in playground runs.
 const DEFAULT_FORM_MOUNT_MS = 3000;
-const DEFAULT_FORM_SELECTOR = '[data-pattern="form-section"]';
+const DEFAULT_FORM_SELECTOR = patternSelector(FORM_PATTERN);
 
 // Entity-row presence, across every browse surface shape (the
 // `entity-data-check` selector union). Used by the browse-loaded gate.
-const BROWSE_ROW_SELECTOR =
-  '[data-entity-row], [data-entity-id], [data-pattern="data-grid"] tbody tr, [data-pattern="data-list"] > *';
+const BROWSE_ROW_SELECTOR = ENTITY_ROW_SELECTOR;
 const BROWSE_LOADED_TIMEOUT_MS = 5000;
 const BROWSE_LOADED_POLL_MS = 250;
 
@@ -83,8 +83,8 @@ const BROWSE_LOADED_POLL_MS = 250;
  * cross-trait cascades require, so they fail server-side validation.
  */
 function actionSelector(event: string, suffix = ''): string {
-  const exact = `[data-testid="action-${event}"]${suffix}`;
-  const qualified = `[data-testid^="action-"][data-testid$=".${event}"]${suffix}`;
+  const exact = `${testIdSelector(actionTestId(event))}${suffix}`;
+  const qualified = `[data-testid^="${ACTION_TESTID_PREFIX}"][data-testid$=".${event}"]${suffix}`;
   return `${exact}, ${qualified}`;
 }
 
@@ -97,7 +97,7 @@ function actionSelector(event: string, suffix = ''): string {
  * {@link createDefaultDomTrigger}'s fallback, never directly.
  */
 export function shellDismissSelector(event: string): string {
-  return `[data-event="${event}"]`;
+  return eventSelector(event);
 }
 
 export function createDefaultDomTrigger(
@@ -130,9 +130,9 @@ export function createDefaultDomTrigger(
     const affordanceEvent = step.openAffordanceEvent ?? step.event;
     const needsRow = isCrudFlow && (step.testKind === 'crud-edit' || step.testKind === 'crud-delete');
     const rowSuffix = (isCrudFlow && step.targetRowId !== undefined)
-      ? `[data-row-id="${step.targetRowId}"]`
+      ? rowIdSelector(step.targetRowId)
       : needsRow
-        ? `[data-row-id]`
+        ? rowIdSelector()
         : '';
     const selector = actionSelector(affordanceEvent, rowSuffix);
 
@@ -173,7 +173,7 @@ export function createDefaultDomTrigger(
         // form answers VALIDATION_FAILED and the frame measures the validator,
         // not the event. A malformed-payload probe submits the form as it stands.
         if (step.payloadCase !== 'malformed') {
-          const owningForm = locator.locator(`xpath=ancestor::*[@data-pattern="form-section"][1]`);
+          const owningForm = locator.locator(`xpath=ancestor::*[@${VERIFICATION_DOM_ATTRS.pattern}="${FORM_PATTERN}"][1]`);
           if ((await owningForm.count()) > 0) {
             const filled = await fillContainerFields(owningForm);
             domLog.debug('dom:fill:owning-form', { step: step.coverageKey, filled: filled.count });
@@ -244,7 +244,7 @@ export function createDefaultDomTrigger(
     // the row it belongs to, so the first-match click is deterministic
     // and complete regardless of which id was resolved.
     if (!clicked && rowSuffix !== '') {
-      const anyRowTagged = await page.locator(actionSelector(affordanceEvent, '[data-row-id]')).count() > 0;
+      const anyRowTagged = await page.locator(actionSelector(affordanceEvent, rowIdSelector())).count() > 0;
       if (!anyRowTagged) {
         const fallbackSelector = actionSelector(affordanceEvent);
         const fallback = page.locator(fallbackSelector).first();
@@ -280,9 +280,9 @@ export function createDefaultDomTrigger(
     // the action testid inside the portalled menu.
     if (!clicked && needsRow) {
       const rowScope = step.targetRowId !== undefined
-        ? `[data-entity-row][data-entity-id="${step.targetRowId}"]`
-        : '[data-entity-row]';
-      const overflow = page.locator(`${rowScope} [data-testid="action-overflow"]`).first();
+        ? entityRowSelector(step.targetRowId)
+        : entityRowSelector();
+      const overflow = page.locator(`${rowScope} ${testIdSelector(ACTION_OVERFLOW_TESTID)}`).first();
       try {
         if (await overflow.isVisible({ timeout: 250 })) {
           await overflow.click({ timeout: clickTimeoutMs });
@@ -424,27 +424,27 @@ export function createDefaultDomTrigger(
       });
       await fillFormFieldsFromMap(page, formContainerSelector, step.formData);
 
-      const postFillDom = await page.evaluate((sel: string) => {
-        const container = document.querySelector(sel);
+      const postFillDom = await page.evaluate((probe: { sel: string; patternAttr: string; fieldAttr: string }) => {
+        const container = document.querySelector(probe.sel);
         if (container === null) {
           // Probe ALL data-pattern attributes currently mounted so we can
           // see whether the form-section wrapper is present under a
           // different attribute or selector. This is gated on the
           // not-found path so it only fires when the verifier is
           // actually blind.
-          const allPatterns = Array.from(document.querySelectorAll<HTMLElement>('[data-pattern]'))
+          const allPatterns = Array.from(document.querySelectorAll<HTMLElement>(`[${probe.patternAttr}]`))
             .map((el) => ({
-              pattern: el.getAttribute('data-pattern'),
+              pattern: el.getAttribute(probe.patternAttr),
               tag: el.tagName.toLowerCase(),
               hasInputs: el.querySelectorAll('input, textarea, select').length,
-              dataFieldNames: Array.from(el.querySelectorAll<HTMLElement>('[data-field-name]'))
-                .map((f) => f.getAttribute('data-field-name')),
+              dataFieldNames: Array.from(el.querySelectorAll<HTMLElement>(`[${probe.fieldAttr}]`))
+                .map((f) => f.getAttribute(probe.fieldAttr)),
             }));
           const allInputs = Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select'))
             .map((el) => ({
               name: el.name ?? '',
               tag: el.tagName.toLowerCase(),
-              dataFieldName: el.getAttribute('data-field-name'),
+              dataFieldName: el.getAttribute(probe.fieldAttr),
               visible: !!(el.offsetParent || el.getClientRects().length > 0),
             }));
           return { containerFound: false, fields: [], allPatterns, allInputs };
@@ -456,11 +456,11 @@ export function createDefaultDomTrigger(
             name: el.name ?? '',
             type: el.tagName.toLowerCase(),
             value: String(el.value ?? ''),
-            dataFieldName: el.getAttribute('data-field-name'),
+            dataFieldName: el.getAttribute(probe.fieldAttr),
           });
         });
         return { containerFound: true, fields, allPatterns: [], allInputs: [] };
-      }, formContainerSelector);
+      }, { sel: formContainerSelector, patternAttr: VERIFICATION_DOM_ATTRS.pattern, fieldAttr: VERIFICATION_DOM_ATTRS.fieldName });
       domLog.debug('dom:fill:post-fill-state', () => ({
         step: step.coverageKey,
         testKind: step.testKind,

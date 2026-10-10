@@ -8,9 +8,21 @@ Every open gap this repo owns lives here. This file is the source of truth; the 
 - **Close by deleting.** Remove the entry in the same commit as the fix. There is no "closed" section; git history is the record.
 - **Cross-repo gaps don't go here.** If fixing it needs another repo, describe it in your report or PR body; the monorepo coordinator files it.
 
-Next code: `G-VERIFY-068`
+Next code: `G-VERIFY-079`
 
 ## Open gaps
+
+- **G-VERIFY-074** — Android `thread/good` `--trait ThreadPostBrowse` walk (2026-10-09, dataMutation now green, EDIT_REPLY/SUBMIT_REPLY dispatch with `serverLeg=true`) still ends red: `portalSweep` frame 14 slot `toast` mounted but empty; `effect-failure-unrouted` ThreadPostBrowse ThreadPostCreated (the fixture's fetch declares no `emit.failure` route, and the live-push ThreadPostCreated fetch fails on-device); three `Settle timeout` (`bridge not idle after ~10s, pending 1`) after SUBMIT_REPLY; `ThreadPostBrowse:browsing+CANCEL_REPLY->browsing` never walked (coverage 90.9%). Decide per finding whether the fixture or the walk is wrong; the stuck `pending 1` after the live-push ThreadPostCreated leg is the likely root. Prevention rung: `orb verify`/driver. `[mechanical]`
+
+- **G-VERIFY-075** — iOS `--trait NoteBrowseList` walk of `std-notes.orb` (2026-10-09) is red 8/14, coverage 58.3%: `listens-edge-never-fired` NotesAssistantOrbitalAssistantChatKeeper `ASSISTANT_HISTORY_REQUESTED`->`LOAD_HISTORY`; frame 10 `EDIT` and frame 11 `DELETE` dispatch fail on NoteBrowseList ("No transition defined for event EDIT in current state"); REFETCH_QUERY/REFETCH_FILTER/REFETCH_PAGE/VIEW/CLOSE uncovered. Rendering on device is correct (card list with titles). Likely the walk dispatches row events while the trait is not in a state that handles them. Prevention rung: `orb verify` walk ordering. `[mechanical]`
+
+- **G-VERIFY-076** — iOS `--trait TimerDisplayRender` walk of `ui-timer-display.orb` (2026-10-09) is red 7/9: `portalSweep` frames 0 and 1 slot `main` mounted but empty, and `portalPerStep` TimerDisplayRender INIT expects `timer-display` in `main` but the slot is empty at that step (the countdown does render and advance 01:30 -> 01:28 on device afterwards). First frames are sampled before the first render. Android passes 9/9. Prevention rung: driver settle before the first frame. `[mechanical]`
+
+- **G-VERIFY-073** — A result event that a trait accepts only in a transient state is lost when the trait leaves that state on its own emission first. `studio-builder-workspace` went `generating → WORKSPACE_SHOWN → emit WORKSPACE_SHOWN_BUSY → idle` within the same step, and `idle` had no `BUILT`/`REJECTED` arm, so every generator answer was dropped while validate reported 0/0 (fixed in the atom by folding `generating` into an `idle` guarded on `status`). The walk should flag a listened `external` event whose only accepting state is one the trait cannot be in when the event arrives (left by a self-emitted cascade in the same step). Prevention rung: `orb verify` (a well-formed but inconsequential listen). [architectural] — found 2026-10-09 by `orbital_play` on std-studio.
+
+- **G-VERIFY-071** — Native drivers (`src/driver/native/{ios,android}.ts`) can only TAP. Patterns whose React affordance is a long-press or swipe (calendar-grid `longPressEvent`, swipeable-row swipe actions) are reached only through the `sendEvent` fallback, so their gesture wiring is never exercised on device. Add `longPress {id}` / `swipe {id, direction}` to the iOS VerifyDriver (XCUIElement press(forDuration:) / coordinate drag) and `adb shell input swipe` on Android, and have `triggerDOM` pick the gesture from the pattern's declared event kind. Prevention rung: verifier capability. Found 2026-10-09. [mechanical]
+
+
 
 
 

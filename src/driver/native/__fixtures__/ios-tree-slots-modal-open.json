@@ -1,0 +1,139 @@
+{
+  "elements": [
+    {
+      "id": "slot-main",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": []
+    },
+    {
+      "id": "pattern-entity-table",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-main"
+      ]
+    },
+    {
+      "id": "pattern-table-header",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-main",
+        "pattern-entity-table"
+      ]
+    },
+    {
+      "id": "pattern-stats",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-main"
+      ]
+    },
+    {
+      "id": "slot-modal",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": []
+    },
+    {
+      "id": "pattern-form-section",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-modal"
+      ]
+    },
+    {
+      "id": "pattern-form-nested",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-modal",
+        "pattern-form-section"
+      ]
+    },
+    {
+      "id": "field-title",
+      "type": "textField",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-modal",
+        "pattern-form-section"
+      ]
+    }
+  ]
+}

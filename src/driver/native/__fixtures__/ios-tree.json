@@ -1,0 +1,225 @@
+{
+  "elements": [
+    {
+      "id": "pattern-entity-table",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 100,
+        "w": 390,
+        "h": 600
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": []
+    },
+    {
+      "id": "row-3",
+      "type": "cell",
+      "label": "Milk",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 100,
+        "w": 390,
+        "h": 60
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-entity-table"
+      ]
+    },
+    {
+      "id": "action-EDIT",
+      "type": "button",
+      "label": "Edit",
+      "value": "",
+      "frame": {
+        "x": 300,
+        "y": 110,
+        "w": 60,
+        "h": 40
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-entity-table",
+        "row-3"
+      ]
+    },
+    {
+      "id": "action-Tasks.TaskBrowse.DELETE",
+      "type": "button",
+      "label": "Delete",
+      "value": "",
+      "frame": {
+        "x": 300,
+        "y": 150,
+        "w": 60,
+        "h": 40
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-entity-table",
+        "row-3"
+      ]
+    },
+    {
+      "id": "row-5",
+      "type": "cell",
+      "label": "Eggs",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 160,
+        "w": 390,
+        "h": 60
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-entity-table"
+      ]
+    },
+    {
+      "id": "action-EDIT",
+      "type": "button",
+      "label": "Edit",
+      "value": "",
+      "frame": {
+        "x": 300,
+        "y": 170,
+        "w": 60,
+        "h": 40
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-entity-table",
+        "row-5"
+      ]
+    },
+    {
+      "id": "action-overflow",
+      "type": "button",
+      "label": "More",
+      "value": "",
+      "frame": {
+        "x": 340,
+        "y": 170,
+        "w": 40,
+        "h": 40
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-entity-table",
+        "row-5"
+      ]
+    },
+    {
+      "id": "action-CREATE",
+      "type": "button",
+      "label": "New task",
+      "value": "",
+      "frame": {
+        "x": 10,
+        "y": 650,
+        "w": 120,
+        "h": 40
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-entity-table"
+      ]
+    },
+    {
+      "id": "pattern-form-section",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 300
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": []
+    },
+    {
+      "id": "field-title",
+      "type": "textField",
+      "label": "Title",
+      "value": "",
+      "frame": {
+        "x": 10,
+        "y": 20,
+        "w": 370,
+        "h": 40
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-form-section"
+      ]
+    },
+    {
+      "id": "field-notes",
+      "type": "textView",
+      "label": "Notes",
+      "value": "",
+      "frame": {
+        "x": 10,
+        "y": 70,
+        "w": 370,
+        "h": 80
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-form-section"
+      ]
+    },
+    {
+      "id": "action-SAVE",
+      "type": "button",
+      "label": "Save",
+      "value": "",
+      "frame": {
+        "x": 10,
+        "y": 200,
+        "w": 100,
+        "h": 40
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "pattern-form-section"
+      ]
+    },
+    {
+      "id": "action-HIDDEN",
+      "type": "button",
+      "label": "Hidden",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 0,
+        "h": 0
+      },
+      "enabled": true,
+      "hittable": false,
+      "ancestors": [
+        "pattern-entity-table"
+      ]
+    }
+  ]
+}

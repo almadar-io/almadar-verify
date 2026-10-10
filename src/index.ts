@@ -338,6 +338,21 @@ export type {
 } from './driver/types.js';
 export { tick } from './driver/tick.js';
 export {
+  createIosDriver,
+  createAndroidDriver,
+  createFetchHttpClient,
+  createBridgeClient,
+  type BridgeClient,
+  type CreateIosDriverOptions,
+  type CreateAndroidDriverOptions,
+  type HttpClient,
+  type HttpResponse,
+  type AdbExec,
+  type NativeDriver,
+  type NativeDriverDiagnostics,
+  type SettleTimeout,
+} from './driver/index.js';
+export {
   playCircuitStep,
   type PlayCircuitStepInput,
   type PlayCircuitStepResult,

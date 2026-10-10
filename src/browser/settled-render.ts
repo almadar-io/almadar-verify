@@ -13,10 +13,10 @@
  * @packageDocumentation
  */
 import type { Page } from 'playwright';
+import { ENTITY_ROW_SELECTOR, patternSelector } from './dom-contract.js';
 import { EMPTY_STATE_MARKER, LOADING_STATE_MARKER, type TransitionTrace } from '@almadar/core';
 
-/** Elements that are one rendered entity row. */
-export const ENTITY_ROW_SELECTOR = '[data-entity-row], [data-entity-id], [data-pattern="data-grid"] tbody tr, [data-pattern="data-list"] > *';
+export { ENTITY_ROW_SELECTOR } from './dom-contract.js';
 
 /** One empty, loading or blank view, with the traits that painted it (innermost first). */
 export interface SettledNode {
@@ -72,7 +72,7 @@ export function settledFindingMessage(f: SettledFinding): string {
 }
 
 export async function measureSettledRender(page: Page): Promise<SettledRenderMeasurement> {
-  return page.evaluate(({ emptyMarker, loadingMarker, rowSelector }) => {
+  return page.evaluate(({ emptyMarker, loadingMarker, rowSelector, listSelector }) => {
     const nodes: Array<{ kind: 'empty' | 'loading' | 'blank'; traits: string[]; rows?: number }> = [];
     const collect = (marker: string, kind: 'empty' | 'loading'): void => {
       for (const el of Array.from(document.querySelectorAll(`[${marker}]`))) {
@@ -95,7 +95,7 @@ export async function measureSettledRender(page: Page): Promise<SettledRenderMea
     collect(emptyMarker, 'empty');
     collect(loadingMarker, 'loading');
     // A list whose every rendered row is textless shows rows of nothing.
-    for (const list of Array.from(document.querySelectorAll('[data-pattern="data-grid"], [data-pattern="data-list"]'))) {
+    for (const list of Array.from(document.querySelectorAll(listSelector))) {
       const rows = Array.from(list.querySelectorAll(rowSelector));
       if (rows.length === 0 || rows.some((row) => (row.textContent ?? '').trim() !== '')) continue;
       const traits: string[] = [];
@@ -114,5 +114,5 @@ export async function measureSettledRender(page: Page): Promise<SettledRenderMea
       }
     }
     return { nodes, fetchedRows };
-  }, { emptyMarker: EMPTY_STATE_MARKER, loadingMarker: LOADING_STATE_MARKER, rowSelector: ENTITY_ROW_SELECTOR });
+  }, { emptyMarker: EMPTY_STATE_MARKER, loadingMarker: LOADING_STATE_MARKER, rowSelector: ENTITY_ROW_SELECTOR, listSelector: `${patternSelector('data-grid')}, ${patternSelector('data-list')}` });
 }

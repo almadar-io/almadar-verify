@@ -41,3 +41,8 @@ export {
   createDefaultDomTrigger,
   type DefaultDomTriggerOptions,
 } from './helpers/default-dom-trigger.js';
+export { createIosDriver, type CreateIosDriverOptions } from './impls/ios.js';
+export { createAndroidDriver, type CreateAndroidDriverOptions } from './impls/android.js';
+export { createFetchHttpClient, createBridgeClient, type HttpClient, type HttpResponse, type BridgeClient } from './native/bridge.js';
+export type { AdbExec } from './native/android.js';
+export type { NativeDriver, NativeDriverDiagnostics, RouteTimeout, SettleTimeout } from './native/driver.js';

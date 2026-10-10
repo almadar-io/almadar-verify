@@ -13,6 +13,7 @@
  */
 
 import type { Page } from 'playwright';
+import { VERIFICATION_DOM_ATTRS } from '@almadar/core';
 import { getPatternMinUsableWidths } from '@almadar/core/patterns';
 import type { LayoutOffender, LayoutReport, LayoutScroller, LayoutSquish } from '../util/types.js';
 
@@ -157,7 +158,7 @@ export function classifyLayout(
 }
 
 export async function measureLayout(page: Page): Promise<LayoutMeasurement> {
-  return page.evaluate(() => {
+  return page.evaluate((patternAttr: string) => {
     const els = Array.from(document.body.querySelectorAll('*'));
     const index = new Map<Element, number>(els.map((el, i) => [el, i]));
     const boxes = els.map((el) => {
@@ -175,7 +176,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasurement> {
         scrollOverflowX: el.scrollWidth - el.clientWidth,
         fixed: cs.position === 'fixed',
         hidden: cs.visibility === 'hidden' || cs.display === 'none' || el.closest('[aria-hidden="true"]') !== null,
-        pattern: el.getAttribute('data-pattern'),
+        pattern: el.getAttribute(patternAttr),
         patternPath: el.getAttribute('data-pattern-path'),
         trait: el.getAttribute('data-orb-trait'),
         tag: el.tagName.toLowerCase(),
@@ -188,7 +189,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasurement> {
       documentScrollWidth: document.documentElement.scrollWidth,
       boxes,
     };
-  });
+  }, VERIFICATION_DOM_ATTRS.pattern);
 }
 
 export async function checkLayout(page: Page): Promise<LayoutReport> {

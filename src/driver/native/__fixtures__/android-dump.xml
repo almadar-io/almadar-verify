@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.orbital.app" content-desc="" clickable="false" enabled="true" bounds="[0,0][1080,2400]">
+    <node index="0" text="" resource-id="pattern-entity-table" class="android.view.View" package="com.orbital.app" content-desc="" clickable="false" enabled="true" bounds="[0,200][1080,1800]">
+      <node index="0" text="Milk &amp; Honey" resource-id="row-3" class="android.view.View" package="com.orbital.app" content-desc="" clickable="false" enabled="true" bounds="[0,200][1080,360]">
+        <node index="0" text="Edit" resource-id="action-EDIT" class="android.widget.Button" package="com.orbital.app" content-desc="" clickable="true" enabled="true" bounds="[800,220][1000,340]" />
+        <node index="1" text="Delete" resource-id="action-Tasks.TaskBrowse.DELETE" class="android.widget.Button" package="com.orbital.app" content-desc="" clickable="true" enabled="true" bounds="[600,220][780,340]" />
+      </node>
+      <node index="1" text="Eggs" resource-id="row-5" class="android.view.View" package="com.orbital.app" content-desc="" clickable="false" enabled="true" bounds="[0,360][1080,520]">
+        <node index="0" text="Edit" resource-id="action-EDIT" class="android.widget.Button" package="com.orbital.app" content-desc="" clickable="true" enabled="true" bounds="[800,380][1000,500]" />
+      </node>
+      <node index="2" text="New task" resource-id="action-CREATE" class="android.widget.Button" package="com.orbital.app" content-desc="" clickable="true" enabled="true" bounds="[40,1600][400,1720]" />
+      <node index="3" text="Archive" resource-id="action-ARCHIVE" class="android.widget.Button" package="com.orbital.app" content-desc="" clickable="true" enabled="false" bounds="[40,1500][400,1580]" />
+    </node>
+    <node index="1" text="" resource-id="pattern-form-section" class="android.view.View" package="com.orbital.app" content-desc="" clickable="false" enabled="true" bounds="[0,0][1080,800]">
+      <node index="0" text="" resource-id="field-title" class="android.widget.EditText" package="com.orbital.app" content-desc="Title" clickable="true" enabled="true" bounds="[40,40][1040,160]" />
+      <node index="1" text="Save" resource-id="action-SAVE" class="android.widget.Button" package="com.orbital.app" content-desc="" clickable="true" enabled="true" bounds="[40,600][400,720]" />
+    </node>
+  </node>
+</hierarchy>

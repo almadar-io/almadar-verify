@@ -8,6 +8,8 @@
  */
 
 import type { Page } from 'playwright';
+import { VERIFICATION_DOM_ATTRS } from '@almadar/core';
+import { hasAttr } from '../browser/dom-contract.js';
 
 /** Result of an entity data inspection */
 export interface EntityInspection {
@@ -32,7 +34,7 @@ export async function inspectEntityData(
   page: Page,
   previewSelector = '[class*="livePreviewBox"], [class*="opPreviewBox"]'
 ): Promise<EntityInspection> {
-  return page.evaluate((selector) => {
+  return page.evaluate(({ selector, entityQuery }) => {
     const preview = document.querySelector(selector);
     if (!preview) {
       return { hasContent: false, elementCount: 0, showsEmptyState: false, previewText: '' };
@@ -42,7 +44,7 @@ export async function inspectEntityData(
 
     // Count entity-related elements
     const entityElements = preview.querySelectorAll(
-      '[data-pattern], [data-entity], table tbody tr, [class*="card"], [class*="Card"]'
+      entityQuery
     );
 
     // Check for empty state indicators
@@ -57,5 +59,5 @@ export async function inspectEntityData(
       showsEmptyState,
       previewText: text.substring(0, 500),
     };
-  }, previewSelector);
+  }, { selector: previewSelector, entityQuery: `${hasAttr(VERIFICATION_DOM_ATTRS.pattern)}, [data-entity], table tbody tr, [class*="card"], [class*="Card"]` });
 }

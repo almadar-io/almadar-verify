@@ -1,0 +1,71 @@
+{
+  "elements": [
+    {
+      "id": "slot-main",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": []
+    },
+    {
+      "id": "pattern-entity-table",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-main"
+      ]
+    },
+    {
+      "id": "pattern-table-header",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-main",
+        "pattern-entity-table"
+      ]
+    },
+    {
+      "id": "pattern-stats",
+      "type": "other",
+      "label": "",
+      "value": "",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 100
+      },
+      "enabled": true,
+      "hittable": true,
+      "ancestors": [
+        "slot-main"
+      ]
+    }
+  ]
+}

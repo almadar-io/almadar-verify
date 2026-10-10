@@ -13,6 +13,7 @@
  */
 
 import type { Page } from 'playwright';
+import { VERIFICATION_DOM_ATTRS } from '@almadar/core';
 
 /** Result of an edit form pre-population check */
 export interface EditPrePopulationResult {
@@ -194,7 +195,7 @@ export async function assertViewDataVisible(
   containerSelector: string,
   expectedFieldNames?: string[]
 ): Promise<ViewDataResult> {
-  return page.evaluate(({ selector, fieldNames }) => {
+  return page.evaluate(({ selector, fieldNames, entityIdAttr }) => {
     const container = document.querySelector(selector);
     if (!container) {
       return { hasFieldValues: false, totalFields: 0, fieldsWithValues: 0, emptyFieldNames: [] };
@@ -239,7 +240,7 @@ export async function assertViewDataVisible(
     }
 
     // Strategy 1b: Check for data-entity or data-entity-id attributes indicating bound data
-    const entityBound = container.querySelector('[data-entity], [data-entity-id]');
+    const entityBound = container.querySelector(`[data-entity], [${entityIdAttr}]`);
     if (entityBound) {
       const entityText = (entityBound.textContent ?? '').trim();
       return {
@@ -289,7 +290,7 @@ export async function assertViewDataVisible(
       fieldsWithValues: containerText.length > 10 ? 1 : 0,
       emptyFieldNames: [],
     };
-  }, { selector: containerSelector, fieldNames: expectedFieldNames });
+  }, { selector: containerSelector, fieldNames: expectedFieldNames, entityIdAttr: VERIFICATION_DOM_ATTRS.entityId });
 }
 
 // ── Form Field Type Assertions ──────────────────────────────────────
