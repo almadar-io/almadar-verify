@@ -14,7 +14,8 @@ const dumpXml = readFileSync(join(here, '..', '__fixtures__', 'android-dump.xml'
 const iosJson = readFileSync(join(here, '..', '__fixtures__', 'ios-tree.json'), 'utf8');
 
 function el(over: Partial<NativeElement>): NativeElement {
-  return { id: 'field-title', type: 'textField', label: '', value: '', bounds: { x: 10, y: 20, w: 100, h: 40 }, enabled: true, hittable: true, ancestors: [], ...over };
+  const base = { id: 'field-title', type: 'textField', label: '', value: '', bounds: { x: 10, y: 20, w: 100, h: 40 }, enabled: true, hittable: true, ancestors: [], ...over };
+  return { ...base, identifier: over.identifier ?? base.id };
 }
 
 function fakeHttp(respond: (method: string, url: string, body?: string) => HttpResponse, png = new Uint8Array([137, 80, 78, 71])): { http: HttpClient; calls: Array<{ method: string; url: string; body?: string }> } {
@@ -110,6 +111,29 @@ describe('android device', () => {
   it('fails loudly when the dump has no hierarchy', async () => {
     const adb = new FakeAdb('ERROR: could not get idle state.');
     await expect(createAndroidDevice({ adb, relaunchApp: async () => undefined }).readTree()).rejects.toThrow(/no hierarchy/);
+  });
+
+  it('a long press holds an input swipe at the centre; a swipe flings across the element toward its direction', async () => {
+    const adb = new FakeAdb();
+    const device = createAndroidDevice({ adb, relaunchApp: async () => undefined });
+    const target = el({ id: 'action-long-press:HOLD', bounds: { x: 0, y: 100, w: 200, h: 50 } });
+    expect(await device.longPress(target)).toBe(true);
+    expect(await device.swipe(target, 'left')).toBe(true);
+    expect(await device.swipe(target, 'right')).toBe(true);
+    expect(adb.runs).toEqual([
+      ['shell', 'input', 'swipe', '100', '125', '100', '125', '800'],
+      ['shell', 'input', 'swipe', '180', '125', '20', '125', '200'],
+      ['shell', 'input', 'swipe', '20', '125', '180', '125', '200'],
+    ]);
+  });
+
+  it('control: an element that cannot be hit is not pressed or swiped', async () => {
+    const adb = new FakeAdb();
+    const device = createAndroidDevice({ adb, relaunchApp: async () => undefined });
+    const hidden = el({ hittable: false });
+    expect(await device.longPress(hidden)).toBe(false);
+    expect(await device.swipe(hidden, 'left')).toBe(false);
+    expect(adb.runs).toEqual([]);
   });
 
   it('taps the centre of the bounds', async () => {

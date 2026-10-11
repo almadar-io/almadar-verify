@@ -1,6 +1,6 @@
 /**
  * iOS device over the generated `<App>VerifyDriver` XCUITest target
- * (`orb-build.sh --driver`): `GET /tree`, `POST /tap`, `POST /type`,
+ * (`orb-build.sh --driver`): `GET /tree`, `POST /tap`, `POST /longpress`, `POST /swipe`, `POST /type`,
  * `GET /screenshot`, `POST /relaunch`.
  *
  * @packageDocumentation
@@ -44,11 +44,17 @@ export function createIosDevice(options: IosDeviceOptions): NativeDevice {
       return parseIosTree(res.text);
     },
     async tap(element, within) {
-      return (await post('/tap', { id: element.id, ...(within !== undefined && { within }) })) === 200;
+      return (await post('/tap', { id: element.identifier, ...(within !== undefined && { within }) })) === 200;
+    },
+    async longPress(element, within) {
+      return (await post('/longpress', { id: element.identifier, ...(within !== undefined && { within }) })) === 200;
+    },
+    async swipe(element, direction, within) {
+      return (await post('/swipe', { id: element.identifier, direction, ...(within !== undefined && { within }) })) === 200;
     },
     async typeText(element, text, within) {
       const clear = DELETE_KEY.repeat(element.value.length);
-      return (await post('/type', { id: element.id, text: `${clear}${text}`, ...(within !== undefined && { within }) })) === 200;
+      return (await post('/type', { id: element.identifier, text: `${clear}${text}`, ...(within !== undefined && { within }) })) === 200;
     },
     async screenshot(path) {
       const png = await http.requestBytes(`${base}/screenshot`);

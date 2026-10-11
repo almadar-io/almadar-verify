@@ -132,7 +132,9 @@ export {
   walkRegistryBehaviors,
   registryPrefix,
   registryBases,
+  behaviorRegistries,
   discoverAllBehaviors,
+  type BehaviorRegistry,
   type RegistryTierLevel,
   type DiscoveredBehavior,
 } from './util/registry-discovery.js';

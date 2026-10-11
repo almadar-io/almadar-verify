@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { OrbitalIdSchema, TraitIdSchema, EventIdSchema } from '@almadar/core';
 import type { Orbital, OrbitalSchema, StateMachine, Trait, TraitEventContract, TraitEventListener } from '@almadar/core';
 import { lintPluginWiring, type PluginWiringTarget } from '../plugin-wiring-lint.js';
+import { behaviorSourceTree, discoverBehaviorPackages } from '@almadar/core/behavior-package';
 
 // ── Fixture builders — every field the real types require is supplied, so
 // no `as unknown as X` boundary cast is needed (unlike the retired JS
@@ -365,8 +366,15 @@ describe('lintPluginWiring — relay vs request emit attribution', () => {
 const REPO_ROOT = process.env['ALMADAR_ROOT'] ?? resolve(import.meta.dirname, '../../../../..');
 const ORB_BIN = process.env['ORB_BIN'] ?? resolve(homedir(), 'bin', 'orbital');
 
-function resolveOrb(relPath: string): OrbitalSchema {
-  const abs = resolve(REPO_ROOT, relPath);
+/** A behavior's file in an installed package, through its manifest (`.lolo` source when live, `.orb` when published). */
+function behaviorFile(pkgName: string, rel: string): string {
+  const pkg = discoverBehaviorPackages(REPO_ROOT).find((p) => p.name === pkgName);
+  if (!pkg) throw new Error(`${pkgName} is not installed under ${REPO_ROOT}`);
+  const tree = behaviorSourceTree(pkg);
+  return resolve(tree.dir, `${rel}${tree.extension}`);
+}
+
+function resolveOrb(abs: string): OrbitalSchema {
   const json = execFileSync(ORB_BIN, ['resolve', abs], {
     encoding: 'utf-8',
     env: { ...process.env },
@@ -376,10 +384,10 @@ function resolveOrb(relPath: string): OrbitalSchema {
   return JSON.parse(json) as OrbitalSchema;
 }
 
-const VIM_MODE_PATH = 'packages/almadar-behaviors/behaviors/registry/plugins/atoms/vim-mode.orb';
-const STUDIO_SHELL_PATH = 'packages/almadar-behaviors/behaviors/registry/studio/atoms/studio-shell.orb';
-const STD_MODAL_EDITOR_PATH = 'packages/almadar-std/behaviors/registry/ui/core/atoms/std-modal-editor.orb';
-const UI_CODE_BLOCK_PATH = 'packages/almadar-std/behaviors/registry/ui/core/molecules/ui-code-block.orb';
+const VIM_MODE_PATH = (): string => behaviorFile('@almadar-io/behaviors', 'plugins/atoms/vim-mode');
+const STUDIO_SHELL_PATH = (): string => behaviorFile('@almadar-io/behaviors', 'studio/atoms/studio-shell');
+const STD_MODAL_EDITOR_PATH = (): string => behaviorFile('@almadar/std', 'ui/core/atoms/std-modal-editor');
+const UI_CODE_BLOCK_PATH = (): string => behaviorFile('@almadar/std', 'ui/core/molecules/ui-code-block');
 
 // Skips the whole block when the `orbital` binary isn't on this machine
 // (CLAUDE.md: MCP/verify tooling runs `~/bin/orbital` — a standing
@@ -394,9 +402,9 @@ try {
 
 describe.skipIf(!orbAvailable)('lintPluginWiring — real files: vim-mode against studio-shell + std-modal-editor', () => {
   it('flags only MOTION/OPERATE/INSERT_TEXT (Modes is a REQUEST trait, no target consumes those 3 yet); Shell\'s 7 unconsumed emits are RELAYS and are not flagged', () => {
-    const vimMode = resolveOrb(VIM_MODE_PATH);
-    const studioShell = resolveOrb(STUDIO_SHELL_PATH);
-    const stdModalEditor = resolveOrb(STD_MODAL_EDITOR_PATH);
+    const vimMode = resolveOrb(VIM_MODE_PATH());
+    const studioShell = resolveOrb(STUDIO_SHELL_PATH());
+    const stdModalEditor = resolveOrb(STD_MODAL_EDITOR_PATH());
 
     const result = lintPluginWiring(vimMode, [
       { name: 'studio-shell', schema: studioShell },
@@ -439,10 +447,10 @@ describe.skipIf(!orbAvailable)('lintPluginWiring — real files: vim-mode agains
   });
 
   it('drops the MOTION/OPERATE/INSERT_TEXT findings once ui-code-block is added as a target', () => {
-    const vimMode = resolveOrb(VIM_MODE_PATH);
-    const studioShell = resolveOrb(STUDIO_SHELL_PATH);
-    const stdModalEditor = resolveOrb(STD_MODAL_EDITOR_PATH);
-    const uiCodeBlock = resolveOrb(UI_CODE_BLOCK_PATH);
+    const vimMode = resolveOrb(VIM_MODE_PATH());
+    const studioShell = resolveOrb(STUDIO_SHELL_PATH());
+    const stdModalEditor = resolveOrb(STD_MODAL_EDITOR_PATH());
+    const uiCodeBlock = resolveOrb(UI_CODE_BLOCK_PATH());
 
     const result = lintPluginWiring(vimMode, [
       { name: 'studio-shell', schema: studioShell },

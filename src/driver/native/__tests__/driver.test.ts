@@ -530,3 +530,33 @@ describe('snapshot', () => {
     expect(driver.diagnostics.treeFailures).toEqual(['xcuitest snapshot failed']);
   });
 });
+
+describe('gesture affordances', () => {
+  const tree = (identifier: string): NativeElement[] =>
+    parseIosTree(JSON.stringify({
+      elements: [{ id: identifier, type: 'other', label: '', value: '', frame: { x: 0, y: 0, w: 100, h: 40 }, enabled: true, ancestors: [] }],
+    }));
+
+  it('an action reachable only by its declared gesture is performed by that gesture, not tapped', async () => {
+    for (const [gesture, id] of [
+      ['long-press', 'action-long-press:HOLD'],
+      ['swipe-left', 'action-swipe-left:HOLD'],
+      ['swipe-right', 'action-swipe-right:HOLD'],
+    ] as const) {
+      const { driver, ctx, device } = build([tree(id)]);
+      expect(await driver.triggerDOM(ctx, step({ event: 'HOLD', triggerKind: 'bus' }))).toBe(true);
+      expect(device.gestures).toEqual([{ id, gesture }]);
+      expect(device.taps).toEqual([]);
+    }
+  });
+
+  it('control: an element carrying a tap and a gesture is tapped for its tap event and pressed for its gesture event', async () => {
+    const both = 'action-SLOT action-long-press:HOLD';
+    const tapped = build([tree(both)]);
+    await tapped.driver.triggerDOM(tapped.ctx, step({ event: 'SLOT', triggerKind: 'bus' }));
+    expect(tapped.device.taps.map((t) => t.id)).toEqual(['action-SLOT']);
+    const pressed = build([tree(both)]);
+    await pressed.driver.triggerDOM(pressed.ctx, step({ event: 'HOLD', triggerKind: 'bus' }));
+    expect(pressed.device.gestures).toEqual([{ id: 'action-long-press:HOLD', gesture: 'long-press' }]);
+  });
+});

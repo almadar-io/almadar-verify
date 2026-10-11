@@ -1,7 +1,8 @@
 /**
  * Android device over `adb`: `uiautomator dump` for the tree (Compose testTags
  * surface as `resource-id` with `testTagsAsResourceId` on), `input tap` at the
- * centre of an element's bounds, `input text` for fields.
+ * centre of an element's bounds (a held `input swipe` for a long press, a fling across it for a
+ * swipe), `input text` for fields.
  *
  * @packageDocumentation
  */
@@ -36,6 +37,9 @@ export function centreOf(element: NativeElement): { x: number; y: number } {
   return { x: element.bounds.x + Math.floor(element.bounds.w / 2), y: element.bounds.y + Math.floor(element.bounds.h / 2) };
 }
 
+/** A press held past the platform's long-press timeout (500 ms), and a fling-speed swipe. */
+const LONG_PRESS_MS = '800';
+const SWIPE_MS = '200';
 const KEYCODE_MOVE_END = '123';
 const KEYCODE_DEL = '67';
 
@@ -63,6 +67,21 @@ export function createAndroidDevice(options: AndroidDeviceOptions): NativeDevice
       return parseAndroidDump(out.slice(0, end + '</hierarchy>'.length));
     },
     tap: (element) => tapElement(element),
+    async longPress(element) {
+      if (!element.hittable) return false;
+      const { x, y } = centreOf(element);
+      await adb.run(['shell', 'input', 'swipe', String(x), String(y), String(x), String(y), LONG_PRESS_MS]);
+      return true;
+    },
+    async swipe(element, direction) {
+      if (!element.hittable) return false;
+      const { y } = centreOf(element);
+      const reach = Math.floor(element.bounds.w * 0.4);
+      const mid = element.bounds.x + Math.floor(element.bounds.w / 2);
+      const [from, to] = direction === 'left' ? [mid + reach, mid - reach] : [mid - reach, mid + reach];
+      await adb.run(['shell', 'input', 'swipe', String(from), String(y), String(to), String(y), SWIPE_MS]);
+      return true;
+    },
     async typeText(element, text) {
       if (!(await tapElement(element))) return false;
       if (element.value !== '') {

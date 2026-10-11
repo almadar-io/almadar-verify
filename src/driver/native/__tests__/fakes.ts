@@ -54,6 +54,15 @@ export class FakeDevice implements NativeDevice {
     this.taps.push({ id: element.id, ...(within !== undefined && { within }) });
     return true;
   }
+  gestures: Array<{ id: string; gesture: 'long-press' | 'swipe-left' | 'swipe-right' }> = [];
+  async longPress(element: NativeElement): Promise<boolean> {
+    this.gestures.push({ id: element.id, gesture: 'long-press' });
+    return true;
+  }
+  async swipe(element: NativeElement, direction: 'left' | 'right'): Promise<boolean> {
+    this.gestures.push({ id: element.id, gesture: direction === 'left' ? 'swipe-left' : 'swipe-right' });
+    return true;
+  }
   async typeText(element: NativeElement, text: string): Promise<boolean> {
     this.typed.push({ id: element.id, text });
     return true;

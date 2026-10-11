@@ -12,6 +12,10 @@ export interface NativeDevice {
   readTree(): Promise<NativeElement[]>;
   /** `within` is a container id (`row-<id>`) the id is searched under. False when no such element is on screen or it cannot be tapped. */
   tap(element: NativeElement, within?: string): Promise<boolean>;
+  /** Press and hold the element. False when no such element is on screen or it cannot be pressed. */
+  longPress(element: NativeElement, within?: string): Promise<boolean>;
+  /** Swipe across the element toward `direction`. False when no such element is on screen. */
+  swipe(element: NativeElement, direction: 'left' | 'right', within?: string): Promise<boolean>;
   /** Replaces the field's content with `text`. False when the field cannot be focused. */
   typeText(element: NativeElement, text: string, within?: string): Promise<boolean>;
   screenshot(path: string): Promise<void>;

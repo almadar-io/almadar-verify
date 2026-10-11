@@ -275,8 +275,18 @@ export function createNativeDriver(options: NativeDriverOptions): NativeDriver {
     return out.accepted;
   }
 
+  /** Perform the affordance's gesture: a tap, or the long press / swipe its pattern declares. */
   async function tapResolved(hit: ResolvedAffordance): Promise<boolean> {
-    return device.tap(hit.element, hit.within);
+    switch (hit.gesture ?? 'tap') {
+      case 'long-press':
+        return device.longPress(hit.element, hit.within);
+      case 'swipe-left':
+        return device.swipe(hit.element, 'left', hit.within);
+      case 'swipe-right':
+        return device.swipe(hit.element, 'right', hit.within);
+      default:
+        return device.tap(hit.element, hit.within);
+    }
   }
 
   async function findAndTap(event: string, scope: AffordanceScope): Promise<{ tapped: boolean; tree: NativeElement[]; hit: ResolvedAffordance | null }> {
@@ -469,9 +479,16 @@ export function createNativeDriver(options: NativeDriverOptions): NativeDriver {
               error: leg.failure.error,
             };
 
+      const dom = treeToDomSnapshot(tree, bridgeSnap.route ?? '', rowsByEntity);
+      log.debug('native:snapshot', {
+        step: step?.coverageKey ?? 'boot',
+        route: bridgeSnap.route,
+        portals: dom.portals.filter((p) => p.mounted).map((p) => `${p.slot}:${p.childCount}:${p.pattern ?? ''}`),
+        ids: tree.length,
+      });
       return {
         runtimeSnapshot,
-        dom: treeToDomSnapshot(tree, bridgeSnap.route ?? '', rowsByEntity),
+        dom,
         consoleAdded: [],
         eventLogAdded: page.entries,
         effectResults: lastEffectResultsFor(runtimeSnapshot, ctx.trait.traitName, step?.event),

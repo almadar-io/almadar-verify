@@ -41,6 +41,53 @@ describe('parseIosTree', () => {
   });
 });
 
+describe('multi-action identifiers', () => {
+  it('a slot stamped on the one pattern it holds (one iOS element, both ids) mounts the slot with that pattern', () => {
+    const el = (id: string, ancestors: string[]) => ({ id, type: 'other', label: '', value: '', frame: { x: 0, y: 0, w: 76, h: 91 }, enabled: true, ancestors });
+    const tree = parseIosTree(JSON.stringify({
+      elements: [el('slot-main pattern-timer-display', []), el('action-PAUSE', ['slot-main pattern-timer-display'])],
+    }));
+    const main = treeToPortals(tree).find((p) => p.slot === 'main');
+    expect(main).toEqual({ slot: 'main', mounted: true, childCount: 1, pattern: 'timer-display' });
+    expect(tree.find((e) => e.id === 'action-PAUSE')?.ancestors).toEqual(['slot-main', 'pattern-timer-display']);
+    const bare = treeToPortals(parseIosTree(JSON.stringify({ elements: [el('slot-main', [])] }))).find((p) => p.slot === 'main');
+    expect(bare, 'control: the slot alone is mounted but empty').toEqual({ slot: 'main', mounted: true, childCount: 0 });
+  });
+
+  it('an iOS element carrying several ids is listed once per id, each keeping the whole identifier', () => {
+    const tree = parseIosTree(JSON.stringify({
+      elements: [{
+        id: 'action-SLOT action-long-press:HOLD', type: 'other', label: '', value: '',
+        frame: { x: 0, y: 0, w: 10, h: 10 }, enabled: true, ancestors: ['row-1 action-swipe-left:NEXT'],
+      }],
+    }));
+    expect(tree.map((e) => e.id)).toEqual(['action-SLOT', 'action-long-press:HOLD']);
+    expect(tree.every((e) => e.identifier === 'action-SLOT action-long-press:HOLD')).toBe(true);
+    expect(tree[0]!.ancestors).toEqual(['row-1', 'action-swipe-left:NEXT']);
+    expect(tree[1]!.ancestors, 'ids nest in the order written').toEqual(['row-1', 'action-swipe-left:NEXT', 'action-SLOT']);
+  });
+
+  it('a row container carrying its own gesture action scopes that action to the row', () => {
+    const tree = parseIosTree(JSON.stringify({
+      elements: [{ id: 'row-5 action-swipe-left:ARCHIVE', type: 'cell', label: '', value: '', frame: { x: 0, y: 0, w: 300, h: 40 }, enabled: true, ancestors: [] }],
+    }));
+    const hit = resolveAction(tree, 'ARCHIVE', { rowId: 'row-5' });
+    expect(hit?.element.id).toBe('action-swipe-left:ARCHIVE');
+    expect(hit?.gesture).toBe('swipe-left');
+    expect(resolveAction(tree, 'ARCHIVE', { rowId: 'row-6' })).toBeNull();
+  });
+
+  it('an Android node does the same; control: a single id stays one element', () => {
+    const xml = '<hierarchy><node resource-id="action-SLOT action-long-press:HOLD" bounds="[0,0][10,10]"/><node resource-id="action-OPEN" bounds="[0,0][5,5]"/></hierarchy>';
+    const tree = parseAndroidDump(xml);
+    expect(tree.map((e) => [e.id, e.identifier])).toEqual([
+      ['action-SLOT', 'action-SLOT action-long-press:HOLD'],
+      ['action-long-press:HOLD', 'action-SLOT action-long-press:HOLD'],
+      ['action-OPEN', 'action-OPEN'],
+    ]);
+  });
+});
+
 describe('parseAndroidDump', () => {
   it('keeps only resource-id nodes and records identified ancestors', () => {
     const tree = android();
@@ -227,7 +274,7 @@ describe('treeVisibleText / treeToDomSnapshot', () => {
 
   it('is bounded to 256 characters by the DomSnapshot contract', () => {
     const long: NativeElement[] = Array.from({ length: 200 }, (_, i) => ({
-      id: `x${i}`, type: 't', label: 'word', value: '', bounds: { x: 0, y: 0, w: 1, h: 1 }, enabled: true, hittable: true, ancestors: [],
+      id: `x${i}`, identifier: `x${i}`, type: 't', label: 'word', value: '', bounds: { x: 0, y: 0, w: 1, h: 1 }, enabled: true, hittable: true, ancestors: [],
     }));
     expect(treeVisibleText(long)).toHaveLength(256);
     expect(treeVisibleText(long.slice(0, 2))).toBe('word word');

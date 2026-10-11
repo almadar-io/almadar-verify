@@ -17,7 +17,16 @@
  */
 
 import { z } from 'zod';
-import { actionTestIdMatches, ACTION_OVERFLOW_TESTID, NATIVE_ID_PREFIX, nativeFieldId, nativeSlotId } from '@almadar/core';
+import {
+  actionTestIdMatches,
+  ACTION_OVERFLOW_TESTID,
+  gestureOfActionTestId,
+  NATIVE_ID_PREFIX,
+  nativeFieldId,
+  nativeSlotId,
+  splitNativeIds,
+  type ActionGesture,
+} from '@almadar/core';
 import type { DomSnapshot } from '../../frame/types.js';
 import { PORTAL_SLOTS, type PortalSlot } from '../../browser/portal-slots.js';
 
@@ -29,7 +38,10 @@ export interface NativeBounds {
 }
 
 export interface NativeElement {
+  /** One id: an element whose identifier carries several (`nativeIds`) is listed once per id. */
   id: string;
+  /** The element's whole identifier, as the device names it (what a driver call addresses). */
+  identifier: string;
   type: string;
   label: string;
   value: string;
@@ -58,16 +70,28 @@ const iosTreeSchema = z.object({
 /** Parse the iOS verify driver's `GET /tree` body. `hittable` is absent when the driver was asked for `?hittable=0`; absent means visible. */
 export function parseIosTree(json: string): NativeElement[] {
   const parsed = iosTreeSchema.parse(JSON.parse(json));
-  return parsed.elements.map((el) => ({
-    id: el.id,
-    type: el.type,
-    label: el.label,
-    value: el.value,
-    bounds: el.frame,
-    enabled: el.enabled,
-    hittable: el.hittable !== false,
-    ancestors: el.ancestors,
-  }));
+  return parsed.elements.flatMap((el) =>
+    perId({
+      identifier: el.id,
+      type: el.type,
+      label: el.label,
+      value: el.value,
+      bounds: el.frame,
+      enabled: el.enabled,
+      hittable: el.hittable !== false,
+      ancestors: el.ancestors.flatMap(splitNativeIds),
+    }),
+  );
+}
+
+/**
+ * One element per id its identifier carries, each keeping the whole identifier. The ids nest in
+ * the order written: a row container's own gesture actions (`row-5 action-swipe-left:ARCHIVE`)
+ * sit inside that row.
+ */
+function perId(el: Omit<NativeElement, 'id'>): NativeElement[] {
+  const ids = splitNativeIds(el.identifier);
+  return ids.map((id, i) => ({ ...el, id, ancestors: [...el.ancestors, ...ids.slice(0, i)] }));
 }
 
 const XML_ENTITIES: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
@@ -116,16 +140,18 @@ export function parseAndroidDump(xml: string): NativeElement[] {
     if (id !== '') {
       const bounds = parseBounds(attrs.get('bounds'));
       const enabled = attrs.get('enabled') !== 'false';
-      elements.push({
-        id,
-        type: attrs.get('class') ?? '',
-        label: attrs.get('content-desc') || attrs.get('text') || '',
-        value: attrs.get('text') ?? '',
-        bounds,
-        enabled,
-        hittable: enabled && bounds.w > 0 && bounds.h > 0,
-        ancestors: open.filter((entry): entry is string => entry !== null),
-      });
+      elements.push(
+        ...perId({
+          identifier: id,
+          type: attrs.get('class') ?? '',
+          label: attrs.get('content-desc') || attrs.get('text') || '',
+          value: attrs.get('text') ?? '',
+          bounds,
+          enabled,
+          hittable: enabled && bounds.w > 0 && bounds.h > 0,
+          ancestors: open.filter((entry): entry is string => entry !== null).flatMap(splitNativeIds),
+        }),
+      );
     }
     if (m[3] !== '/') open.push(id === '' ? null : id);
   }
@@ -149,6 +175,8 @@ export interface ResolvedAffordance {
   element: NativeElement;
   /** Row container id to pass as `within` when the element was found by row scope. */
   within?: string;
+  /** How the element dispatches the action; absent is a tap (the overflow control). */
+  gesture?: ActionGesture;
 }
 
 function usable(el: NativeElement): boolean {
@@ -176,15 +204,22 @@ export function resolveAction(
   scope: AffordanceScope = {},
 ): ResolvedAffordance | null {
   const rowId = scope.rowId ?? (scope.firstRow === true ? firstRowId(tree) : null);
-  if (scope.rowId !== undefined || scope.firstRow === true) {
-    if (rowId === null) return null;
-    const element = tree.find((el) => actionTestIdMatches(el.id, event) && insideRow(el, rowId) && usable(el));
-    return element === undefined ? null : { element, within: rowId };
+  const scoped = scope.rowId !== undefined || scope.firstRow === true;
+  if (scoped && rowId === null) return null;
+  const inScope = (el: NativeElement) =>
+    usable(el) &&
+    (scoped
+      ? rowId !== null && insideRow(el, rowId)
+      : scope.outsideRows !== true || !el.ancestors.some((a) => a.startsWith(NATIVE_ID_PREFIX.row)));
+  // A tap affordance wins; an action reachable only by its declared gesture is performed by it.
+  for (const wanted of ['tap', 'gesture'] as const) {
+    for (const element of tree) {
+      const gesture = gestureOfActionTestId(element.id, event);
+      if (gesture === null || (wanted === 'tap') !== (gesture === 'tap') || !inScope(element)) continue;
+      return { element, gesture, ...(scoped && rowId !== null && { within: rowId }) };
+    }
   }
-  const element = tree.find(
-    (el) => actionTestIdMatches(el.id, event) && usable(el) && (scope.outsideRows !== true || !el.ancestors.some((a) => a.startsWith(NATIVE_ID_PREFIX.row))),
-  );
-  return element === undefined ? null : { element };
+  return null;
 }
 
 /** The row's overflow ("...") control, inside `scope`. */

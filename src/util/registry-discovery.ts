@@ -19,8 +19,10 @@
  * fallback keep computing it themselves and pass the result in.
  */
 
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+
+import { behaviorRegistryDir, discoverBehaviorPackages, type BehaviorPackage } from '@almadar/core/behavior-package';
 
 export type RegistryTierLevel = 'atom' | 'molecule' | 'organism' | 'template';
 
@@ -52,6 +54,8 @@ export interface DiscoveredBehavior {
   /** The import prefix its package declares (`orb.prefix`): `uses X from "<prefix>/<name>"`.
    *  Absent when no package declares this registry. */
   prefix?: string;
+  /** The behavior's `.lolo` under the package's declared `orb.source`, when that file exists. */
+  sourcePath?: string;
 }
 
 /**
@@ -82,8 +86,15 @@ export function registryPrefix(registryBase: string): string | null {
  * tier dir), so `core/atoms/x.orb` → topic `core`, `ui/game/2d/atoms/x.orb` →
  * topic `ui/game/2d`. New topics or deeper nesting are picked up automatically.
  */
-export function* walkRegistryBehaviors(registryBase: string): Generator<DiscoveredBehavior> {
-  const prefix = registryPrefix(registryBase);
+export function* walkRegistryBehaviors(registry: string | BehaviorRegistry): Generator<DiscoveredBehavior> {
+  const registryBase = typeof registry === 'string' ? registry : registry.dir;
+  const prefix = typeof registry === 'string' ? registryPrefix(registry) : registry.pkg.orb.prefix;
+  const sourceRoot = typeof registry === 'string' || registry.pkg.orb.source === undefined ? null : resolve(registry.pkg.root, registry.pkg.orb.source);
+  const sourcePathOf = (orbPath: string): string | null => {
+    if (sourceRoot === null) return null;
+    const lolo = resolve(sourceRoot, relative(registryBase, orbPath)).replace(/\.orb$/, '.lolo');
+    return existsSync(lolo) ? lolo : null;
+  };
   // `rel` is the current dir's path relative to the registry root, `/`-joined.
   function* descend(dir: string, rel: string): Generator<DiscoveredBehavior> {
     const dirName = rel === '' ? '' : (rel.split('/').pop() ?? '');
@@ -108,13 +119,16 @@ export function* walkRegistryBehaviors(registryBase: string): Generator<Discover
       if (entry.isDirectory()) {
         yield* behaviorsIn(resolve(dir, entry.name), topic, tier, level);
       } else if (entry.isFile() && entry.name.endsWith('.orb')) {
+        const orbPath = resolve(dir, entry.name);
+        const sourcePath = sourcePathOf(orbPath);
         yield {
           name: entry.name.replace(/\.orb$/, ''),
-          orbPath: resolve(dir, entry.name),
+          orbPath,
           topic,
           tier,
           level,
           ...(prefix !== null ? { prefix } : {}),
+          ...(sourcePath !== null ? { sourcePath } : {}),
         };
       }
     }
@@ -122,33 +136,49 @@ export function* walkRegistryBehaviors(registryBase: string): Generator<Discover
   yield* descend(registryBase, '');
 }
 
+/** An installed behavior package and its tree of lowered `.orb` programs. */
+export interface BehaviorRegistry {
+  pkg: BehaviorPackage;
+  dir: string;
+}
+
 /**
- * Resolve the std + behaviors registry roots that actually exist on disk.
- * Requires the monorepo root explicitly (`root` argument or `ALMADAR_ROOT`
+ * Every behavior package installed under the monorepo root (std, io, vendor,
+ * community — discovered by the same rule `orb` uses), each with its lowered
+ * `.orb` tree. Requires the root explicitly (`root` argument or `ALMADAR_ROOT`
  * env) — no directory-depth guessing, see the module doc comment.
  */
-export function registryBases(root?: string): string[] {
+export function behaviorRegistries(root?: string): BehaviorRegistry[] {
   const repoRoot = root ?? process.env['ALMADAR_ROOT'];
   if (!repoRoot) {
     throw new Error(
-      'registryBases() requires the monorepo root — pass it explicitly or set ALMADAR_ROOT. ' +
+      'behaviorRegistries() requires the monorepo root — pass it explicitly or set ALMADAR_ROOT. ' +
         'This shared implementation does not guess a path from the calling file’s location.',
     );
   }
-  return [
-    resolve(repoRoot, 'packages/almadar-std/behaviors/registry'),
-    resolve(repoRoot, 'packages/almadar-behaviors/behaviors/registry'),
-  ].filter((b) => existsSync(b));
+  return discoverBehaviorPackages(repoRoot).map((pkg) => ({ pkg, dir: behaviorRegistryDir(pkg) }));
 }
 
-/** Discovered behaviors across both registries (std first → wins collisions). */
+/** The registry roots of {@link behaviorRegistries}. */
+export function registryBases(root?: string): string[] {
+  return behaviorRegistries(root).map((r) => r.dir);
+}
+
+/**
+ * Every behavior across every installed package. Behaviors are keyed by bare
+ * name downstream, so a name two packages both ship fails, naming them,
+ * instead of one silently winning.
+ */
 export function discoverAllBehaviors(root?: string): DiscoveredBehavior[] {
   const out: DiscoveredBehavior[] = [];
-  const seen = new Set<string>();
-  for (const registryBase of registryBases(root)) {
-    for (const b of walkRegistryBehaviors(registryBase)) {
-      if (seen.has(b.name)) continue;
-      seen.add(b.name);
+  const owner = new Map<string, string>();
+  for (const registry of behaviorRegistries(root)) {
+    for (const b of walkRegistryBehaviors(registry)) {
+      const other = owner.get(b.name);
+      if (other !== undefined) {
+        throw new Error(`behavior ${b.name} is shipped by both ${other} and ${registry.pkg.name} — address it by prefix`);
+      }
+      owner.set(b.name, registry.pkg.name);
       out.push(b);
     }
   }
