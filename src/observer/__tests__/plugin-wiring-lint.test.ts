@@ -356,7 +356,7 @@ describe('lintPluginWiring — relay vs request emit attribution', () => {
   });
 });
 
-// ── Real files — vim-mode.orb (io plugins/atoms) against studio-shell.orb
+// ── Real files — vim-mode.orb (io editor-plugins/atoms) against studio-shell.orb
 // (host protocol) and std-modal-editor.orb (composed capability), then again
 // with ui-code-block.orb (editor capability) added. Both plugin and target
 // inputs are RESOLVED (`orbital resolve`) — the registry `.orb` files on
@@ -384,7 +384,7 @@ function resolveOrb(abs: string): OrbitalSchema {
   return JSON.parse(json) as OrbitalSchema;
 }
 
-const VIM_MODE_PATH = (): string => behaviorFile('@almadar-io/behaviors', 'plugins/atoms/vim-mode');
+const VIM_MODE_PATH = (): string => behaviorFile('@almadar-io/behaviors', 'editor-plugins/atoms/vim-mode');
 const STUDIO_SHELL_PATH = (): string => behaviorFile('@almadar-io/behaviors', 'studio/atoms/studio-shell');
 const STD_MODAL_EDITOR_PATH = (): string => behaviorFile('@almadar/std', 'ui/core/atoms/std-modal-editor');
 const UI_CODE_BLOCK_PATH = (): string => behaviorFile('@almadar/std', 'ui/core/molecules/ui-code-block');

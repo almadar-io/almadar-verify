@@ -18,15 +18,16 @@
  * runtime never registered.
  */
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { tmpdir, homedir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { OrbitalSchema, SExpr, TraitEventListener } from '@almadar/core';
 import { asEventId } from '@almadar/core';
 import { OrbitalServerRuntime } from '@almadar/runtime/OrbitalServerRuntime';
 import { InMemoryPersistence } from '@almadar/db/mock';
 import { probeListenCascades } from '../probe-listen-cascades.js';
+import { behaviorSourceTree, discoverBehaviorPackages } from '@almadar/core/behavior-package';
 
 /** Owner-scoped by-id-fetch fixture shared by the two `persistence` seeding
  *  tests below (item B): `Source` fetches `Widget` BY ID on `INIT`, guarded
@@ -920,33 +921,32 @@ describe('probeListenCascades — persistence seeding (item B)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Real plugin: resolves the checked-in vim-mode registry .orb the way the
-// studio does (`orbital resolve`), then runs the probe against it via a real
-// `OrbitalServerRuntime`. Skips (not fails) when the dev `orbital` binary
-// isn't on this machine.
+// Real plugin: resolves the vim-mode behavior through its package manifest
+// the way the studio does (`orbital resolve`), then runs the probe against it
+// via a real `OrbitalServerRuntime`. Skips (not fails) when the dev `orbital`
+// binary isn't on this machine.
 // ---------------------------------------------------------------------------
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..');
-const ORB_PATH = join(
-  REPO_ROOT,
-  'packages/almadar-behaviors/behaviors/registry/plugins/atoms/vim-mode.orb',
-);
 const ORB_BIN = join(homedir(), 'bin', 'orbital');
-const canRunRealPlugin = existsSync(ORB_BIN) && existsSync(ORB_PATH);
 
-function resolveViaCli(schema: object): OrbitalSchema {
-  const tmpFile = join(tmpdir(), `vim-mode-cascade-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.orb`);
-  writeFileSync(tmpFile, JSON.stringify(schema, null, 2));
-  try {
-    const out = execFileSync(ORB_BIN, ['resolve', tmpFile], {
-      encoding: 'utf-8',
-      env: { ...process.env },
-      cwd: REPO_ROOT,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    return JSON.parse(out) as OrbitalSchema;
-  } finally {
-    unlinkSync(tmpFile);
-  }
+function vimModePath(): string | undefined {
+  const pkg = discoverBehaviorPackages(REPO_ROOT).find((p) => p.name === '@almadar-io/behaviors');
+  if (!pkg) return undefined;
+  const tree = behaviorSourceTree(pkg);
+  return join(tree.dir, `editor-plugins/atoms/vim-mode${tree.extension}`);
+}
+
+const VIM_MODE_PATH = vimModePath();
+const canRunRealPlugin = existsSync(ORB_BIN) && VIM_MODE_PATH !== undefined && existsSync(VIM_MODE_PATH);
+
+function resolveViaCli(file: string): OrbitalSchema {
+  const out = execFileSync(ORB_BIN, ['resolve', file], {
+    encoding: 'utf-8',
+    env: { ...process.env },
+    cwd: REPO_ROOT,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return JSON.parse(out) as OrbitalSchema;
 }
 
 /** Find `VimStudioBridge`'s `listens { Shell.PLUGIN_ENABLED -> ENABLED }`
@@ -969,8 +969,8 @@ function findPluginEnabledListen(schema: OrbitalSchema): TraitEventListener | un
 
 describe.skipIf(!canRunRealPlugin)('probeListenCascades — vim-mode plugin (real schema)', () => {
   it('reports 0 findings against @almadar/runtime HEAD (the resolveSourceEmitEventId fix)', async () => {
-    const raw = JSON.parse(readFileSync(ORB_PATH, 'utf-8'));
-    const resolved = resolveViaCli(raw);
+    if (!VIM_MODE_PATH) throw new Error('vim-mode is not installed');
+    const resolved = resolveViaCli(VIM_MODE_PATH);
 
     // Sanity: the listen this bug was about really has no eventId of its
     // own (the partial-ledger shape `orb resolve` produces today) — if this
@@ -987,8 +987,8 @@ describe.skipIf(!canRunRealPlugin)('probeListenCascades — vim-mode plugin (rea
   });
 
   it('a stale explicit eventId on that same listen still receives the emit (PF-16)', async () => {
-    const raw = JSON.parse(readFileSync(ORB_PATH, 'utf-8'));
-    const resolved = resolveViaCli(raw);
+    if (!VIM_MODE_PATH) throw new Error('vim-mode is not installed');
+    const resolved = resolveViaCli(VIM_MODE_PATH);
 
     const listen = findPluginEnabledListen(resolved);
     expect(listen).toBeDefined();
