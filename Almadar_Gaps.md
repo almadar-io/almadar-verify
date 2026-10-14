@@ -8,7 +8,9 @@ Every open gap this repo owns lives here. This file is the source of truth; the 
 - **Close by deleting.** Remove the entry in the same commit as the fix. There is no "closed" section; git history is the record.
 - **Cross-repo gaps don't go here.** If fixing it needs another repo, describe it in your report or PR body; the monorepo coordinator files it.
 
-Next code: `G-VERIFY-079`
+- **G-VERIFY-079** — Standalone `runtime-verify` of an atom whose page route carries a param naming a host entity (`studio-preview`, `studio-{architect,builder,designer}-workspace`: `expects entity StudioApp`, `page "/preview/:appId"`) cannot put a row id in the route: `findRouteParamEntities` finds `appId → StudioApp`, but an `expects` entity has no rows standalone (and takes no `instances`), so the walk opens `/preview/:appId` and the walker's own INIT carries no `appId`, which the declared `appId : string!` contract rejects ("Payload validation failed … appId (missing, expected string)"). The atoms are right (the contract is the route's); the harness has no declared way to say "this atom needs a host". Give the walk a declared standalone input (a seeded route param, or a manifest note that the atom needs its host) rather than fabricating an id. `@almadar-io/verify` planner + `tools/runtime-verify` [architectural] — evidence: `node tools/runtime-verify/dist/index.js packages/almadar-behaviors/behaviors/lolo/studio/atoms/studio-preview.lolo --trait PreviewRun --headless`; prevention rung: `runtime-verify` (tooling).
+
+Next code: `G-VERIFY-080`
 
 ## Open gaps
 

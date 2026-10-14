@@ -254,7 +254,7 @@ function composerSchema(setterWritesDraft: boolean): { schema: OrbitalSchema; co
           from: 'ready',
           to: 'ready',
           event: 'SEND',
-          guard: ['and', '@entity.activeChannel', ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
+          guard: ['and', ['validate/required', '@entity.activeChannel'], ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
           effects: [['emit', 'SAVE', { data: { content: '@entity.draft', channel: '@entity.activeChannel' } }], ['set', '@entity.draft', '']],
         },
       ],

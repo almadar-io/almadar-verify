@@ -9,11 +9,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import type { Trait, TraitConfigValue } from '@almadar/core';
+import type { OperatorTypeRef } from '@almadar/std';
 import { valueLeaves, type OperatorLookup, type ValueNode } from '../value-leaves.js';
 import { configItemActionEvents } from '../event-producers.js';
 
 interface CanonicalEntry {
-  returnType: string;
+  returnType: OperatorTypeRef;
   returnSemantics?: string;
 }
 

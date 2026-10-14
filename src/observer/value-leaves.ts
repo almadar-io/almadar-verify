@@ -9,7 +9,7 @@
  * - `union-of-args`       → every argument; `union-of-args<i,j>` the listed ones;
  * - `last-of-args`        → the last argument;
  * - `lambda-result`       → the body of the lambda argument (the argument whose
- *                           operator declares `returnType: 'function'`);
+ *                           operator declares a function `returnType`);
  * - anything else, including an operator with no declaration → OPAQUE: the
  *   expression itself, crediting nothing beyond what it literally is.
  *
@@ -20,6 +20,7 @@
  */
 
 import { getStdOperatorMeta } from '@almadar/std/registry';
+import type { OperatorTypeRef } from '@almadar/std';
 
 /** Any IR value the walk inspects; only arrays are structurally examined. */
 export type ValueNode = string | number | boolean | null | undefined | object;
@@ -27,7 +28,7 @@ export type ValueNode = string | number | boolean | null | undefined | object;
 /** The registry facts the walk reads. */
 export interface OperatorReturn {
   readonly returnSemantics?: string;
-  readonly returnType: string;
+  readonly returnType: OperatorTypeRef;
 }
 
 export type OperatorLookup = (operator: string) => OperatorReturn | undefined;
@@ -79,10 +80,11 @@ function planSources(
   return slots.length > 0 ? slots : undefined;
 }
 
-/** The body of a `[lambda-op, params, body]` call whose operator declares `returnType: 'function'`. */
+/** The body of a `[lambda-op, params, body]` call whose operator returns a function. */
 function lambdaBody(node: ValueNode, lookup: OperatorLookup): ValueNode | undefined {
   if (!Array.isArray(node) || node.length < 3 || typeof node[0] !== 'string') return undefined;
-  return lookup(node[0])?.returnType === 'function' ? node[node.length - 1] : undefined;
+  const returns = lookup(node[0])?.returnType;
+  return returns !== undefined && typeof returns !== 'string' && returns.kind === 'fn' ? node[node.length - 1] : undefined;
 }
 
 /** Every possible value source of `value`, resolved through the registry's declared `returnSemantics`. */

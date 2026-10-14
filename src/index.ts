@@ -130,7 +130,6 @@ export { resolveOrbitalBin, resetOrbitalBinCache } from './util/orbital-bin.js';
 export {
   TIER_LEVELS,
   walkRegistryBehaviors,
-  registryPrefix,
   registryBases,
   behaviorRegistries,
   discoverAllBehaviors,
