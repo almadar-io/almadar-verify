@@ -4,7 +4,7 @@
  * @almadar/std fails the client bundle ("getOperatorRunsOn is not exported").
  */
 import { it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, lstatSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, lstatSync, realpathSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { overrideWithWorkspaceBuilds, workspaceOverrideClosure } from '../workspace-overrides.js';
@@ -89,5 +89,66 @@ it('re-running over a sandbox that already links a package never writes through 
     overrideWithWorkspaceBuilds(app, mono, ['@almadar/runtime', '@almadar/core']);
     expect(existsSync(join(mono, 'packages/almadar-core/dist/index.js'))).toBe(true);
     expect(lstatSync(join(app, 'node_modules/@almadar/core')).isSymbolicLink()).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('a swapped-in build gets the third-party dependencies it declares and the sandbox lacks, from the workspace', () => {
+  const { root, mono, app } = fixture();
+  try {
+    pkg(join(mono, 'packages/almadar-core'), '@almadar/core', '10.103.0', { '@noble/hashes': '1.8.0', lodash: '^4' });
+    pkg(join(mono, 'packages/almadar-core/node_modules/@noble/hashes'), '@noble/hashes', '1.8.0', {}, false);
+    pkg(join(mono, 'node_modules/lodash'), 'lodash', '4.0.0', {}, false);
+    pkg(join(app, 'node_modules/lodash'), 'lodash', '4.17.0', {}, false);
+    overrideWithWorkspaceBuilds(app, mono, ['@almadar/core']);
+    const noble = join(app, 'node_modules/@noble/hashes');
+    expect(realpathSync(noble)).toBe(realpathSync(join(mono, 'packages/almadar-core/node_modules/@noble/hashes')));
+    expect(lstatSync(join(app, 'node_modules/lodash')).isSymbolicLink()).toBe(false);
+    expect(versionOf(join(app, 'node_modules/lodash'))).toBe('4.17.0');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('a package pnpm linked into the sandbox from its store is swapped in the store copy, and the workspace is left alone', () => {
+  const { root, mono, app } = fixture();
+  try {
+    const store = join(app, 'node_modules/.pnpm/@almadar+core@10.102.0/node_modules/@almadar/core');
+    pkg(store, '@almadar/core', '10.102.0');
+    rmSync(join(app, 'node_modules/@almadar/core'), { recursive: true, force: true });
+    symlinkSync(store, join(app, 'node_modules/@almadar/core'), 'dir');
+    overrideWithWorkspaceBuilds(app, mono, ['@almadar/core']);
+    expect(versionOf(join(app, 'node_modules/@almadar/core'))).toBe('10.103.0');
+    expect(readFileSync(join(store, 'dist/index.js'), 'utf-8')).toMatch(/10\.103\.0/);
+    expect(lstatSync(join(app, 'node_modules/@almadar/core')).isSymbolicLink()).toBe(true);
+    expect(realpathSync(join(app, 'node_modules/@almadar/core'))).not.toBe(realpathSync(join(mono, 'packages/almadar-core')));
+    expect(versionOf(join(mono, 'packages/almadar-core'))).toBe('10.103.0');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('every store copy of a closure member is swapped, including the ones another store package resolves its own dependency to', () => {
+  const { root, mono, app } = fixture();
+  try {
+    const stores = join(app, 'node_modules/.pnpm');
+    const own = join(stores, '@almadar+std@16.227.0/node_modules/@almadar/std');
+    const older = join(stores, '@almadar+std@16.100.0/node_modules/@almadar/std');
+    const nested = join(stores, '@almadar+runtime@6.89.0/node_modules/@almadar/std');
+    pkg(own, '@almadar/std', '16.227.0');
+    pkg(older, '@almadar/std', '16.100.0');
+    mkdirSync(join(stores, '@almadar+runtime@6.89.0/node_modules/@almadar'), { recursive: true });
+    symlinkSync(older, nested, 'dir');
+    rmSync(join(app, 'node_modules/@almadar/std'), { recursive: true, force: true });
+    symlinkSync(own, join(app, 'node_modules/@almadar/std'), 'dir');
+    overrideWithWorkspaceBuilds(app, mono, ['@almadar/std']);
+    expect(versionOf(own)).toBe('16.228.0');
+    expect(versionOf(nested)).toBe('16.228.0');
+    expect(readFileSync(join(nested, 'dist/index.js'), 'utf-8')).toMatch(/16\.228\.0/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('control: a store copy of a package outside the closure is left as installed', () => {
+  const { root, mono, app } = fixture();
+  try {
+    const other = join(app, 'node_modules/.pnpm/@almadar+llm@0.9.0/node_modules/@almadar/llm');
+    pkg(other, '@almadar/llm', '0.9.0');
+    overrideWithWorkspaceBuilds(app, mono, ['@almadar/std']);
+    expect(versionOf(other)).toBe('0.9.0');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

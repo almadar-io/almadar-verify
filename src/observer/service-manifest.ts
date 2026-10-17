@@ -42,7 +42,7 @@ export interface ServiceManifestResult {
   findings: string[];
 }
 
-interface RegistryService {
+export interface RegistryService {
   backend?: string;
   actions: Array<{ name: string }>;
   credentials?: Array<{ envVar: string; required: boolean; oneOf?: string; description: string }>;
@@ -89,8 +89,8 @@ function collectCallServiceNames(node: unknown, into: Set<string>): void {
 export function serviceManifest(
   schema: OrbitalSchema,
   env: Record<string, string | undefined> = process.env,
+  registry: Record<string, RegistryService> = loadServicesRegistry(),
 ): ServiceManifestResult {
-  const registry = loadServicesRegistry();
   const invokedBy = new Map<string, Set<string>>();
 
   for (const orbital of schema.orbitals ?? []) {

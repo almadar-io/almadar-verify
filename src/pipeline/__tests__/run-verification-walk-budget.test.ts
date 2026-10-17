@@ -16,7 +16,7 @@
  * `const plan = [...baseSteps, ...extensionSteps]`). A many-armed match's
  * base-variant fan-out (malformed/guard-fail/guard-pass × N arms) can
  * exhaust the budget before the emit-sweep tail ever runs — this is the
- * exact std-service-calendar symptom (6/7 arms' `*Done` events never
+ * exact many-armed service-wrapper symptom (6/7 arms' `*Done` events never
  * dispatched), reproduced here deterministically via `maxFrames` instead
  * of wall-clock timing.
  */
@@ -31,7 +31,7 @@ const ARM_COUNT = 5;
 
 /** A `match @entity.op` atom lowered into ARM_COUNT guarded EXEC arms
  *  sharing (idle, EXEC, executing), each with its own completion event —
- *  mirrors std-service-calendar's shape. */
+ *  mirrors a many-action service wrapper's shape. */
 function manyArmedMatchOrbital(): OrbitalSchema {
   const armTransitions = Array.from({ length: ARM_COUNT }, (_, i) => ({
     from: 'idle',

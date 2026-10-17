@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
-import { runVerification } from '../run-verification.js';
+import { emitSweepDeclarations, runVerification } from '../run-verification.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -144,5 +144,28 @@ describe('runVerification — std-browse end-to-end', () => {
     });
 
     expect(result.verdicts.refTrait?.passed).toBe(true);
+  });
+});
+
+describe('emitSweepDeclarations: http routes', () => {
+  const trait = {
+    traitName: 'Fetcher',
+    initialState: 'idle',
+    transitions: [],
+    effectEmittedEvents: new Set(['ITEMS_REPLIED', 'ITEMS_FAILED', 'ITEMS_DONE']),
+    httpReplyEvents: new Set(['ITEMS_REPLIED']),
+    httpFailureEvents: new Set(['ITEMS_FAILED']),
+    emitContracts: [
+      { event: 'ITEMS_REPLIED', scope: 'internal' as const },
+      { event: 'ITEMS_FAILED', scope: 'internal' as const },
+      { event: 'ITEMS_DONE', scope: 'external' as const },
+    ],
+  };
+
+  it('sweeps neither an http route event nor its contract declaration', () => {
+    const swept = emitSweepDeclarations(trait).map((d) => d.success);
+    expect(swept).toContain('ITEMS_DONE');
+    expect(swept).not.toContain('ITEMS_REPLIED');
+    expect(swept).not.toContain('ITEMS_FAILED');
   });
 });

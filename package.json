@@ -19,7 +19,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "programs"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -39,6 +40,7 @@
     "@almadar/core": "^10.128.0",
     "@almadar/db": "^0.1.5",
     "@almadar/evaluator": "^2.61.0",
+    "@almadar/kernel": "^18.0.0",
     "@almadar/llm": "^2.64.0",
     "@almadar/logger": "^1.18.0",
     "@almadar/runtime": "^6.111.0",

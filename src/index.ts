@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 
-export { applyRowAccess, checkMutationAccess } from '@almadar/runtime';
+export { applyRowAccess, checkMutationAccess } from '@almadar/evaluator/entityAccess';
 
 // Browser utilities
 export { listBrowserPersonas, signInBrowserPersona, readBrowserCurrentUid, type PersonaHostKind, type PersonaBrowserWindow } from './browser/persona.js';

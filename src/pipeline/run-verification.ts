@@ -68,6 +68,8 @@ import { assertClickNoListener } from '../observer/assert-click-no-listener.js';
 import { assertEmitPayloadAlwaysEmpty } from '../observer/emit-payload-always-empty.js';
 import { assertEffectFailureNotSurfaced } from '../observer/effect-failure-not-surfaced.js';
 import { report } from '../observer/report.js';
+import { COVERAGE_GAP_REASONS, type CoverageGap } from '../observer/coverage-gap.js';
+import { httpRoutesByTrait } from '../planner/internal/http-routes.js';
 import type { ReportShape, Verdict, WalkBudgetEntry } from '../observer/types.js';
 import type { RunVerificationInput, RunVerificationOutput } from './types.js';
 
@@ -1071,17 +1073,25 @@ export async function runVerification<Ctx extends DriverContext>(
   // silently deflating the ratio.
   let schemaTransitions = 0;
   const schemaTransitionKeys: string[] = [];
+  const coverageGaps: CoverageGap[] = [];
+  const httpRoutesOf = httpRoutesByTrait(input.orbital);
   for (const { trait } of eachInlineTrait(input.orbital)) {
     if (frontier && importedTopology.has(trait.name)) continue;
     // `--trait` scope: the coverage denominator counts only the selected
     // trait(s) — an unscoped run (`traitScope === null`) keeps every trait.
     if (traitScope !== null && !traitScope.includes(trait.name)) continue;
+    const httpRoutes = httpRoutesOf.get(trait.name) ?? { reply: new Set<string>(), failure: new Set<string>() };
     for (const t of trait.stateMachine?.transitions ?? []) {
       // A guard the bound config folded to a false literal cannot fire in this program; the
       // planner still walks its fail variant (proving the rejection), but it is no coverage debt.
       if (t.guard !== undefined && t.guard !== null && constTruth(t.guard) === false) continue;
       schemaTransitions += 1;
-      schemaTransitionKeys.push(`${trait.name}:${t.from}+${t.event}->${t.to}`);
+      const key = `${trait.name}:${t.from}+${t.event}->${t.to}`;
+      schemaTransitionKeys.push(key);
+      const failureRoute = httpRoutes.failure.has(t.event);
+      if (failureRoute || httpRoutes.reply.has(t.event)) {
+        coverageGaps.push({ key, traitName: trait.name, from: t.from, event: t.event, to: t.to, reason: COVERAGE_GAP_REASONS.notReachableWithoutNetwork, creditedWhenFired: failureRoute });
+      }
     }
   }
 
@@ -1106,6 +1116,7 @@ export async function runVerification<Ctx extends DriverContext>(
     verdicts,
     schemaTransitions,
     schemaTransitionKeys,
+    coverageGaps,
     effectEmittedByTrait,
     ...(frontierSummary !== undefined && { frontier: frontierSummary }),
     ...(walkBudgetEntries.length > 0 && { walkBudget: walkBudgetEntries }),
@@ -1123,13 +1134,15 @@ export async function runVerification<Ctx extends DriverContext>(
  * — they resolve at inline/resolve time, so a surviving `@`-prefixed
  * name here is undispatchable and skipped. `planEmitSweep` dedupes.
  */
-function emitSweepDeclarations(trait: TraitWalkConfig): EmitDeclaration[] {
+export function emitSweepDeclarations(trait: TraitWalkConfig): EmitDeclaration[] {
+  const isHttpRoute = (event: string): boolean => trait.httpReplyEvents?.has(event) === true || trait.httpFailureEvents?.has(event) === true;
   const out: EmitDeclaration[] = [];
   for (const event of trait.effectEmittedEvents ?? []) {
+    if (isHttpRoute(event)) continue;
     out.push({ success: event });
   }
   for (const contract of trait.emitContracts ?? []) {
-    if (contract.event.startsWith('@')) continue;
+    if (contract.event.startsWith('@') || isHttpRoute(contract.event)) continue;
     out.push({ success: contract.event });
   }
   return out;

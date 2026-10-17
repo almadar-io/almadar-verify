@@ -340,6 +340,37 @@ describe('probeListenCascades — role-only persist policy (B4-V5)', () => {
     expect(runtime.getDefaultUser()?.role).toBe('');
   });
 
+  it('a create-only event creates a new row id, leaving the seeded row untouched', async () => {
+    const schema = roleOnlyPersistCreateApp(['=', '@user.role', 'approver']);
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    await probeListenCascades(runtime, schema, persistence);
+    const ids = (await persistence.list('Employee')).map((row) => row['id']).sort();
+    expect(ids).toEqual(['Employee-verify-new-1', 'Employee-verify-seed-1']);
+  });
+
+  it('a create-only event on a self-identity entity is not preceded by a seeded row, and its cascade fires', async () => {
+    const base = roleOnlyPersistCreateApp(['=', '@user.role', 'approver']);
+    const orbital = base.orbitals[0];
+    if (!('entity' in orbital) || typeof orbital.entity === 'string') throw new Error('fixture orbital has no inline entity');
+    const schema: OrbitalSchema = {
+      ...base,
+      orbitals: [{ ...orbital, entity: { ...orbital.entity, read_policy: ['=', ['object/get', '@entity', 'id'], '@user.id'] } }],
+    };
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.findings).toEqual([]);
+    const created = await persistence.list('Employee');
+    expect(created).toHaveLength(1);
+    expect(created[0]['name']).not.toBeUndefined();
+    expect(created[0]['id']).toBe(runtime.getDefaultUser()?.id);
+  });
+
   it('a policy accepting no roster role is reported, never forced green', async () => {
     // "owner" is not a declared member of `Employee.role`'s vocabulary
     // (`["employee", "approver"]`) — structurally no roster member can ever

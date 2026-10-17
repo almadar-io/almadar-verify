@@ -73,6 +73,10 @@ export interface TraitWalkConfig {
    * past it. Populated by `extractTraitWalkConfigs`.
    */
   effectEmittedEvents?: ReadonlySet<string>;
+  /** Events on the non-failure routes of the trait's `http` effects; never planned as standalone steps. */
+  httpReplyEvents?: ReadonlySet<string>;
+  /** Events on the `failure` route of the trait's `http` effects; never planned as standalone steps. */
+  httpFailureEvents?: ReadonlySet<string>;
   /**
    * The trait's declared `ticks {}` rules. `planTickTests` turns each
    * numeric-interval tick into a wait-and-observe walk step so

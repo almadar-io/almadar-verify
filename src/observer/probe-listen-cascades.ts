@@ -129,6 +129,22 @@ function effectiveSeedId(
   return seedRowId(entityName);
 }
 
+/**
+ * The id a `persist create` payload for `entityName` must carry: never the seeded row's id (a create on a taken
+ * id is refused as a duplicate). Mirrors `effectiveSeedId` — a self-identity entity's row id IS the viewer's id.
+ */
+function newRowId(
+  schema: OrbitalSchema,
+  runtime: OrbitalServerRuntime,
+  entityName: string,
+): string {
+  const viewerId = runtime.getDefaultUser()?.id;
+  if (viewerId !== undefined && ownerFieldNames(schema, entityName).includes('id')) {
+    return viewerId;
+  }
+  return `${entityName}-verify-new-1`;
+}
+
 export type CascadeProbeCheck = 'listen-cascade-not-delivered' | 'listen-source-cannot-emit';
 
 export interface CascadeProbeFinding {
@@ -511,6 +527,7 @@ export async function probeListenCascades(
         // untouched and let the existing findings below report honestly;
         // this never forces a transition green.
         const persistTarget = findPersistKind(transition.effects ?? []);
+        const createsLinkedEntity = persistTarget !== null && persistTarget.kind === 'create' && persistTarget.entity === sourceTrait.linkedEntity;
         const originalUser = runtime.getDefaultUser();
         let roleSwitched = false;
         if (persistTarget !== null && originalUser !== undefined) {
@@ -537,7 +554,9 @@ export async function probeListenCascades(
           // match the CURRENT viewer, so an unstamped seed row still reports
           // "not found" even though it exists in the store.
           const viewerId = runtime.getDefaultUser()?.id;
-          if (persistence !== undefined && sourceTrait.linkedEntity !== undefined) {
+          // A create-only event on a self-identity entity seeds no row: its id is the viewer's, so the create would collide.
+          const selfIdentityCreate = createsLinkedEntity && sourceTrait.linkedEntity !== undefined && ownerFieldNames(schema, sourceTrait.linkedEntity).includes('id');
+          if (persistence !== undefined && sourceTrait.linkedEntity !== undefined && !selfIdentityCreate) {
             const linkedEntity = sourceTrait.linkedEntity;
             const overrides: EntityRow = { id: effectiveSeedId(schema, runtime, linkedEntity) };
             if (viewerId !== undefined) {
@@ -605,7 +624,7 @@ export async function probeListenCascades(
           // above so a by-id fetch this dispatch triggers actually hits,
           // AFTER the merge so it wins regardless of which piece produced it.
           if (persistence !== undefined && sourceTrait.linkedEntity !== undefined && 'id' in payload) {
-            payload['id'] = deleteTargetId ?? effectiveSeedId(schema, runtime, sourceTrait.linkedEntity);
+            payload['id'] = deleteTargetId ?? (createsLinkedEntity ? newRowId(schema, runtime, sourceTrait.linkedEntity) : effectiveSeedId(schema, runtime, sourceTrait.linkedEntity));
           }
           // A `persist create|update <Entity> @payload.<field>` effect writes
           // the ENTIRE dispatched `<field>` object as the row — `id`/owner
@@ -627,7 +646,7 @@ export async function probeListenCascades(
             if (wholeRowField !== null) {
               const current = payload[wholeRowField];
               const row: EventPayload = isPlainEventPayload(current) ? { ...current } : {};
-              row['id'] = deleteTargetId ?? effectiveSeedId(schema, runtime, linkedEntity);
+              row['id'] = deleteTargetId ?? (createsLinkedEntity ? newRowId(schema, runtime, linkedEntity) : effectiveSeedId(schema, runtime, linkedEntity));
               if (viewerId !== undefined) {
                 for (const field of ownerFieldNames(schema, linkedEntity)) {
                   if (field === 'id') continue;

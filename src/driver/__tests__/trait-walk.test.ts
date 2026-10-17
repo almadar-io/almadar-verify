@@ -44,13 +44,11 @@ describe('walkTraitVerdict', () => {
     expect(walk.steps.map((s) => `${s.from}-${s.event}`)).toContain('placed-SHIP');
   });
 
-  it('control: a guard no payload can pass fails the walk at that step and stops there', async () => {
+  it('control: a guard no payload can pass is an inconclusive arm, never a pass', async () => {
     const walk = await walkTraitVerdict(orderApp(unsatisfiable), 'OrderFlow');
-    expect(walk.status).toBe('fail');
-    expect(walk.detail).toMatch(/idle --PLACE-->/);
-    const last = walk.steps[walk.steps.length - 1];
-    expect(last.verdict.ok).toBe(false);
-    expect(walk.steps.filter((s) => !s.verdict.ok)).toHaveLength(1);
+    expect(walk.status).toBe('inconclusive');
+    expect(walk.detail).toMatch(/idle --PLACE--> placed: .*does not pass this arm's guard/);
+    expect(walk.steps.filter((s) => !s.verdict.ok)).toHaveLength(0);
   });
 
   it('the linked entity\'s first seeded row feeds the guard, as on the canvas', async () => {

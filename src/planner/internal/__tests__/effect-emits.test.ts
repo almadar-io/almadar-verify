@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Effect } from '@almadar/core';
 import { collectEffectEmittedEvents } from '../effect-emits.js';
 
-const callTools = (emit: Record<string, string>): Effect => ['call-service', 'llm', 'call-tools', {}, { emit }];
+const callTools = (emit: Record<string, string>): Effect => ['call-service', 'test-svc', 'run', {}, { emit }];
 
 describe('collectEffectEmittedEvents', () => {
   it('a call-service live message is not an outcome emit', () => {

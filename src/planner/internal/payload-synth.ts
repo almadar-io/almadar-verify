@@ -15,8 +15,9 @@
  * @packageDocumentation
  */
 
-import type { EntityRow, OrbitalSchema, EventPayload, FieldProjection, PayloadField, SExpr } from '@almadar/core';
+import type { Effect, EntityRow, OrbitalSchema, EventPayload, FieldProjection, PayloadField, SExpr } from '@almadar/core';
 import { isEntityReference, isEntityCall, payloadTypeContainer } from '@almadar/core';
+import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
 import { buildMinimalPayload, type EntityFieldDef, type PayloadFieldSpec } from '../../browser/interaction.js';
 
 /**
@@ -83,6 +84,185 @@ export function synthesizeSuccessPayload(
     }
   }
   return { ...buildMinimalPayload(rest, [...entityFields]), ...foreign };
+}
+
+/**
+ * The guard's synthesized payload steers a field, but the guard cannot see the field's declared
+ * type: a bare `@payload.x` existence guard mocks a row-shaped object even where `x` is declared a
+ * primitive (`hasFile : boolean`), and the runtime rightly refuses that value. A row-shaped mock on
+ * a declared boolean/string/number field is replaced by the typed value that satisfies the same
+ * truthiness: `true` for a boolean, the typed success value for a string or number. A null on such a
+ * field is the guard's "falsy" mock, which the validator refuses: it becomes `false`, `''` or `0`.
+ */
+export function conformGuardPayload(
+  guardPayload: EventPayload,
+  payloadSchema: ReadonlyArray<PayloadField> | undefined,
+  successPayload: EventPayload,
+): EventPayload {
+  if (payloadSchema === undefined) return guardPayload;
+  const out: EventPayload = { ...guardPayload };
+  for (const field of payloadSchema) {
+    const value = out[field.name];
+    if (value === null) {
+      if (field.type === 'boolean') out[field.name] = false;
+      else if (field.type === 'string') out[field.name] = '';
+      else if (field.type === 'number') out[field.name] = 0;
+      continue;
+    }
+    if (typeof value !== 'object' || Array.isArray(value)) continue;
+    if (field.type === 'boolean') out[field.name] = true;
+    else if (field.type === 'string' || field.type === 'number') out[field.name] = successPayload[field.name] ?? null;
+  }
+  return out;
+}
+
+type DeclaredTypes = Readonly<Record<string, ReadonlyArray<PayloadField>>>;
+
+/** The program's type declarations by name, across every orbital. */
+export function declaredTypesOf(schema: OrbitalSchema | undefined): DeclaredTypes {
+  return Object.assign({}, ...(schema?.orbitals ?? []).map((o) => ('types' in o ? o.types : undefined) ?? {}));
+}
+
+interface JsonParseSites {
+  /** Payload fields read through `(json/parse @payload.<f> <Type>)`, by declared type name. */
+  fields: Record<string, string>;
+  /** Members of a bound value read through `(json/parse @<name>.<member> <Type>)` (a parsed instance's own JSON text member). */
+  members: Record<string, string>;
+}
+
+function jsonParseSites(transition: { guard?: SExpr; effects?: ReadonlyArray<Effect> }, types: DeclaredTypes): JsonParseSites {
+  const out: JsonParseSites = { fields: {}, members: {} };
+  const visit = (node: Effect | SExpr): void => {
+    if (!Array.isArray(node)) return;
+    const nodes = node as readonly SExpr[];
+    if (nodes[0] === 'json/parse' && typeof nodes[1] === 'string' && typeof nodes[2] === 'string' && types[nodes[2]] !== undefined) {
+      const path = /^@([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(nodes[1]);
+      if (path !== null && path[1] === 'payload') out.fields[path[2]] = nodes[2];
+      else if (path !== null) out.members[path[2]] = nodes[2];
+    }
+    for (const child of nodes) visit(child);
+  };
+  if (transition.guard !== undefined) visit(transition.guard);
+  for (const effect of transition.effects ?? []) visit(effect);
+  return out;
+}
+
+function jsonParseFieldTypes(transition: { guard?: SExpr; effects?: ReadonlyArray<Effect> }, types: DeclaredTypes): Record<string, string> {
+  return jsonParseSites(transition, types).fields;
+}
+
+/**
+ * Payload fields the arm reads through `(json/parse @payload.<f> <Type>)`, filled with the JSON text of a minimal
+ * instance of the program's own declared `<Type>`: random text would parse to the type's defaults and hide what
+ * the arm does with a real value.
+ */
+export function synthesizeJsonParsePayload(
+  transition: { guard?: SExpr; effects?: ReadonlyArray<Effect> },
+  types: DeclaredTypes,
+  entityFields: ReadonlyArray<EntityFieldDef> = [],
+): EventPayload {
+  const out: EventPayload = {};
+  const sites = jsonParseSites(transition, types);
+  const minimal = (typeName: string): EventPayload => buildMinimalPayload((types[typeName] ?? []).map(payloadFieldSpec), [...entityFields]);
+  for (const [field, typeName] of Object.entries(sites.fields)) {
+    const instance = minimal(typeName);
+    for (const [member, memberType] of Object.entries(sites.members)) {
+      if (typeof instance[member] === 'string') instance[member] = JSON.stringify(minimal(memberType));
+    }
+    out[field] = JSON.stringify(instance);
+  }
+  return out;
+}
+
+type JsonLeaf = string | number | boolean | JsonLeaf[] | { [key: string]: JsonLeaf };
+
+function literalsOf(node: SExpr, out: Set<string | number>): void {
+  if (typeof node === 'string' && !node.startsWith('@') && !node.startsWith('?')) out.add(node);
+  else if (typeof node === 'number') out.add(node);
+  else if (Array.isArray(node)) for (const child of node as readonly SExpr[]) literalsOf(child, out);
+}
+
+/**
+ * Steer the JSON instances `synthesizeJsonParsePayload` built so the arm's guard (evaluated by the real evaluator)
+ * answers `wantPass`: the minimal instance first, then one and two member changes drawn from the guard's own
+ * literals, a boolean's two values and an empty or one-element array. The payload unchanged when none answers.
+ */
+export function solveJsonParseFields(
+  transition: { guard?: SExpr; effects?: ReadonlyArray<Effect> },
+  wantPass: boolean,
+  payload: EventPayload,
+  types: DeclaredTypes,
+  state: string,
+  entityFields: ReadonlyArray<EntityFieldDef> = [],
+): EventPayload {
+  const guard = transition.guard;
+  const fieldTypes = jsonParseFieldTypes(transition, types);
+  if (guard === undefined || Object.keys(fieldTypes).length === 0) return payload;
+  const instances: Record<string, Record<string, JsonLeaf>> = {};
+  for (const field of Object.keys(fieldTypes)) {
+    const raw = payload[field];
+    if (typeof raw !== 'string') return payload;
+    const parsed: JsonLeaf = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return payload;
+    instances[field] = parsed;
+  }
+  const literals = new Set<string | number>();
+  literalsOf(guard, literals);
+  const answers = (candidate: Record<string, Record<string, JsonLeaf>>): boolean => {
+    const next: EventPayload = { ...payload };
+    for (const [field, instance] of Object.entries(candidate)) next[field] = JSON.stringify(instance);
+    try {
+      return evaluateGuard(guard, createMinimalContext({}, next, state)) === wantPass;
+    } catch {
+      return false;
+    }
+  };
+  const elementOf = (typeName: string, member: string): JsonLeaf | undefined => {
+    const declared = (types[typeName] ?? []).find((f) => f.name === member);
+    const element = typeof declared?.type === 'string' ? /^\[(.+)\]$/.exec(declared.type)?.[1] : undefined;
+    const elementType = element === undefined ? undefined : types[element];
+    if (elementType === undefined) return undefined;
+    const instance: JsonLeaf = JSON.parse(JSON.stringify(buildMinimalPayload(elementType.map(payloadFieldSpec), [...entityFields])));
+    return instance;
+  };
+  const changes: Array<{ field: string; member: string; value: JsonLeaf }> = [];
+  for (const [field, instance] of Object.entries(instances)) {
+    for (const [member, current] of Object.entries(instance)) {
+      const values: JsonLeaf[] = [];
+      if (typeof current === 'boolean') values.push(!current);
+      else if (Array.isArray(current)) {
+        values.push([]);
+        const element = elementOf(fieldTypes[field] ?? '', member);
+        if (element !== undefined) values.push([element]);
+      } else {
+        for (const literal of literals) if (typeof literal === typeof current) values.push(literal);
+        if (typeof current === 'number') values.push(0);
+      }
+      for (const value of values) if (JSON.stringify(value) !== JSON.stringify(current)) changes.push({ field, member, value });
+    }
+  }
+  const apply = (...picked: typeof changes): Record<string, Record<string, JsonLeaf>> => {
+    const copy: Record<string, Record<string, JsonLeaf>> = {};
+    for (const [field, instance] of Object.entries(instances)) copy[field] = { ...instance };
+    for (const change of picked) copy[change.field][change.member] = change.value;
+    return copy;
+  };
+  const attempts: Array<typeof changes> = [[]];
+  for (const one of changes) attempts.push([one]);
+  for (let i = 0; i < changes.length; i++) {
+    for (let j = i + 1; j < changes.length; j++) {
+      if (changes[i].field !== changes[j].field || changes[i].member !== changes[j].member) attempts.push([changes[i], changes[j]]);
+    }
+  }
+  for (const picked of attempts) {
+    const candidate = apply(...picked);
+    if (answers(candidate)) {
+      const solved: EventPayload = { ...payload };
+      for (const [field, instance] of Object.entries(candidate)) solved[field] = JSON.stringify(instance);
+      return solved;
+    }
+  }
+  return payload;
 }
 
 /** A payload field typed `T.f`: its name, its source, and whether it is an array of them. */

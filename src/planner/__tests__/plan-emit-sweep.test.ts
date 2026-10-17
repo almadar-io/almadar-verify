@@ -197,4 +197,27 @@ describe('planEmitSweep', () => {
     const [step] = planEmitSweep({ trait, emits: [{ success: 'PingEvent' }] });
     expect(step.payload).toEqual({});
   });
+
+  it('sweeps a payload field read through json/parse as a valid instance whose arm guard passes', () => {
+    const schema: OrbitalSchema = {
+      name: 'sweep-parse',
+      orbitals: [{
+        name: 'O',
+        entity: { name: 'Thing', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+        types: { Pending: [{ name: 'mode', type: 'string' }, { name: 'key', type: 'string' }] },
+        traits: [],
+        pages: [],
+      }],
+    };
+    const saver: TraitWalkConfig = {
+      traitName: 'Saver',
+      initialState: 'idle',
+      events: [{ key: 'DONE', name: 'Done', payloadSchema: [{ name: 'state', type: 'string', required: true }] }],
+      transitions: [{ from: 'idle', event: 'DONE', to: 'idle', hasGuard: true, guard: ['=', ['object/get', ['json/parse', '@payload.state', 'Pending'], 'mode', 'single'], 'single'] }],
+    };
+    const [step] = planEmitSweep({ trait: saver, emits: [{ success: 'DONE' }], schema });
+    const parsed = JSON.parse(String(step.payload.state));
+    expect(parsed.mode).toBe('single');
+    expect(parsed.key).not.toBe('');
+  });
 });

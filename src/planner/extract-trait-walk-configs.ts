@@ -12,6 +12,7 @@
 import type { OrbitalSchema } from '@almadar/core';
 import type { TraitWalkConfig } from '../engine/types.js';
 import { collectEffectEmittedEvents } from './internal/effect-emits.js';
+import { httpRoutesByTrait } from './internal/http-routes.js';
 import {
   dispatchNavigates,
   eachInlineTrait,
@@ -25,6 +26,7 @@ import {
 
 export function extractTraitWalkConfigs(orbital: OrbitalSchema): TraitWalkConfig[] {
   const result: TraitWalkConfig[] = [];
+  const httpRoutes = httpRoutesByTrait(orbital);
 
   for (const { orb, trait } of eachInlineTrait(orbital)) {
     if (trait.stateMachine === undefined) continue;
@@ -55,6 +57,9 @@ export function extractTraitWalkConfigs(orbital: OrbitalSchema): TraitWalkConfig
     if (effectEmittedEvents.size > 0) {
       config.effectEmittedEvents = effectEmittedEvents;
     }
+    const traitRoutes = httpRoutes.get(trait.name);
+    if (traitRoutes !== undefined && traitRoutes.reply.size > 0) config.httpReplyEvents = traitRoutes.reply;
+    if (traitRoutes !== undefined && traitRoutes.failure.size > 0) config.httpFailureEvents = traitRoutes.failure;
     if (trait.ticks !== undefined && trait.ticks.length > 0) {
       config.ticks = trait.ticks;
     }

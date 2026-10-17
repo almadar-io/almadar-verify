@@ -47,12 +47,17 @@
  */
 
 import { buildGuardPayloads, collectBindings, constTruth, type EventPayload, type OrbitalSchema, type SExpr, type Trait, type Transition } from '@almadar/core';
+import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
 import type { EntityFieldDef } from '../browser/interaction.js';
 import type { ExtendedWalkStep, PayloadCase, PlanWalkInput } from './types.js';
 import {
   hasRequiredPayloadFields,
   injectFetchDataRows,
   synthesizeSuccessPayload,
+  conformGuardPayload,
+  declaredTypesOf,
+  solveJsonParseFields,
+  synthesizeJsonParsePayload,
 } from './internal/payload-synth.js';
 import { transientClosure } from './internal/transient-closure.js';
 import { eachInlineTrait } from './internal/orbital-walk.js';
@@ -62,6 +67,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
   const { trait, includeAutoInit = true, entityFieldsByName = {}, orbital } = input;
   const traitDecl = orbital === undefined ? undefined : findTraitDecl(orbital, trait.traitName);
 
+  const declaredTypes = declaredTypesOf(orbital);
   const result: ExtendedWalkStep[] = [];
 
   if (includeAutoInit) {
@@ -70,14 +76,15 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
 
   for (const transition of trait.transitions) {
     if (transition.event === 'INIT' && transition.from === trait.initialState) continue;
+    if (trait.httpReplyEvents?.has(transition.event) === true || trait.httpFailureEvents?.has(transition.event) === true) continue;
 
     const eventDecl = trait.events?.find((e) => e.key === transition.event);
     const payloadSchema = eventDecl?.payloadSchema;
-    const successPayload = synthesizeSuccessPayload(
-      payloadSchema,
-      trait.linkedEntity,
-      entityFieldsByName,
-    );
+    const jsonFields = synthesizeJsonParsePayload(transition, declaredTypes, trait.linkedEntity !== undefined ? entityFieldsByName[trait.linkedEntity] ?? [] : []);
+    const successPayload: EventPayload = {
+      ...synthesizeSuccessPayload(payloadSchema, trait.linkedEntity, entityFieldsByName),
+      ...jsonFields,
+    };
     const emitMalformed = hasRequiredPayloadFields(payloadSchema);
 
     if (transition.hasGuard) {
@@ -88,6 +95,8 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
       const guardPayloads = transition.guard !== undefined
         ? buildGuardPayloads(transition.guard)
         : { pass: {}, fail: {} };
+      const conformedPass = conformGuardPayload(guardPayloads.pass, payloadSchema, successPayload);
+      const conformedFail = conformGuardPayload(guardPayloads.fail, payloadSchema, successPayload);
 
       // A post-inline constant-folded guard (e.g. `(or (= "create" "create")
       // @payload.row)` for a create-mode modal) is always true / always false:
@@ -122,7 +131,7 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
       if (canPass) {
         const passPayload = injectFetchDataRows(
           transition.guard,
-          { ...successPayload, ...guardPayloads.pass } as EventPayload,
+          solveJsonParseFields(transition, true, { ...successPayload, ...conformedPass, ...jsonFields } as EventPayload, declaredTypes, transition.from),
           payloadSchema,
           trait.linkedEntity,
           entityFieldsByName,
@@ -136,6 +145,13 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
           entityFieldsByName,
           guardSteerable: steerable,
         });
+        if (steerable) {
+          const reason = armConflict(trait, transition, passPayload);
+          if (reason !== undefined) {
+            passStep.guardSteerable = false;
+            passStep.inconclusive = reason;
+          }
+        }
         if (orbital !== undefined && traitDecl !== undefined) {
           attachGuardPrecondition(passStep, orbital, traitDecl, transition, entityFieldsByName);
         }
@@ -143,15 +159,25 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
       }
 
       if (canFail) {
-        result.push(makeStep({
+        const failPayload = solveJsonParseFields(transition, false, { ...successPayload, ...conformedFail, ...jsonFields } as EventPayload, declaredTypes, transition.from);
+        const failStep = makeStep({
           trait,
           transition,
           guardCase: 'fail',
           payloadCase: 'guard-fail',
-          payload: { ...successPayload, ...guardPayloads.fail } as EventPayload,
+          payload: failPayload,
           entityFieldsByName,
           guardSteerable: steerable,
-        }));
+        });
+        const catching = steerable ? catchingSiblingTarget(trait, transition, failPayload) : {};
+        if (catching.target !== undefined && !(failStep.guardSiblingTargets ?? []).includes(catching.target)) {
+          failStep.guardSiblingTargets = [...(failStep.guardSiblingTargets ?? []), catching.target];
+        }
+        if (catching.ownGuardPasses === true) {
+          failStep.guardSteerable = false;
+          failStep.inconclusive = `${transition.from} --${transition.event}--> ${transition.to}: the solved payload does not fail this arm's guard`;
+        }
+        result.push(failStep);
       }
       continue;
     }
@@ -178,6 +204,54 @@ export function planWalk(input: PlanWalkInput): ExtendedWalkStep[] {
   }
 
   return result;
+}
+
+/**
+ * Whether `payload`, solved from `transition`'s guard, would fire THIS arm: the arm that fires is the first of the
+ * `(from, event)` group, in declaration order, whose guard the real evaluator passes. A reason when it would not.
+ */
+function armConflict(trait: PlanWalkInput['trait'], transition: PlanWalkInput['trait']['transitions'][number], payload: EventPayload): string | undefined {
+  const arms = trait.transitions.filter((t) => t.from === transition.from && t.event === transition.event);
+  const index = arms.indexOf(transition);
+  const label = `${transition.from} --${transition.event}--> ${transition.to}`;
+  for (let i = 0; i <= index; i++) {
+    const guard = arms[i].guard;
+    let passes: boolean;
+    if (!arms[i].hasGuard || guard === undefined) passes = true;
+    else {
+      try {
+        passes = evaluateGuard(guard, createMinimalContext({}, payload, transition.from)) === true;
+      } catch (error) {
+        return `${label}: the guard of arm ${i} could not be evaluated on the solved payload (${error instanceof Error ? error.message : String(error)})`;
+      }
+    }
+    if (!passes) continue;
+    return i === index ? undefined : `${label}: the solved payload passes the earlier arm ${i} (--> ${arms[i].to}) first`;
+  }
+  return `${label}: the solved payload does not pass this arm's guard`;
+}
+
+/**
+ * The target of the sibling arm that fires on a guard-fail payload: the first arm of the `(from, event)` group, in
+ * declaration order, whose guard the real evaluator passes: a sibling's `target` (even one equal to `transition`'s
+ * own), or `ownGuardPasses` when `transition` itself fires, so the payload does not fail its guard.
+ */
+function catchingSiblingTarget(trait: PlanWalkInput['trait'], transition: PlanWalkInput['trait']['transitions'][number], payload: EventPayload): { target?: string; ownGuardPasses?: true } {
+  const arms = trait.transitions.filter((t) => t.from === transition.from && t.event === transition.event);
+  for (const arm of arms) {
+    let passes: boolean;
+    if (!arm.hasGuard || arm.guard === undefined) passes = true;
+    else {
+      try {
+        passes = evaluateGuard(arm.guard, createMinimalContext({}, payload, transition.from)) === true;
+      } catch {
+        return {};
+      }
+    }
+    if (!passes) continue;
+    return arm === transition ? { ownGuardPasses: true } : { target: arm.to };
+  }
+  return {};
 }
 
 function findTraitDecl(orbital: OrbitalSchema, traitName: string): Trait | undefined {

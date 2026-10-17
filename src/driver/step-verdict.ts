@@ -2,7 +2,7 @@
  * stepVerdict — whether one played circuit step (`playCircuitStep`, the `play_transition` probe)
  * did what its planned walk step expects: the planned arm fired (or, for a guard-fail variant, was
  * rejected, whether or not a sibling arm fired instead), the planned state reached, and no effect
- * failing. A write the access policy denied is the policy working, not a failure. A `malformed`
+ * failing. A write the access policy denied is the policy working, not a failure, and neither is an effect failure the program routed to its declared `emit.failure` event. A `malformed`
  * (empty-payload) variant tests the event's payload validator, which a circuit step does not run,
  * so it is inconclusive. Shared by the Studio canvas and the pre-deploy gate.
  */
@@ -48,7 +48,7 @@ export function stepVerdict(result: CircuitStepResult, expected: StepExpectation
     if (result.guard === 'fail') return { ok: false, detail: `The guard on ${arm} failed.` };
     return { ok: false, detail: `${arm} did not fire.` };
   }
-  const broken = result.effects.find((e) => e.outcome !== 'denied' && (e.outcome === 'failed' || e.status === 'failed'));
+  const broken = result.effects.find((e) => e.outcome !== 'denied' && e.routed === undefined && (e.outcome === 'failed' || e.status === 'failed'));
   if (broken) return { ok: false, detail: `${arm} ran ${broken.type}, which failed${broken.error ? `: ${broken.error}` : ''}` };
   if (result.state.after !== expected.to) {
     return { ok: false, detail: `${arm} reached "${result.state.after ?? ''}", expected "${expected.to}".` };

@@ -33,6 +33,7 @@ import type { Frame, TriggerKind } from '../frame/types.js';
 import { keyOf } from '../frame/factory.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
 import type { CoverageMetric } from './types.js';
+import type { CoverageGap } from './coverage-gap.js';
 
 const TRIGGER_KINDS: ReadonlyArray<TriggerKind> = ['bus', 'dom', 'auto-init', 'replay', 'reconcile', 'tick'];
 
@@ -53,6 +54,7 @@ export function coverage(
   schemaTransitions = 0,
   schemaTransitionKeys?: ReadonlyArray<string>,
   effectEmittedByTrait: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  coverageGaps: ReadonlyArray<CoverageGap> = [],
 ): CoverageMetric {
   // Denominator: every key the plan declared.
   const planKeys = new Set<string>();
@@ -120,7 +122,11 @@ export function coverage(
   // are auxiliary tests — excluded from the headline number, still
   // visible in perTriggerKind.
   if (schemaTransitionKeys !== undefined && schemaTransitionKeys.length > 0) {
-    return schemaReconciledCoverage(schemaTransitionKeys, plan, covered, perTriggerKind, schemaTransitions);
+    const firedBases = new Set<string>();
+    for (const frame of frames) {
+      for (const tx of frame.runtimeSnapshot.transitions) firedBases.add(`${tx.traitName}:${tx.from}+${tx.event}->${tx.to}`);
+    }
+    return schemaReconciledCoverage(schemaTransitionKeys, plan, covered, perTriggerKind, schemaTransitions, coverageGaps, firedBases);
   }
 
   const totalItems = planKeys.size;
@@ -155,6 +161,7 @@ export function coverage(
     coveredItems,
     ratio,
     schemaTransitions,
+    gaps: [],
     uncovered,
     coveredKeys: [...covered],
     perTrait,
@@ -173,8 +180,24 @@ function schemaReconciledCoverage(
   covered: ReadonlySet<string>,
   perTriggerKind: Record<TriggerKind, { total: number; covered: number }>,
   schemaTransitions: number,
+  coverageGaps: ReadonlyArray<CoverageGap>,
+  firedBases: ReadonlySet<string>,
 ): CoverageMetric {
-  const schemaKeys = new Set(schemaTransitionKeys);
+  const gapByKey = new Map(coverageGaps.map((gap) => [gap.key, gap]));
+  const reportedGaps: CoverageGap[] = [];
+  const schemaKeys = new Set<string>();
+  const creditedGapKeys = new Set<string>();
+  for (const key of schemaTransitionKeys) {
+    const gap = gapByKey.get(key);
+    if (gap === undefined) {
+      schemaKeys.add(key);
+    } else if (gap.creditedWhenFired && firedBases.has(key)) {
+      schemaKeys.add(key);
+      creditedGapKeys.add(key);
+    } else {
+      reportedGaps.push(gap);
+    }
+  }
   const tickKeys = new Set<string>();
   for (const step of plan) {
     if (step.triggerKind === 'tick') tickKeys.add(step.coverageKey);
@@ -185,7 +208,7 @@ function schemaReconciledCoverage(
 
   const coveredSchema = new Set<string>();
   for (const key of schemaKeys) {
-    if (coveredBases.has(key)) coveredSchema.add(key);
+    if (coveredBases.has(key) || creditedGapKeys.has(key)) coveredSchema.add(key);
   }
   const coveredTick = new Set<string>();
   for (const key of tickKeys) {
@@ -234,6 +257,7 @@ function schemaReconciledCoverage(
     coveredItems,
     ratio,
     schemaTransitions,
+    gaps: reportedGaps,
     uncovered,
     coveredKeys: [...coveredSchema, ...coveredTick],
     perTrait,

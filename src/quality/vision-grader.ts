@@ -2,24 +2,19 @@
  * Vision-based visual quality grader.
  *
  * Feeds one or more rendered screenshots plus the originating user prompt to a
- * vision-capable Claude model (default `claude-haiku-4-5`) through `@almadar/llm`
- * and returns a schema-validated, advisory quality report. All model access is
- * delegated to the LLM client — this module never talks HTTP itself.
+ * vision-capable Claude model (default `claude-haiku-4-5`) through `std-llm` run on the
+ * kernel (`programs/vision-grader.lolo`) and returns a schema-validated, advisory
+ * quality report. All model access is the kernel's — this module never talks HTTP itself.
  *
  * @packageDocumentation
  */
 
-import { readFileSync } from 'node:fs';
-import { extname } from 'node:path';
-import { z } from 'zod';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, extname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { z } from 'zod/v4';
 import type { JsonValue } from '@almadar/core';
-import {
-  createAnthropicClient,
-  ANTHROPIC_MODELS,
-  type LLMClient,
-  type VisionImagePart,
-  type VisionImageMediaType,
-} from '@almadar/llm';
+import { KernelProgram, resolveProgramFile, type KernelProgramOptions } from '@almadar/runtime/kernelProgram';
 
 /** The five visual-quality dimensions, each scored 1–5 with a one-line rationale. */
 export interface VisionQualityReport {
@@ -86,7 +81,8 @@ export class VisionQualityGradingError extends Error {
   }
 }
 
-const DEFAULT_MODEL = ANTHROPIC_MODELS.CLAUDE_HAIKU_4_5;
+const DEFAULT_MODEL = 'claude-haiku-4-5';
+const PROGRAM_ORBITAL = 'VisionGraderOrbital';
 
 const scoreSchema = z.union([
   z.literal(1),
@@ -112,6 +108,16 @@ export const dimensionsSchema = z.object({
 
 const studyVisionSchema = z.object({ dimensions: dimensionsSchema, study: studyQualitySchema });
 
+type VisionImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+interface VisionImagePart {
+  base64: string;
+  mediaType: VisionImageMediaType;
+}
+
+/** Where the kernel runs the grader: the transport and tools a host may name. Absent, the real ones. */
+export type VisionGraderHost = Pick<KernelProgramOptions, 'http' | 'kernelDir'> & { orb?: string };
+
 const MEDIA_TYPES: Record<string, VisionImageMediaType> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -129,6 +135,19 @@ function loadImage(path: string): VisionImagePart {
     );
   }
   return { base64: readFileSync(path).toString('base64'), mediaType };
+}
+
+const DIMENSIONS_SHAPE = '{"layoutCoherence":{"score":<1-5>,"rationale":"..."},"visualHierarchy":{"score":<1-5>,"rationale":"..."},"densityBalance":{"score":<1-5>,"rationale":"..."},"intentMatch":{"score":<1-5>,"rationale":"..."},"compositionEvidence":{"score":<1-5>,"rationale":"..."}}';
+const STUDY_SHAPE = '{"dimensions":{<the five visual dimensions as specified above>},"study":{"criteria":{"completion":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]},"design":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]},"utility":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]},"intentFit":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]}}}}';
+
+function packageRoot(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  while (!existsSync(join(dir, 'package.json'))) {
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error('vision-grader: package root not found');
+    dir = parent;
+  }
+  return dir;
 }
 
 /**
@@ -157,7 +176,7 @@ export function buildGradingPrompt(userPrompt: string, study?: StudyQualityInput
     `Request: ${userPrompt}`,
     '',
     'Respond with ONLY a JSON object of this exact shape and no prose:',
-    '{"layoutCoherence":{"score":<1-5>,"rationale":"..."},"visualHierarchy":{"score":<1-5>,"rationale":"..."},"densityBalance":{"score":<1-5>,"rationale":"..."},"intentMatch":{"score":<1-5>,"rationale":"..."},"compositionEvidence":{"score":<1-5>,"rationale":"..."}}',
+    DIMENSIONS_SHAPE,
   ].join('\n');
   if (study === undefined) return prompt;
   return [prompt,
@@ -172,7 +191,7 @@ export function buildGradingPrompt(userPrompt: string, study?: StudyQualityInput
     `Current turn request: ${study.turnPrompt}`,
     `Observable evidence: ${JSON.stringify(study.evidence)}`,
     'The required response shape for this study replaces the earlier response shape:',
-    '{"dimensions":{<the five visual dimensions as specified above>},"study":{"criteria":{"completion":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]},"design":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]},"utility":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]},"intentFit":{"score":<1-10>,"rationale":"...","citations":["supplied-id"]}}}}',
+    STUDY_SHAPE,
   ].join('\n');
 }
 
@@ -189,39 +208,67 @@ export async function gradeScreenshotQuality(input: {
   userPrompt: string;
   model?: string;
   study?: StudyQualityInput;
+  host?: VisionGraderHost;
 }): Promise<VisionQualityReport> {
   const model = input.model ?? DEFAULT_MODEL;
-  const client: LLMClient = createAnthropicClient({ model });
-  return gradeWithClient(client, input, model);
-}
-
-async function gradeWithClient(
-  client: LLMClient,
-  input: { screenshotPaths: string[]; userPrompt: string; study?: StudyQualityInput },
-  model: string,
-): Promise<VisionQualityReport> {
   if (input.screenshotPaths.length === 0) {
     throw new VisionQualityGradingError('No screenshots supplied to grade', null);
   }
-
   const images = input.screenshotPaths.map(loadImage);
-  const prompt = buildGradingPrompt(input.userPrompt, input.study);
+  const root = packageRoot();
+  const host = input.host ?? {};
+  const schema = await resolveProgramFile(join(root, 'programs', 'vision-grader.lolo'), root, host.orb);
+  const program = await KernelProgram.open(schema, {
+    languageFrom: root,
+    ...(host.http !== undefined ? { http: host.http } : {}),
+    ...(host.kernelDir !== undefined ? { kernelDir: host.kernelDir } : {}),
+  });
+  try {
+    return await gradeWithProgram(program, input, images, model);
+  } finally {
+    program.close();
+  }
+}
+
+async function extractJson(
+  program: KernelProgram,
+  input: { userPrompt: string; study?: StudyQualityInput },
+  images: VisionImagePart[],
+  model: string,
+): Promise<JsonValue> {
+  const schema = JSON.stringify(z.toJSONSchema(input.study === undefined ? dimensionsSchema : studyVisionSchema));
+  const run = await program.dispatch(PROGRAM_ORBITAL, 'LLM_EXTRACT', {
+    text: buildGradingPrompt(input.userPrompt, input.study),
+    schema,
+    systemPrompt: `You return only JSON that satisfies this JSON Schema, with no prose and no code fence:\n${schema}`,
+    model,
+    temperature: 0,
+    maxTokens: input.study === undefined ? 1024 : 4096,
+    images: images.map((image) => ({ mediaType: image.mediaType, data: image.base64 })),
+  });
+  const done = run.emits.find((emit) => emit.event === 'LLM_EXTRACT_RESULT');
+  if (done?.payload !== undefined && typeof done.payload.json === 'string') return JSON.parse(done.payload.json);
+  const failed = run.emits.find((emit) => emit.event === 'LLM_FAILED');
+  const message = failed?.payload?.message;
+  throw new Error(typeof message === 'string' ? message : 'the vision call failed');
+}
+
+async function gradeWithProgram(
+  program: KernelProgram,
+  input: { userPrompt: string; study?: StudyQualityInput },
+  images: VisionImagePart[],
+  model: string,
+): Promise<VisionQualityReport> {
 
   let lastError: Error | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await client.callWithVision<z.infer<typeof dimensionsSchema> | z.infer<typeof studyVisionSchema>>({
-        userText: prompt,
-        images,
-        schema: input.study === undefined ? dimensionsSchema : studyVisionSchema,
-        maxTokens: input.study === undefined ? 1024 : 4096,
-        temperature: 0,
-      });
+      const data = await extractJson(program, input, images, model);
       if (input.study !== undefined) {
-        const report = studyVisionSchema.parse(response.data);
+        const report = studyVisionSchema.parse(data);
         return { dimensions: report.dimensions, study: validateStudyQuality(report.study, input.study), model };
       }
-      return { dimensions: dimensionsSchema.parse(response.data), model };
+      return { dimensions: dimensionsSchema.parse(data), model };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }

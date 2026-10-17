@@ -259,6 +259,14 @@ export interface ExtendedWalkStep extends WalkStep {
    */
   guardSteerable?: boolean;
 
+  /**
+   * Guarded pass variants only: why this arm's coverage is inconclusive. Set when the real evaluator finds the
+   * payload solved from this arm's guard passes no arm of its `(from, event)` group or passes an EARLIER arm first
+   * (the first passing arm in declaration order is the one that fires). The step is then also stamped
+   * `guardSteerable: false`, so it is never credited as a pass.
+   */
+  inconclusive?: string;
+
   /** Position of this step's transition among the trait's `from --event-->` arms, numbered as
    *  `CircuitStepResult.firedArm` numbers them. */
   arm?: number;

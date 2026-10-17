@@ -1,0 +1,24 @@
+app vision-grader [
+  version: "1.0.0",
+  description: "Grades rendered screenshots with a vision model through std-llm; the credential is ANTHROPIC_API_KEY.",
+  egress: ["https://api.openai.com", "https://api.anthropic.com", "https://api.deepseek.com", "https://api.moonshot.ai", "https://openrouter.ai", "http://127.0.0.1:1234"]
+]
+orbital VisionGraderOrbital {
+  uses Llm from "std/behaviors/std-llm"
+
+  entity VisionGraderRun [runtime] {
+    id : string!
+  }
+
+  trait VisionGraderLlm = Llm.traits.LlmClient -> VisionGraderRun {
+    config {
+      provider: anthropic
+      origin: "https://api.anthropic.com"
+      basePath: "/v1"
+      model: "claude-haiku-4-5"
+      apiKey: "ANTHROPIC_API_KEY"
+    }
+  }
+
+  page "/vision-grader" as VisionGraderPage -> VisionGraderLlm
+}

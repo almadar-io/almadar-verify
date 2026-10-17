@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { TransitionTrace, VerificationSnapshot } from '@almadar/core';
 import { coverage } from '../coverage.js';
+import { COVERAGE_GAP_REASONS, type CoverageGap } from '../coverage-gap.js';
 import type { Frame, FrameCause } from '../../frame/types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
 
@@ -435,5 +436,36 @@ describe('coverage — effect-emitted events keep their credit when the hand dis
     expect(coverage([rejected], plan).coveredItems).toBe(0);
     expect(coverage([rejected], plan, 0, undefined, new Map([['List', new Set(['ItemsLoadFailed'])]])).coveredItems).toBe(1);
   });
-});
 
+  describe('http route gaps', () => {
+    const keys = ['F:idle+ASK->requesting', 'F:requesting+REPLIED->done', 'F:requesting+FAILED->failed'];
+    const gaps: CoverageGap[] = [
+      { key: keys[1], traitName: 'F', from: 'requesting', event: 'REPLIED', to: 'done', reason: COVERAGE_GAP_REASONS.notReachableWithoutNetwork, creditedWhenFired: false },
+      { key: keys[2], traitName: 'F', from: 'requesting', event: 'FAILED', to: 'failed', reason: COVERAGE_GAP_REASONS.notReachableWithoutNetwork, creditedWhenFired: true },
+    ];
+    const plan = [step('F', 'idle', 'ASK', 'requesting', 'bus')];
+    const ask = { traitName: 'F', from: 'idle', event: 'ASK', to: 'requesting', guardCase: null, triggerKind: 'bus', isRepositioning: false } as const;
+
+    it('counts the reply arm as a gap, and the failure arm as a gap when the request dispatch did not fire it', () => {
+      const c = coverage([frame(ask, 0)], plan, 3, keys, new Map(), gaps);
+      expect(c.gaps.map((g) => g.key)).toEqual(keys.slice(1));
+      expect(c.totalItems).toBe(1);
+      expect(c.coveredItems).toBe(1);
+      expect(c.uncovered).toEqual([]);
+    });
+
+    it('credits the failure arm as covered when the request dispatch recorded it, the reply arm stays a gap', () => {
+      const fired = snapshotWithTransition('F', 'requesting', 'FAILED', 'failed');
+      const c = coverage([frame(ask, 0, fired)], plan, 3, keys, new Map(), gaps);
+      expect(c.gaps.map((g) => g.key)).toEqual([keys[1]]);
+      expect(c.totalItems).toBe(2);
+      expect(c.coveredItems).toBe(2);
+    });
+
+    it('control: a reply arm is never credited, even when a snapshot records it', () => {
+      const fired = snapshotWithTransition('F', 'requesting', 'REPLIED', 'done');
+      const c = coverage([frame(ask, 0, fired)], plan, 3, keys, new Map(), gaps);
+      expect(c.gaps.map((g) => g.key)).toContain(keys[1]);
+    });
+  });
+});

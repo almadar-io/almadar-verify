@@ -283,3 +283,33 @@ describe('assertEmitPayloadAlwaysEmpty — entity-typed payload fields are one l
   });
 });
 
+describe('assertEmitPayloadAlwaysEmpty — an optional field the program sets to null', () => {
+  const failedSchema = (required: boolean): OrbitalSchema => ({
+    name: 'failed',
+    orbitals: [{
+      name: 'O',
+      entity: { name: 'Thing', fields: [{ name: 'id', type: 'string', required: true }] },
+      pages: [],
+      traits: [{
+        name: 'Caller',
+        scope: 'instance',
+        linkedEntity: 'Thing',
+        emits: [{ event: 'CALL_FAILED', scope: 'external', payloadSchema: [{ name: 'code', type: 'string', required }, { name: 'message', type: 'string', required: true }] }],
+        stateMachine: { states: [{ name: 'idle', isInitial: true }], events: [], transitions: [] },
+      }],
+    }],
+  });
+  const firings = (code: string | null) => [0, 1, 2].map((i) => frame(i, [{ type: 'CALL_FAILED', payload: { code, message: 'down' }, timestamp: i }]));
+
+  it('does not flag an optional field that is null on every firing: null is the declared absence', () => {
+    expect(assertEmitPayloadAlwaysEmpty(firings(null), failedSchema(false))).toEqual([]);
+  });
+
+  it('control: still flags an optional field that is the empty string on every firing', () => {
+    expect(assertEmitPayloadAlwaysEmpty(firings(''), failedSchema(false))).toHaveLength(1);
+  });
+
+  it('control: still flags a REQUIRED field that is null on every firing', () => {
+    expect(assertEmitPayloadAlwaysEmpty(firings(null), failedSchema(true))).toHaveLength(1);
+  });
+});

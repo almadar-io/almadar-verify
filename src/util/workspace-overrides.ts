@@ -5,7 +5,7 @@
  * with the older copies the generated lockfile pinned (a workspace runtime
  * next to the lockfile's std fails the client bundle on a new export).
  */
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /** The packages a sandbox always verifies against their workspace builds. */
@@ -63,20 +63,15 @@ export function overrideWithWorkspaceBuilds(
   const swapped: string[] = [];
   for (const name of workspaceOverrideClosure(monorepoRoot, roots)) {
     const installed = join(outputDir, 'node_modules', ...name.split('/'));
-    if (!existsSync(join(installed, 'dist'))) continue;
-    // A link from an earlier run already IS the workspace package: never write through it.
-    if (lstatSync(installed).isSymbolicLink()) {
-      swapped.push(name);
-      continue;
-    }
     const local = workspaceDir(monorepoRoot, name);
-    rmSync(join(installed, 'dist'), { recursive: true, force: true });
-    cpSync(join(local, 'dist'), join(installed, 'dist'), { recursive: true });
-    for (const file of ['package.json', 'tailwind-preset.cjs']) {
-      if (existsSync(join(local, file))) cpSync(join(local, file), join(installed, file));
-    }
-    swapped.push(name);
+    // A link from an earlier run already IS the workspace package: never write through it. A link into the package
+    // manager's own store is the installed copy, and is swapped like any other.
+    const linked = existsSync(installed) && lstatSync(installed).isSymbolicLink() && realpathSync(installed) === realpathSync(local);
+    const copies = [...(linked || !existsSync(join(installed, 'dist')) ? [] : [installed]), ...storeCopies(outputDir, name)];
+    for (const copy of copies) swapIn(copy, local);
+    if (linked || copies.length > 0) swapped.push(name);
   }
+  const copied = [...swapped];
   for (const name of workspaceOverrideClosure(monorepoRoot, swapped)) {
     const installed = join(outputDir, 'node_modules', ...name.split('/'));
     if (swapped.includes(name) || existsSync(installed)) continue;
@@ -84,5 +79,45 @@ export function overrideWithWorkspaceBuilds(
     symlinkSync(workspaceDir(monorepoRoot, name), installed, 'dir');
     swapped.push(name);
   }
+  for (const name of copied) linkMissingDependencies(outputDir, monorepoRoot, name);
   return swapped;
+}
+
+/** Every copy of `name` the package manager's store holds, where another store package resolves its own dependency to. */
+function storeCopies(outputDir: string, name: string): string[] {
+  const store = join(outputDir, 'node_modules', '.pnpm');
+  if (!existsSync(store)) return [];
+  const prefix = `${name.replace('/', '+')}@`;
+  return readdirSync(store)
+    .filter((entry) => entry.startsWith(prefix))
+    .map((entry) => join(store, entry, 'node_modules', ...name.split('/')))
+    .filter((copy) => existsSync(join(copy, 'dist')));
+}
+
+function swapIn(installed: string, local: string): void {
+  rmSync(join(installed, 'dist'), { recursive: true, force: true });
+  cpSync(join(local, 'dist'), join(installed, 'dist'), { recursive: true });
+  for (const file of ['package.json', 'tailwind-preset.cjs']) {
+    if (existsSync(join(local, file))) cpSync(join(local, file), join(installed, file));
+  }
+}
+
+/**
+ * A copied-in workspace build may declare third-party dependencies the
+ * sandbox's older pinned version did not: link each missing one to the copy
+ * the workspace itself resolves (the package's own `node_modules`, then the
+ * monorepo root's).
+ */
+function linkMissingDependencies(outputDir: string, monorepoRoot: string, name: string): void {
+  const local = workspaceDir(monorepoRoot, name);
+  const manifest = JSON.parse(readFileSync(join(local, 'package.json'), 'utf-8')) as Manifest;
+  for (const dep of Object.keys(manifest.dependencies ?? {})) {
+    if (dep.startsWith('@almadar/')) continue;
+    const installed = join(outputDir, 'node_modules', ...dep.split('/'));
+    if (existsSync(installed)) continue;
+    const source = [join(local, 'node_modules', ...dep.split('/')), join(monorepoRoot, 'node_modules', ...dep.split('/'))].find(existsSync);
+    if (source === undefined) continue;
+    mkdirSync(dirname(installed), { recursive: true });
+    symlinkSync(realpathSync(source), installed, 'dir');
+  }
 }

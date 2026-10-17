@@ -1,10 +1,10 @@
 import type { SExpr } from '@almadar/core';
 import { describe, expect, it } from 'vitest';
 import * as verify from '../../index.js';
-import { applyRowAccess, checkMutationAccess } from '@almadar/runtime';
+import { applyRowAccess, checkMutationAccess } from '@almadar/evaluator/entityAccess';
 
 describe('public canonical policy access', () => {
-  it('exports the runtime implementation without wrapping it', () => {
+  it('exports the canonical evaluator implementation without wrapping it', () => {
     expect(verify.applyRowAccess).toBe(applyRowAccess);
     expect(verify.checkMutationAccess).toBe(checkMutationAccess);
   });

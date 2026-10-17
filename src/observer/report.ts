@@ -10,6 +10,7 @@
  * @packageDocumentation
  */
 
+import type { CoverageGap } from './coverage-gap.js';
 import type { VerificationSummary } from '@almadar/core';
 import type { Frame } from '../frame/types.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
@@ -36,6 +37,8 @@ export interface ReportInput {
    * planned tick steps) instead of the plan's variant fan-out.
    */
   schemaTransitionKeys?: ReadonlyArray<string>;
+  /** Declared transitions the verifier cannot reach; forwarded to `coverage()`. */
+  coverageGaps?: ReadonlyArray<CoverageGap>;
   /**
    * Frontier-scope accounting from a `walkScope: 'frontier'` run.
    * Forwarded verbatim onto `ReportShape.frontier`.
@@ -56,7 +59,7 @@ export interface ReportInput {
 export function report(input: ReportInput): ReportShape {
   const { itemName, frames, plan, verdicts } = input;
 
-  const cov = coverage(frames, plan, input.schemaTransitions ?? 0, input.schemaTransitionKeys, input.effectEmittedByTrait);
+  const cov = coverage(frames, plan, input.schemaTransitions ?? 0, input.schemaTransitionKeys, input.effectEmittedByTrait, input.coverageGaps);
 
   const errors: string[] = [];
   const warnings: string[] = [];

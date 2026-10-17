@@ -15,6 +15,7 @@
  * @packageDocumentation
  */
 
+import type { CoverageGap } from './coverage-gap.js';
 import type {
   EntityRow,
   FieldValue,
@@ -39,6 +40,12 @@ export type Observer<T> = (frames: ReadonlyArray<Frame>) => T;
  * intersected with the plan's keys; denominator = plan keys.
  */
 export interface CoverageMetric {
+  /**
+   * Declared transitions the verifier cannot reach (`CoverageGap`), counted apart from `coveredItems` and
+   * `totalItems`: never a pass, never a failure. A failure-route arm the request step's dispatch fired is
+   * covered instead.
+   */
+  gaps: ReadonlyArray<CoverageGap>;
   totalItems: number;
   coveredItems: number;
   ratio: number;

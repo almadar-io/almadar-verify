@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import type { OrbitalSchema } from '@almadar/core';
+import type { OrbitalSchema, Trait, TraitEventListener, Transition } from '@almadar/core';
 import { extractTraitWalkConfigs } from '../extract-trait-walk-configs.js';
+import { planWalk } from '../plan-walk.js';
 
 // Snake-inspired single-trait orbital: numeric-interval tick, guarded
 // self-transitions, and a declared `emits {}` contract block.
@@ -65,6 +66,79 @@ describe('extractTraitWalkConfigs — schema-model fields', () => {
       'INTERNAL_PING',
       'UP',
     ]);
+  });
+
+  it('splits the events an http effect delivers on into reply and failure routes', () => {
+    const [snakeTrait] = snake.orbitals[0].traits;
+    if (typeof snakeTrait === 'string' || !('stateMachine' in snakeTrait) || snakeTrait.stateMachine === undefined) throw new Error('fixture trait has no state machine');
+    const withHttp: OrbitalSchema = {
+      ...snake,
+      orbitals: [{
+        ...snake.orbitals[0],
+        traits: [{
+          ...snakeTrait,
+          stateMachine: {
+            ...snakeTrait.stateMachine,
+            transitions: [
+              ...snakeTrait.stateMachine.transitions,
+              { from: 'playing', to: 'playing', event: 'UP', effects: [['http', 'GET', 'https://api.example.com', '/items', {}, { emit: { success: 'ITEMS_REPLIED', failure: 'ITEMS_FAILED', cancelled: 'ITEMS_CANCELLED' } }]] },
+            ],
+          },
+        }],
+      }],
+    };
+    const [config] = extractTraitWalkConfigs(withHttp);
+    expect([...(config.httpReplyEvents ?? [])].sort()).toEqual(['ITEMS_CANCELLED', 'ITEMS_REPLIED']);
+    expect([...(config.httpFailureEvents ?? [])]).toEqual(['ITEMS_FAILED']);
+  });
+
+  describe('http routes follow delivery', () => {
+    const trait = (name: string, transitions: Transition[], listens: TraitEventListener[] = []): Trait => ({
+      name,
+      scope: 'instance',
+      linkedEntity: 'Thing',
+      stateMachine: {
+        states: [{ name: 'idle', isInitial: true }, { name: 'waiting' }, { name: 'done' }],
+        events: [{ key: 'GO', name: 'Go' }, { key: 'DONE', name: 'Done' }, { key: 'GOT', name: 'Got' }],
+        transitions,
+      },
+      ...(listens.length > 0 ? { listens } : {}),
+    });
+    const schema: OrbitalSchema = {
+      name: 'routes',
+      orbitals: [{
+        name: 'O',
+        entity: { name: 'Thing', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+        pages: [],
+        traits: [
+          trait('Caller', [
+            { from: 'idle', to: 'waiting', event: 'GO', effects: [['http', 'GET', 'https://api.example.com', '/x', {}, { emit: { success: 'DONE' } }]] },
+            { from: 'waiting', to: 'done', event: 'DONE' },
+          ]),
+          trait('Plain', [{ from: 'idle', to: 'done', event: 'DONE' }]),
+          trait('Watcher', [{ from: 'idle', to: 'done', event: 'GOT' }], [{ event: 'DONE', triggers: 'GOT', scope: 'internal', source: { kind: 'trait', trait: 'Caller' } }]),
+          trait('Stranger', [{ from: 'idle', to: 'done', event: 'GOT' }], [{ event: 'DONE', triggers: 'GOT', scope: 'internal', source: { kind: 'trait', trait: 'Elsewhere' } }]),
+        ],
+      }],
+    };
+    const configs = extractTraitWalkConfigs(schema);
+    const reply = (name: string) => [...(configs.find((c) => c.traitName === name)?.httpReplyEvents ?? [])];
+
+    it('marks the emitting trait\'s own arm, not an ordinary arm on the same event name in another trait', () => {
+      expect(reply('Caller')).toEqual(['DONE']);
+      expect(reply('Plain')).toEqual([]);
+    });
+
+    it('control: the planner walks Plain\'s DONE arm and skips Caller\'s', () => {
+      const walked = (name: string) => planWalk({ trait: configs.find((c) => c.traitName === name)!, includeAutoInit: false }).map((step) => step.event);
+      expect(walked('Plain')).toContain('DONE');
+      expect(walked('Caller')).not.toContain('DONE');
+    });
+
+    it('marks the listen\'s triggers event on a trait whose listen accepts the emitter, and not on one naming another source', () => {
+      expect(reply('Watcher')).toEqual(['GOT']);
+      expect(reply('Stranger')).toEqual([]);
+    });
   });
 
   it('omits ticks and emitContracts when the trait declares none', () => {

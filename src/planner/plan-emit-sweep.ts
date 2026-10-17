@@ -18,7 +18,7 @@
 
 import type { EventPayload, Orbital, OrbitalSchema } from '@almadar/core';
 import { dispatchNavigates } from './internal/orbital-walk.js';
-import { collectEntityFields, synthesizeSuccessPayload } from './internal/payload-synth.js';
+import { collectEntityFields, declaredTypesOf, solveJsonParseFields, synthesizeJsonParsePayload, synthesizeSuccessPayload } from './internal/payload-synth.js';
 import type { ExtendedWalkStep, PlanEmitInput } from './types.js';
 import type { TraitWalkConfig } from '../engine/types.js';
 
@@ -30,7 +30,8 @@ export function planEmitSweep(input: PlanEmitInput): ExtendedWalkStep[] {
   // captured but as separate steps so each gets fired once.
   const seen = new Set<string>();
   const entityFieldsByName = schema !== undefined ? collectEntityFields(schema) : {};
-  const payloadOf = (eventName: string) => sweptPayload(trait, eventName, entityFieldsByName);
+  const declaredTypes = declaredTypesOf(schema);
+  const payloadOf = (eventName: string) => sweptPayload(trait, eventName, entityFieldsByName, declaredTypes);
 
   for (const decl of emits) {
     if (decl.success !== undefined && !seen.has(decl.success)) {
@@ -51,9 +52,15 @@ function sweptPayload(
   trait: TraitWalkConfig,
   eventName: string,
   entityFieldsByName: ReturnType<typeof collectEntityFields>,
+  declaredTypes: ReturnType<typeof declaredTypesOf>,
 ): EventPayload {
   const decl = trait.events?.find((e) => e.key === eventName);
-  return synthesizeSuccessPayload(decl?.payloadSchema, trait.linkedEntity, entityFieldsByName);
+  const base = synthesizeSuccessPayload(decl?.payloadSchema, trait.linkedEntity, entityFieldsByName);
+  const arm = trait.transitions.find((t) => t.event === eventName);
+  if (arm === undefined) return base;
+  const entityFields = trait.linkedEntity !== undefined ? entityFieldsByName[trait.linkedEntity] ?? [] : [];
+  const withJson = { ...base, ...synthesizeJsonParsePayload(arm, declaredTypes, entityFields) };
+  return solveJsonParseFields(arm, true, withJson, declaredTypes, arm.from, entityFields);
 }
 
 /**

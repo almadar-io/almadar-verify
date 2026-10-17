@@ -41,8 +41,9 @@ export interface WalkedStep extends StepExpectation {
 
 export interface TraitWalkVerdict {
   trait: string;
-  status: 'pass' | 'fail';
-  /** The first red step's finding. */
+  /** `inconclusive`: no step is red, but a planned arm could not be shown to fire (`ExtendedWalkStep.inconclusive`); never a pass. */
+  status: 'pass' | 'fail' | 'inconclusive';
+  /** The first red step's finding, or the first inconclusive arm's reason. */
   detail?: string;
   steps: WalkedStep[];
 }
@@ -52,8 +53,10 @@ export async function walkTraitVerdict(schema: OrbitalSchema, traitName: string,
   if (!target) throw new Error(`No trait named "${traitName}" in this schema.`);
   const seeded = target.linkedEntity !== undefined ? options.mockData?.[target.linkedEntity]?.[0] : undefined;
   const steps: WalkedStep[] = [];
+  let inconclusive: string | undefined;
   for (const planned of planWalk({ trait: target, orbital: schema, includeAutoInit: false })) {
     const expected = stepExpectation(planned);
+    if (inconclusive === undefined && planned.inconclusive !== undefined) inconclusive = planned.inconclusive;
     const payload: EventPayload = planned.payload ?? {};
     const row = declaredEntityRow(schema, target.linkedEntity, seeded);
     const result = await playCircuitStep(target, {
@@ -66,5 +69,6 @@ export async function walkTraitVerdict(schema: OrbitalSchema, traitName: string,
     steps.push({ ...expected, payload, result, verdict });
     if (!verdict.ok) return { trait: traitName, status: 'fail', ...(verdict.detail ? { detail: verdict.detail } : {}), steps };
   }
+  if (inconclusive !== undefined) return { trait: traitName, status: 'inconclusive', detail: inconclusive, steps };
   return { trait: traitName, status: 'pass', steps };
 }

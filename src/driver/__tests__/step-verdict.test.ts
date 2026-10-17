@@ -43,6 +43,15 @@ describe('stepVerdict', () => {
     expect(stepVerdict(denied, { from: 'editing', event: 'SAVE', to: 'saved', guardCase: null })).toEqual({ ok: true });
   });
 
+  it('does not fail on an http effect whose failure the program routed, and fails on one it did not', () => {
+    const expected = { from: 'editing', event: 'SAVE', to: 'saved', guardCase: null } as const;
+    const target = 'GET https://api.example.com/search';
+    const routed = played({ effects: [{ type: 'http', args: [], status: 'failed', outcome: 'failed', error: 'verify has no network', target, routed: 'ERR' }] });
+    expect(stepVerdict(routed, expected)).toEqual({ ok: true });
+    const unrouted = played({ effects: [{ type: 'http', args: [], status: 'failed', outcome: 'failed', error: 'verify has no network', target }] });
+    expect(stepVerdict(unrouted, expected)).toEqual({ ok: false, detail: 'editing --SAVE--> ran http, which failed: verify has no network' });
+  });
+
   it('edge: a step that fired no transition, without a guard, fails', () => {
     expect(stepVerdict(played({ transitionFired: false, state: { before: 'editing', after: 'editing' } }), { from: 'editing', event: 'SAVE', to: 'saved', guardCase: null }))
       .toEqual({ ok: false, detail: 'editing --SAVE--> did not fire.' });

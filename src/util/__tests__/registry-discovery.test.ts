@@ -12,7 +12,7 @@ import type { BehaviorPackage } from '@almadar/core/behavior-package';
 import { behaviorRegistries, discoverAllBehaviors, walkRegistryBehaviors, type BehaviorRegistry } from '../registry-discovery.js';
 
 function packageAt(root: string, prefix: string): BehaviorPackage {
-  return { name: '@acme/behaviors', version: '1.0.0', root, lock: null, orb: { prefix, source: 'behaviors/lolo', index: 'i', loloContracts: 'c', embeddings: [], compiler: '>=1.0.0' } };
+  return { name: '@acme/behaviors', version: '1.0.0', root, lock: null, orb: { prefix, source: 'behaviors/lolo', compiler: '>=1.0.0' } };
 }
 
 /** A lowered tree in a mirror directory that is NOT under its package root. */
@@ -74,7 +74,7 @@ describe('behaviorRegistries — every installed behavior package', () => {
       mkdirSync(path.join(dir, 'registry'), { recursive: true });
       writeFileSync(
         path.join(dir, 'package.json'),
-        JSON.stringify({ name, version: '1.0.0', orb: { prefix, registry: 'registry', index: 'i.json', loloContracts: 'c.json', embeddings: [], compiler: '>=1.0.0' } }),
+        JSON.stringify({ name, version: '1.0.0', orb: { prefix, registry: 'registry', index: 'i.json', embeddings: [], compiler: '>=1.0.0' } }),
       );
       for (const rel of orbs) {
         mkdirSync(path.join(dir, 'registry', rel, '..'), { recursive: true });
@@ -112,12 +112,12 @@ describe('walkRegistryBehaviors — sourcePath from the package manifest', () =>
     const pkgRoot = path.join(root, 'pkg');
     mkdirSync(path.join(pkgRoot, 'behaviors/lolo/app/atoms'), { recursive: true });
     writeFileSync(path.join(pkgRoot, 'behaviors/lolo/app/atoms/x-list.lolo'), 'app x-list');
-    writeFileSync(path.join(pkgRoot, 'package.json'), JSON.stringify({ name: '@acme/b', version: '1.0.0', orb: { prefix: 'acme', source: 'behaviors/lolo', index: 'i', loloContracts: 'c', embeddings: [], compiler: '>=1.0.0' } }));
+    writeFileSync(path.join(pkgRoot, 'package.json'), JSON.stringify({ name: '@acme/b', version: '1.0.0', orb: { prefix: 'acme', source: 'behaviors/lolo', index: 'i', embeddings: [], compiler: '>=1.0.0' } }));
     const mirror = path.join(root, 'derived', 'registry', 'abc123');
     mkdirSync(path.join(mirror, 'app/atoms'), { recursive: true });
     writeFileSync(path.join(mirror, 'app/atoms/x-list.orb'), '{}');
     writeFileSync(path.join(mirror, 'app/atoms/orphan.orb'), '{}');
-    const pkg = { name: '@acme/b', version: '1.0.0', root: pkgRoot, lock: null, orb: { prefix: 'acme', source: 'behaviors/lolo', index: 'i', loloContracts: 'c', embeddings: [], compiler: '>=1.0.0' } };
+    const pkg = { name: '@acme/b', version: '1.0.0', root: pkgRoot, lock: null, orb: { prefix: 'acme', source: 'behaviors/lolo', index: 'i', embeddings: [], compiler: '>=1.0.0' } };
     const found = [...walkRegistryBehaviors({ pkg, dir: mirror })];
     expect(found.find((b) => b.name === 'x-list')?.sourcePath).toBe(path.join(pkgRoot, 'behaviors/lolo/app/atoms/x-list.lolo'));
     expect(found.find((b) => b.name === 'orphan') && 'sourcePath' in found.find((b) => b.name === 'orphan')!).toBe(false);

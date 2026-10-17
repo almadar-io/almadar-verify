@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EdgeWalkTransition, OrbitalSchema, Trait } from '@almadar/core';
 import { planWalk } from '../plan-walk.js';
+import { conformGuardPayload } from '../internal/payload-synth.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
 import type { EntityFieldDef } from '../../browser/interaction.js';
 
@@ -278,7 +279,7 @@ describe('planWalk', () => {
         event: 'TRY',
         to: 'b',
         hasGuard: true,
-        guard: ['gt', '@payload.qty', 0],
+        guard: ['>', '@payload.qty', 0],
       };
       const trait: TraitWalkConfig = {
         traitName: 'Guarded',
@@ -508,5 +509,253 @@ describe('PF-15(b): fetch-data injection', () => {
     expect((data as ReadonlyArray<Record<string, unknown>>).length).toBeGreaterThan(0);
     expect((data as ReadonlyArray<Record<string, unknown>>)[0]).toHaveProperty('channel');
     expect((data as ReadonlyArray<Record<string, unknown>>)[0]).toHaveProperty('lastMessageAt');
+  });
+});
+
+describe('conformGuardPayload', () => {
+  const schema = [
+    { name: 'hasFile', type: 'boolean', required: true },
+    { name: 'name', type: 'string', required: true },
+    { name: 'row', type: 'object', required: false },
+  ];
+  const mock = { id: 'mock-test-id', name: 'mock-test-name' };
+
+  it('replaces a row-shaped mock on a declared primitive field with the typed satisfying value', () => {
+    const out = conformGuardPayload({ hasFile: mock, name: mock }, schema, { hasFile: false, name: 'ember' });
+    expect(out).toEqual({ hasFile: true, name: 'ember' });
+  });
+
+  it('replaces a null on a declared primitive field with the typed falsy value, since the validator refuses null', () => {
+    const out = conformGuardPayload({ hasFile: null, name: null }, schema, { name: 'ember' });
+    expect(out).toEqual({ hasFile: false, name: '' });
+  });
+
+  it('control: leaves a row on a declared object field, a null on it and already-typed values alone', () => {
+    const out = conformGuardPayload({ hasFile: true, name: 'x', row: mock }, schema, { name: 'ember' });
+    expect(out).toEqual({ hasFile: true, name: 'x', row: mock });
+    expect(conformGuardPayload({ row: null }, schema, {})).toEqual({ row: null });
+  });
+});
+
+describe('planWalk: per-arm guard solving', () => {
+  const replyTrait: TraitWalkConfig = {
+    traitName: 'Fetcher',
+    initialState: 'idle',
+    transitions: [
+      { from: 'idle', event: 'ASK', to: 'choosing', hasGuard: false },
+      { from: 'choosing', event: 'CHOSEN', to: 'done', hasGuard: true, guard: ['and', ['>=', '@payload.status', 200], ['<', '@payload.status', 300]] },
+      { from: 'choosing', event: 'CHOSEN', to: 'rejected', hasGuard: true, guard: ['>=', '@payload.status', 300] },
+      { from: 'choosing', event: 'OTHER', to: 'failed', hasGuard: false },
+    ],
+      };
+
+  it('plans each guarded arm as its own step with a payload that satisfies that arm\'s guard', () => {
+    const steps = planWalk({ trait: replyTrait, includeAutoInit: false });
+    const pass = (to: string) => steps.find((s) => s.event === 'CHOSEN' && s.to === to && s.guardCase === 'pass');
+    const ok = pass('done');
+    const rejected = pass('rejected');
+    expect(ok).toBeDefined();
+    expect(rejected).toBeDefined();
+    const okStatus = Number(ok?.payload.status);
+    const rejectedStatus = Number(rejected?.payload.status);
+    expect(okStatus >= 200 && okStatus < 300).toBe(true);
+    expect(rejectedStatus >= 300).toBe(true);
+  });
+
+  it('credits both disjoint arms as conclusive', () => {
+    const steps = planWalk({ trait: replyTrait, includeAutoInit: false });
+    const passes = steps.filter((s) => s.event === 'CHOSEN' && s.guardCase === 'pass');
+    expect(passes).toHaveLength(2);
+    for (const step of passes) {
+      expect(step.guardSteerable).toBe(true);
+      expect(step.inconclusive).toBeUndefined();
+    }
+  });
+
+  it('reports the later of two overlapping arms as an inconclusive gap, never a pass', () => {
+    const overlapping: TraitWalkConfig = {
+      ...replyTrait,
+      transitions: [
+        replyTrait.transitions[0],
+        { from: 'choosing', event: 'CHOSEN', to: 'done', hasGuard: true, guard: ['>=', '@payload.status', 200] },
+        { from: 'choosing', event: 'CHOSEN', to: 'rejected', hasGuard: true, guard: ['>=', '@payload.status', 300] },
+      ],
+    };
+    const passes = planWalk({ trait: overlapping, includeAutoInit: false }).filter((s) => s.event === 'CHOSEN' && s.guardCase === 'pass');
+    const first = passes.find((s) => s.to === 'done');
+    const second = passes.find((s) => s.to === 'rejected');
+    expect(first?.inconclusive).toBeUndefined();
+    expect(second?.guardSteerable).toBe(false);
+    expect(second?.inconclusive).toContain('passes the earlier arm 0');
+  });
+
+  it('reports an arm whose guard the solved payload cannot satisfy as an inconclusive gap', () => {
+    const unsolvable: TraitWalkConfig = {
+      ...replyTrait,
+      transitions: [
+        replyTrait.transitions[0],
+        { from: 'choosing', event: 'CHOSEN', to: 'done', hasGuard: true, guard: ['and', ['>=', '@payload.status', 300], ['<', '@payload.status', 200]] },
+      ],
+    };
+    const pass = planWalk({ trait: unsolvable, includeAutoInit: false }).find((s) => s.event === 'CHOSEN' && s.guardCase === 'pass');
+    expect(pass?.guardSteerable).toBe(false);
+    expect(pass?.inconclusive).toContain("does not pass this arm's guard");
+  });
+});
+
+describe('planWalk: http routes', () => {
+  const httpTrait: TraitWalkConfig = {
+    traitName: 'Fetcher',
+    initialState: 'idle',
+    transitions: [
+      { from: 'idle', event: 'ASK', to: 'requesting', hasGuard: false },
+      { from: 'requesting', event: 'REPLIED', to: 'done', hasGuard: true, guard: ['and', ['>=', '@payload.status', 200], ['<', '@payload.status', 300]] },
+      { from: 'requesting', event: 'REPLIED', to: 'rejected', hasGuard: true, guard: ['>=', '@payload.status', 300] },
+      { from: 'requesting', event: 'FAILED', to: 'failed', hasGuard: false },
+    ],
+    effectEmittedEvents: new Set(['REPLIED', 'FAILED']),
+    httpReplyEvents: new Set(['REPLIED']),
+    httpFailureEvents: new Set(['FAILED']),
+  };
+
+  it('plans neither the reply arms nor the failure arm as standalone steps', () => {
+    const steps = planWalk({ trait: httpTrait, includeAutoInit: false });
+    expect(steps.map((s) => s.event)).toEqual(['ASK']);
+  });
+
+  it('control: the same trait without http route sets plans every arm', () => {
+    const { httpReplyEvents: _reply, httpFailureEvents: _failure, ...plain } = httpTrait;
+    const events = new Set(planWalk({ trait: plain, includeAutoInit: false }).map((s) => s.event));
+    expect(events).toEqual(new Set(['ASK', 'REPLIED', 'FAILED']));
+  });
+});
+
+describe('planWalk: guard-fail on same-target sibling arms', () => {
+  const trait: TraitWalkConfig = {
+    traitName: 'Gate',
+    initialState: 'idle',
+    transitions: [
+      { from: 'idle', event: 'GO', to: 'idle', hasGuard: true, guard: ['>=', '@payload.n', 5] },
+      { from: 'idle', event: 'GO', to: 'idle', hasGuard: true, guard: ['<', '@payload.n', 5] },
+    ],
+  };
+
+  it('names the target of the sibling arm that catches the failing payload, even when it equals this arm\'s target', () => {
+    const fail = planWalk({ trait, includeAutoInit: false }).find((s) => s.guardCase === 'fail' && s.arm === 0);
+    expect(fail?.guardSiblingTargets).toEqual(['idle']);
+  });
+
+  it('control: a lone guarded arm has no sibling to catch its failing payload', () => {
+    const lone: TraitWalkConfig = { ...trait, transitions: [trait.transitions[0]] };
+    const fail = planWalk({ trait: lone, includeAutoInit: false }).find((s) => s.guardCase === 'fail');
+    expect(fail?.guardSiblingTargets).toBeUndefined();
+  });
+
+  it('reports a fail variant whose payload still passes its own guard as an inconclusive gap, never a prediction', () => {
+    const unfalsifiable: TraitWalkConfig = {
+      ...trait,
+      transitions: [{ from: 'idle', event: 'GO', to: 'idle', hasGuard: true, guard: ['=', ['str/len', '@payload.s'], ['str/len', '@payload.s']] }],
+    };
+    const fail = planWalk({ trait: unfalsifiable, includeAutoInit: false }).find((s) => s.guardCase === 'fail');
+    expect(fail?.guardSteerable).toBe(false);
+    expect(fail?.inconclusive).toContain('does not fail this arm');
+  });
+});
+
+describe('planWalk: json/parse payload fields', () => {
+  const pending = [
+    { name: 'key', type: 'string' },
+    { name: 'size', type: 'number' },
+    { name: 'isPublic', type: 'boolean' },
+  ] as const;
+  const schema: OrbitalSchema = {
+    name: 'parse',
+    orbitals: [{ name: 'O', entity: { name: 'Thing', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] }, types: { Pending: [...pending] }, traits: [], pages: [] }],
+  };
+  const trait: TraitWalkConfig = {
+    traitName: 'Saver',
+    initialState: 'idle',
+    events: [{ key: 'DONE', name: 'Done', payloadSchema: [{ name: 'state', type: 'string', required: true }, { name: 'other', type: 'string', required: true }] }],
+    transitions: [{
+      from: 'idle', event: 'DONE', to: 'idle', hasGuard: false,
+      effects: [['let', [['u', ['json/parse', '@payload.state', 'Pending']]], ['emit', 'SAVED', { key: '@u.key' }]]],
+    }],
+  };
+
+  it('synthesizes a payload field read through json/parse as the JSON text of a minimal instance of its type', () => {
+    const step = planWalk({ trait, orbital: schema, includeAutoInit: false }).find((s) => s.payloadCase === 'success');
+    const state = step?.payload.state;
+    if (typeof state !== 'string') throw new Error('state is not text');
+    const parsed: Record<string, unknown> = JSON.parse(state);
+    expect(typeof parsed.key).toBe('string');
+    expect(parsed.key).not.toBe('');
+    expect(typeof parsed.size).toBe('number');
+    expect(typeof parsed.isPublic).toBe('boolean');
+  });
+
+  it('fills a member of the parsed instance that the arm parses again with an instance of that member\'s own type', () => {
+    const nested: TraitWalkConfig = {
+      ...trait,
+      transitions: [{
+        from: 'idle', event: 'DONE', to: 'idle', hasGuard: false,
+        effects: [['let', [['u', ['json/parse', '@payload.state', 'Pending']]], ['let', [['b', ['json/parse', '@u.batch', 'Pending']]], ['emit', 'SAVED', { key: '@b.key' }]]]],
+      }],
+    };
+    const withBatch: OrbitalSchema = { ...schema, orbitals: [{ ...schema.orbitals[0], types: { Pending: [...pending, { name: 'batch', type: 'string' }] } }] };
+    const step = planWalk({ trait: nested, orbital: withBatch, includeAutoInit: false }).find((s) => s.payloadCase === 'success');
+    const inner = JSON.parse(String(JSON.parse(String(step?.payload.state)).batch));
+    expect(typeof inner.key).toBe('string');
+  });
+
+  it('control: a field not read through json/parse stays plain synthesized text', () => {
+    const step = planWalk({ trait, orbital: schema, includeAutoInit: false }).find((s) => s.payloadCase === 'success');
+    const other = step?.payload.other;
+    expect(typeof other).toBe('string');
+    expect(() => JSON.parse(String(other))).toThrow();
+  });
+});
+
+describe('planWalk: guards over json/parse instances', () => {
+  const schema: OrbitalSchema = {
+    name: 'parse-guards',
+    orbitals: [{
+      name: 'O',
+      entity: { name: 'Thing', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }] },
+      types: {
+        Item: [{ name: 'name', type: 'string' }],
+        Pending: [{ name: 'mode', type: 'string' }, { name: 'key', type: 'string' }],
+        Batch: [{ name: 'items', type: '[Item]' }, { name: 'idx', type: 'number' }],
+      },
+      traits: [],
+      pages: [],
+    }],
+  };
+  const events = [{ key: 'DONE', name: 'Done', payloadSchema: [{ name: 'state', type: 'string', required: true }] }, { key: 'NEXT', name: 'Next', payloadSchema: [{ name: 'batch', type: 'string', required: true }] }];
+
+  it('solves each arm\'s json member from the guard so the arm is walked, not reported inconclusive', () => {
+    const trait: TraitWalkConfig = {
+      traitName: 'Saver', initialState: 'idle', events,
+      transitions: [
+        { from: 'idle', event: 'DONE', to: 'idle', hasGuard: true, guard: ['=', ['object/get', ['json/parse', '@payload.state', 'Pending'], 'mode', 'single'], 'single'] },
+        { from: 'idle', event: 'DONE', to: 'idle', hasGuard: true, guard: ['=', ['object/get', ['json/parse', '@payload.state', 'Pending'], 'mode', 'single'], 'batch'] },
+      ],
+    };
+    const passes = planWalk({ trait, orbital: schema, includeAutoInit: false }).filter((s) => s.event === 'DONE' && s.guardCase === 'pass');
+    expect(passes).toHaveLength(2);
+    expect(passes.map((s) => JSON.parse(String(s.payload.state)).mode)).toEqual(['single', 'batch']);
+    for (const step of passes) expect(step.inconclusive).toBeUndefined();
+  });
+
+  it('solves two members together: an index below the length needs a non-empty array and a zero index', () => {
+    const trait: TraitWalkConfig = {
+      traitName: 'Batcher', initialState: 'idle', events,
+      transitions: [
+        { from: 'idle', event: 'NEXT', to: 'idle', hasGuard: true, guard: ['<', ['object/get', ['json/parse', '@payload.batch', 'Batch'], 'idx', 0], ['array/len', ['object/get', ['json/parse', '@payload.batch', 'Batch'], 'items', []]]] },
+      ],
+    };
+    const pass = planWalk({ trait, orbital: schema, includeAutoInit: false }).find((s) => s.guardCase === 'pass');
+    const batch = JSON.parse(String(pass?.payload.batch));
+    expect(batch.items.length).toBeGreaterThan(batch.idx);
+    expect(pass?.inconclusive).toBeUndefined();
   });
 });
