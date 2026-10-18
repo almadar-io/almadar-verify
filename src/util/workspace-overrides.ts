@@ -11,7 +11,6 @@ import { dirname, join } from 'node:path';
 /** The packages a sandbox always verifies against their workspace builds. */
 export const WORKSPACE_OVERRIDE_ROOTS: readonly string[] = [
   '@almadar/ui',
-  '@almadar/integrations',
   '@almadar/server',
   '@almadar/server-hono',
   '@almadar/runtime',

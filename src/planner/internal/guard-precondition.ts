@@ -285,6 +285,7 @@ function candidateSatisfiesGuard(
   atState: string,
   baseline: Record<string, FieldValue>,
 ): boolean {
+  if (collectBindings(valueExpr).length > 0) return true;
   try {
     const runtimeValue = evaluateValue(valueExpr, {}, {}, atState);
     if (!isFieldValue(runtimeValue)) return true;
@@ -377,6 +378,7 @@ function initEstablishedFields(trait: Trait, fields: ReadonlyArray<string>): Rec
       if (field in out) continue;
       const info = findEntityFieldSet(transition.effects ?? [], field);
       if (!info.sets || info.value === undefined || info.payloadPath !== null) continue;
+      if (collectBindings(info.value).length > 0) continue;
       try {
         const value = evaluateValue(info.value, {}, {}, initial);
         if (isFieldValue(value)) out[field] = value;

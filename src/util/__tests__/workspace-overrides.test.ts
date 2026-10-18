@@ -24,7 +24,7 @@ function fixture() {
   pkg(join(mono, 'packages/almadar-runtime'), '@almadar/runtime', '6.90.0', { '@almadar/std': '^16.228.0', '@almadar/core': '*', lodash: '^4' });
   pkg(join(mono, 'packages/almadar-std'), '@almadar/std', '16.228.0', { '@almadar/core': '*' });
   pkg(join(mono, 'packages/almadar-core'), '@almadar/core', '10.103.0');
-  pkg(join(mono, 'packages/almadar-llm'), '@almadar/llm', '1.0.0', {}, false);
+  pkg(join(mono, 'packages/almadar-fixturelib'), '@almadar/fixturelib', '1.0.0', {}, false);
   const app = join(root, 'app');
   pkg(join(app, 'node_modules/@almadar/runtime'), '@almadar/runtime', '6.89.0');
   pkg(join(app, 'node_modules/@almadar/std'), '@almadar/std', '16.227.0');
@@ -44,7 +44,7 @@ it('the closure follows @almadar dependencies that have a workspace build', () =
 it('edge: a dependency with no workspace build is not part of the closure', () => {
   const { root, mono } = fixture();
   try {
-    pkg(join(mono, 'packages/almadar-runtime'), '@almadar/runtime', '6.90.0', { '@almadar/llm': '*' });
+    pkg(join(mono, 'packages/almadar-runtime'), '@almadar/runtime', '6.90.0', { '@almadar/fixturelib': '*' });
     expect(workspaceOverrideClosure(mono, ['@almadar/runtime'])).toEqual(['@almadar/runtime']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -146,8 +146,8 @@ it('every store copy of a closure member is swapped, including the ones another 
 it('control: a store copy of a package outside the closure is left as installed', () => {
   const { root, mono, app } = fixture();
   try {
-    const other = join(app, 'node_modules/.pnpm/@almadar+llm@0.9.0/node_modules/@almadar/llm');
-    pkg(other, '@almadar/llm', '0.9.0');
+    const other = join(app, 'node_modules/.pnpm/@almadar+fixturelib@0.9.0/node_modules/@almadar/fixturelib');
+    pkg(other, '@almadar/fixturelib', '0.9.0');
     overrideWithWorkspaceBuilds(app, mono, ['@almadar/std']);
     expect(versionOf(other)).toBe('0.9.0');
   } finally { rmSync(root, { recursive: true, force: true }); }

@@ -9,8 +9,8 @@ This repo is one submodule of the Almadar monorepo (natural language → `.orb` 
 - **Path in the monorepo:** `packages/almadar-verify`
 - **Kind:** TypeScript package
 - **Published:** privately, to GitHub Packages as `@almadar-io/verify` (installing it needs a `read:packages` token)
-- **Upstream (this repo imports them):** `@almadar/core`, `@almadar/evaluator`, `@almadar/llm`, `@almadar/logger`, `@almadar/runtime`
-- **Downstream (they import this repo):** `@almadar-io/ljuba`, `@almadar-io/screenshot-tool`, `@almadar-io/verify-tool`, `@almadar-io/converter-tool`, `@almadar-io/runtime-verify-tool`, `@almadar-io/playground-runtime`, `@almadar-io/rabit`, `@almadar-io/orbital-agent-cli`, `@almadar-io/tools`
+- **Upstream (this repo imports them):** `@almadar/core`, `@almadar/db`, `@almadar/logger`, `@almadar/runtime`, `@almadar/std`
+- **Downstream (they import this repo):** `@almadar-io/ljuba`, `@almadar-io/screenshot-tool`, `@almadar-io/runtime-verify-tool`, `@almadar-io/playground-runtime`, `@almadar-io/tools`, `@almadar-io/asset-workflow`, `@almadar-io/extension-verify-tool`
 - **Reference doc (monorepo only):** `docs/Almadar_Verification.md`
 
 ## Check — "done" means this is green
