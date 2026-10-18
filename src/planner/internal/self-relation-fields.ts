@@ -205,7 +205,7 @@ export type PickTargetRowFailureCode = 'no-rows' | 'all-disabled' | 'all-referen
  * `options.isEnabled` (C1-V15 item B): a DOM-driven crud step must target a
  * row whose affordance is actually clickable — a row for which the
  * predicate returns `false` (the affordance's own `disabled` expression
- * evaluated `true` for that row, `tick()`'s job via `@almadar/evaluator`)
+ * evaluated `true` for that row, `tick()`'s job on the kernel's evaluator)
  * is dropped from the candidate set BEFORE the referential-safety check
  * runs. Referential safety itself is unaffected — it is always computed
  * over the full `serverRows` (+ `options.crossEntity`'s rows), an

@@ -1,16 +1,13 @@
 /**
- * The `evaluateGuard` + `executeEffects` hooks that make a
- * {@link playCircuitStep} real, against one mutable entity row, no server.
- * The guard runs on the kernel's evaluator; the effects still run through the
- * JS interpreter (`@almadar/evaluator`'s `executeEffects` semantics), which
- * retires with it. Each evaluation is recorded as it runs, so a guard verdict
- * carries its trace and every `EffectTrace` carries `evalTrace`.
+ * The `evaluateGuard` + `executeEffects` hooks that make a {@link playCircuitStep} real, against one mutable entity
+ * row, no server. Both run on the kernel's evaluator: the guard through `evaluateGuards`, the effects through
+ * `traceEffects`, which writes the row and raises events as `set` and `emit` do and reports an effect it has no host
+ * for as `skipped`. Each evaluation is recorded as it runs, so a guard verdict carries its trace and every
+ * `EffectTrace` carries `evalTrace`.
  */
 
-import type { Effect, EffectTrace, EntityRow, EvalTrace, EventPayload, RuntimeValue, SExpr, TraitConfig } from '@almadar/core';
-import { isEventPayloadValue, kernelEvaluator, toWireValue } from '@almadar/core';
-import { createEffectContext, createMinimalContext, evaluateTraced } from '@almadar/evaluator';
-import type { EvaluationContext } from '@almadar/evaluator';
+import type { Effect, EffectTrace, EntityRow, EvalTrace, EventPayload, SExpr, TraitConfig } from '@almadar/core';
+import { eventPayloadOf, kernelEvaluator, toWireValue } from '@almadar/core';
 import type { EvalContextWire } from '@almadar/core/kernel-wire';
 
 export interface GuardVerdict {
@@ -33,62 +30,34 @@ export interface CircuitHooks {
  * guard sees the entity exactly as given (before this step's effects run).
  */
 export function createCircuitHooks(entityRow: EntityRow, fromState: string, config?: TraitConfig): CircuitHooks {
-  const baseContext = (payload: EventPayload): EvaluationContext => {
-    const ctx = createMinimalContext(entityRow, payload, fromState);
-    if (config) ctx.config = config;
-    return ctx;
-  };
+  const contextFor = (payload: EventPayload, entity: EntityRow): EvalContextWire => ({
+    entity: toWireValue(entity),
+    payload: toWireValue(payload),
+    state: fromState,
+    ...(config ? { config: toWireValue(config) } : {}),
+  });
   return {
     evaluateGuard: (guard, ctx) => {
       const kernel = kernelEvaluator();
-      const context: EvalContextWire = {
-        entity: toWireValue(entityRow),
-        payload: toWireValue(ctx.payload),
-        state: fromState,
-        ...(config ? { config: toWireValue(config) } : {}),
-      };
+      const context = contextFor(ctx.payload, entityRow);
       const run = kernel.evaluateTraced(context, guard);
       if (run.outcome.kind === 'error') return { passed: false, trace: run.trace, error: run.outcome.message };
       const [verdict] = kernel.evaluateGuards(context, [guard]);
       return { passed: verdict.kind === 'value' && verdict.value, trace: run.trace };
     },
     executeEffects: (effects, ctx) => {
-      const emitted: Array<{ event: string; payload?: EventPayload }> = [];
-      const effectCtx = createEffectContext(baseContext(ctx.payload), {
-        mutateEntity: (changes) => Object.assign(entityRow, changes),
-        emit: (event, payload) => {
-          emitted.push({ event, payload: toEventPayload(payload) });
-        },
-      });
-      const traces: EffectTrace[] = effects.map((effect) => {
-        const type = effectKind(effect);
-        const args = effectArgs(effect);
-        // Every `Effect` variant is an S-expression at runtime; its variadic tuple arms are not structurally `SExpr` to TS.
-        const run = evaluateTraced(effect as SExpr, effectCtx);
-        return run.error !== undefined
-          ? { type, args, status: 'failed', error: run.error, evalTrace: run.trace }
-          : { type, args, status: 'executed', evalTrace: run.trace };
-      });
+      // Every `Effect` variant is an S-expression at runtime; its variadic tuple arms are not structurally `SExpr` to TS.
+      const run = kernelEvaluator().traceEffects(contextFor(ctx.payload, entityRow), effects as SExpr[]);
+      for (const { field, value } of run.writes) Object.assign(entityRow, { [field]: value });
+      const traces: EffectTrace[] = run.effects.map((trace) => ({
+        type: trace.type,
+        args: trace.args,
+        status: trace.status,
+        ...(trace.error !== undefined ? { error: trace.error } : {}),
+        ...(trace.evalTrace !== undefined ? { evalTrace: trace.evalTrace } : {}),
+      }));
+      const emitted = run.emitted.map(({ event, payload }) => ({ event, payload: eventPayloadOf(payload) }));
       return { effects: traces, emitted };
     },
   };
-}
-
-/** The effect's operator head (`["set", ...]` → `"set"`), or `"unknown"` for a non-tuple effect. */
-function effectKind(effect: Effect): string {
-  return Array.isArray(effect) && typeof effect[0] === 'string' ? effect[0] : 'unknown';
-}
-
-/** The effect tuple's trailing args, for `EffectTrace.args`. */
-function effectArgs(effect: Effect): SExpr[] {
-  return Array.isArray(effect) ? (effect.slice(1) as SExpr[]) : [];
-}
-
-/** An `emit` payload narrowed to `EventPayload`; a non-object result reports no payload. */
-function toEventPayload(value: RuntimeValue | undefined): EventPayload | undefined {
-  return value !== undefined && isEventPayloadObject(value) ? value : undefined;
-}
-
-function isEventPayloadObject(value: RuntimeValue): value is EventPayload {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date) && isEventPayloadValue(value);
 }

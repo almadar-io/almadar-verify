@@ -571,7 +571,7 @@ export interface ExtendedWalkStep extends WalkStep {
    * (`disabled={(if (and (= ?data.status resolved) (not ?data.csatScore))
    * false true)}`); clicking it while disabled is a structural no-op (DOM
    * ✓, cascade ✗). `tick()`'s row resolution evaluates this per candidate
-   * row (`@almadar/evaluator`, the same evaluator the runtime uses) and
+   * row (the kernel's evaluator, the one the runtime runs) and
    * excludes any row for which it evaluates `true` — no candidate left
    * closes the frame with `no-target-row` naming the reason, instead of
    * clicking a row the affordance would silently ignore. Undefined means

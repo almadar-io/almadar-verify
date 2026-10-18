@@ -7,7 +7,7 @@
  * almadar-tools `play_transition` MCP probe and the eval-spec circuit
  * helpers (`tools/orbital-agent-cli/src/evals/specs/_helpers/`). Guard
  * truth is the CALLER's business: pass `evaluateGuard` (typically closing
- * over `@almadar/evaluator`'s `evaluateGuard` with `@payload`/`@entity`/
+ * over the kernel evaluator's `evaluateGuard` with `@payload`/`@entity`/
  * `@config` bindings) and the result's `guard` verdict is real; omit it
  * and dispatch is unconditional (`guard: 'none'`), matching
  * {@link createFakeDriver}'s default.

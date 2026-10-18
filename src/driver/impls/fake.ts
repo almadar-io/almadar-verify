@@ -56,7 +56,7 @@ export interface FakeDriverOptions {
    * (`WalkTransition.effects`), `FakeRuntime.dispatch` calls this with
    * the arm's effect list and the current dispatch's
    * `{traitName, event, payload, persona}` — the caller runs them for real
-   * (typically via `@almadar/evaluator`'s `executeEffect` fed a
+   * (typically via the kernel evaluator's `traceEffects` fed a
    * `mutateEntity`/`emit`-backed context) and returns the resulting
    * `EffectTrace[]` plus any bus events the effects emitted. `ctx.persona`
    * (C1-V9 item A) is `FakeRuntime`'s CURRENT persona at dispatch time —

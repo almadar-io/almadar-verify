@@ -23,7 +23,7 @@
 
 import { collectBindings, isFieldValue } from '@almadar/core';
 import type { Effect, EventPayload, FieldValue, OrbitalSchema, SExpr, Trait, Transition } from '@almadar/core';
-import { createMinimalContext, evaluate, evaluateGuard } from '@almadar/evaluator';
+import { evaluateValue, guardPasses } from './kernel-eval.js';
 import { eachInlineTrait, findInitialState } from './orbital-walk.js';
 import { collectEffectEmittedEvents } from './effect-emits.js';
 import { findPersistKind } from './persist-binding.js';
@@ -255,8 +255,8 @@ export function findFieldSettingCandidates(
 
 /**
  * Pick the first candidate whose written value would satisfy the guarded
- * transition's guard, evaluated with the SAME `@almadar/evaluator` the
- * runtime uses. A candidate whose value can't be resolved to a concrete
+ * transition's guard, evaluated on the kernel's evaluator, the one the
+ * runtime runs. A candidate whose value can't be resolved to a concrete
  * `FieldValue` (a `@payload.<x>` reference with no real payload at plan
  * time, or an evaluator error) is KEPT rather than discarded — the same
  * fail-open doctrine `tick.ts`'s `buildAffordanceEnabledFilter` applies to
@@ -286,10 +286,9 @@ function candidateSatisfiesGuard(
   baseline: Record<string, FieldValue>,
 ): boolean {
   try {
-    const runtimeValue = evaluate(valueExpr, createMinimalContext({}, {}, atState));
+    const runtimeValue = evaluateValue(valueExpr, {}, {}, atState);
     if (!isFieldValue(runtimeValue)) return true;
-    const ctx = createMinimalContext({ ...baseline, [field]: runtimeValue }, {}, atState);
-    return evaluateGuard(guard, ctx) === true;
+    return guardPasses(guard, { ...baseline, [field]: runtimeValue }, {}, atState);
   } catch {
     return true;
   }
@@ -328,7 +327,7 @@ function sameTraitSetterSatisfies(
 
 function guardHolds(guard: SExpr, fields: Record<string, FieldValue>, atState: string, payload: EventPayload = {}): boolean {
   try {
-    return evaluateGuard(guard, createMinimalContext(fields, payload, atState)) === true;
+    return guardPasses(guard, fields, payload, atState);
   } catch {
     return false;
   }
@@ -379,7 +378,7 @@ function initEstablishedFields(trait: Trait, fields: ReadonlyArray<string>): Rec
       const info = findEntityFieldSet(transition.effects ?? [], field);
       if (!info.sets || info.value === undefined || info.payloadPath !== null) continue;
       try {
-        const value = evaluate(info.value, createMinimalContext({}, {}, initial));
+        const value = evaluateValue(info.value, {}, {}, initial);
         if (isFieldValue(value)) out[field] = value;
       } catch {
         // a non-literal boot value establishes nothing we can evaluate

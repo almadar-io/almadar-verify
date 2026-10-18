@@ -324,6 +324,69 @@ function roleOnlyPersistCreateApp(createPolicy: SExpr): OrbitalSchema {
   };
 }
 
+function throwingEffectApp(failing: boolean): OrbitalSchema {
+  const value: SExpr = failing ? ['str/concat', 'a', ['array/first', ['array/of', 1]]] : ['str/concat', 'a', 'b'];
+  return {
+    name: 'FailingEffectApp',
+    orbitals: [
+      {
+        name: 'FailingEffectOrbital',
+        entity: { name: 'Item', persistence: 'runtime', fields: [{ name: 'id', type: 'string' }, { name: 'name', type: 'string' }] },
+        traits: [
+          {
+            name: 'Source',
+            scope: 'instance',
+            linkedEntity: 'Item',
+            stateMachine: {
+              states: [{ name: 'idle', isInitial: true }],
+              events: [{ key: 'GO', name: 'Go' }],
+              transitions: [{ from: 'idle', to: 'idle', event: 'GO', effects: [['set', '@entity.name', value], ['emit', 'DONE', {}]] }],
+            },
+            emits: [{ event: 'DONE', scope: 'external' }],
+          },
+          {
+            name: 'Listener',
+            scope: 'instance',
+            linkedEntity: 'Item',
+            stateMachine: {
+              states: [{ name: 'active', isInitial: true }],
+              events: [{ key: 'RECEIVED', name: 'Received' }],
+              transitions: [{ from: 'active', to: 'active', event: 'RECEIVED', effects: [['emit', 'SEEN', {}]] }],
+            },
+            emits: [{ event: 'SEEN', scope: 'external' }],
+            listens: [{ event: 'DONE', triggers: 'RECEIVED', scope: 'external', source: { kind: 'trait', trait: 'Source' } }],
+          },
+        ],
+        pages: [],
+      },
+    ],
+  };
+}
+
+describe('probeListenCascades — a thrown effect is named, never "unknown reason" (G-RUNTIME-VERIFY-021)', () => {
+  it('names the effect failure the runtime reported in rejections', async () => {
+    const schema = throwingEffectApp(true);
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain('effect failed');
+    expect(result.findings[0]?.message).not.toContain('unknown reason');
+  });
+
+  it('control: the same fixture with a healthy effect reports no finding', async () => {
+    const schema = throwingEffectApp(false);
+    const persistence = new InMemoryPersistence();
+    const runtime = new OrbitalServerRuntime({ debug: false, persistence });
+    await runtime.register(schema);
+
+    const result = await probeListenCascades(runtime, schema, persistence);
+    expect(result.findings).toEqual([]);
+  });
+});
+
 describe('probeListenCascades — role-only persist policy (B4-V5)', () => {
   it('synthesizes an approver viewer for the dispatch and reports 0 findings', async () => {
     const schema = roleOnlyPersistCreateApp(['=', '@user.role', 'approver']);

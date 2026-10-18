@@ -17,7 +17,7 @@
 
 import type { Effect, EntityRow, OrbitalSchema, EventPayload, FieldProjection, PayloadField, SExpr } from '@almadar/core';
 import { isEntityReference, isEntityCall, payloadTypeContainer } from '@almadar/core';
-import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
+import { guardPasses } from './kernel-eval.js';
 import { buildMinimalPayload, type EntityFieldDef, type PayloadFieldSpec } from '../../browser/interaction.js';
 
 /**
@@ -212,7 +212,7 @@ export function solveJsonParseFields(
     const next: EventPayload = { ...payload };
     for (const [field, instance] of Object.entries(candidate)) next[field] = JSON.stringify(instance);
     try {
-      return evaluateGuard(guard, createMinimalContext({}, next, state)) === wantPass;
+      return guardPasses(guard, {}, next, state) === wantPass;
     } catch {
       return false;
     }

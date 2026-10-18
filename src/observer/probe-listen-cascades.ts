@@ -683,15 +683,18 @@ export async function probeListenCascades(
             // isn't even present.
             const deniedEffect = response.effectResults?.find((e) => e.denied === true);
             const failedEffect = response.effectResults?.find((e) => e.success === false && e.denied !== true);
+            const failedDispatch = response.rejections?.find((r) => r.code === 'effect-failed');
             const cause = deniedEffect !== undefined
               ? `denied by access policy (${deniedEffect.entityType ?? persistTarget?.entity ?? 'entity'}${deniedEffect.action !== undefined ? ` ${deniedEffect.action}` : ''})`
               : failedEffect !== undefined
                 ? `failed: ${failedEffect.error ?? 'effect did not succeed'}`
-                : response.error !== undefined
-                  ? response.error
-                  : transition.guard !== undefined && transition.guard !== null
-                    ? 'guard rejected the synthesized payload'
-                    : 'the transition did not fire for an unknown reason (no guard declared, no reported effect failure)';
+                : failedDispatch !== undefined
+                  ? `effect failed: ${failedDispatch.error ?? 'the runtime reported no message'}`
+                  : response.error !== undefined
+                    ? response.error
+                    : transition.guard !== undefined && transition.guard !== null
+                      ? 'guard rejected the synthesized payload'
+                      : 'the transition did not fire for an unknown reason (no guard declared, no reported effect failure)';
             findings.push({
               check: 'listen-source-cannot-emit',
               severity: 'error',

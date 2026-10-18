@@ -25,8 +25,7 @@
  * guessed from the affordance's NAME, always read off the declared tree.
  *
  * Pure. No `Page`, no driver, no evaluator (evaluation itself is
- * `tick()`'s job — the one place that already imports `@almadar/evaluator`
- * for guard truth).
+ * `tick()`'s job, on the kernel's evaluator).
  *
  * @packageDocumentation
  */

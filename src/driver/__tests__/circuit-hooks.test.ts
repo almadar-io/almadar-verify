@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { EntityRow, EvalTrace, RuntimeValue, SExpr } from '@almadar/core';
-import { createMinimalContext, evaluate } from '@almadar/evaluator';
+import { kernelEvaluator, toWireValue } from '@almadar/core';
 import { createCircuitHooks } from '../circuit-hooks.js';
 import { playCircuitStep } from '../play-step.js';
 import type { TraitWalkConfig } from '../../engine/types.js';
@@ -124,9 +124,8 @@ describe('createCircuitHooks + playCircuitStep — a real, traced circuit step',
   it('parity: the traced guard verdict equals the plain evaluator on the same bindings', () => {
     const hooks = createCircuitHooks(row(), 'NORMAL', { insertKey: 'i' });
     for (const key of ['i', 'x']) {
-      const ctx = createMinimalContext(row(), { key }, 'NORMAL');
-      ctx.config = { insertKey: 'i' };
-      expect(hooks.evaluateGuard(GUARD, { traitName: 'Modes', event: 'KEY', payload: { key } }).passed).toBe(Boolean(evaluate(GUARD, ctx)));
+      const plain = kernelEvaluator().evaluate({ entity: toWireValue(row()), payload: toWireValue({ key }), state: 'NORMAL', config: toWireValue({ insertKey: 'i' }) }, GUARD);
+      expect(hooks.evaluateGuard(GUARD, { traitName: 'Modes', event: 'KEY', payload: { key } }).passed).toBe(Boolean(plain));
     }
   });
 });

@@ -758,7 +758,8 @@ export async function runVerification<Ctx extends DriverContext>(
       const frame: Frame = await tick(input.driver, ctx, prev, withProjectedPayload(seededStep, traitsByName), orbitalsByTrait, allowStateless, defaultPersona);
       frames.push(frame);
       const status = frame.accepted ? 'OK' : 'REJECTED';
-      log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}`);
+      const rejectedDetail = frame.accepted ? '' : ` | payload ${JSON.stringify(frame.payload)}, state ${frame.stateBefore} -> ${frame.stateAfter}, effects ${JSON.stringify(frame.effectResults)}, server ${JSON.stringify(frame.serverResponse)}${frame.errors !== undefined && frame.errors.length > 0 ? `, errors: ${frame.errors.join('; ')}` : ''}`;
+      log(`  [${stepIdx + 1}/${plan.length}] ${step.from} --${step.event}--> ${step.to} | ${status}${rejectedDetail}`);
       prev = frame;
       stepIdx += 1;
 
