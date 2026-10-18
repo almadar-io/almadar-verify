@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { OrbitalSchema, Trait } from '@almadar/core';
 import type { Effect, PayloadField } from '@almadar/core';
@@ -15,11 +15,7 @@ import {
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..', '..');
 
-/** `preprocessSchema` (`@almadar/runtime`'s `UsesIntegration.ts`) wraps a
- * resolved trait carrying `config`/`linkedEntity` into `{ref, config,
- * linkedEntity, _resolved: Trait}` rather than the bare inline shape —
- * unwrap it, same convention as the runtime package's own corpus-parity
- * tests. */
+/** A resolved trait is inline, or a `{ref, _resolved: Trait}` wrapper: unwrap it. */
 function asResolvedTrait(t: unknown): Trait | undefined {
   if (typeof t !== 'object' || t === null) return undefined;
   if ('stateMachine' in t) return t as Trait;
@@ -266,10 +262,7 @@ describe('findPersistWholeRowField / isWholeRowField convergence (C1-J3, item B)
    * delete `payloadRowShape` used to be two independent detectors reading
    * `PayloadField.entity` differently — this proves they now AGREE on the
    * real `std-notes.orb` corpus shape: `NoteDelete.DELETE`'s `row` field,
-   * resolved via `@almadar/runtime`'s `preprocessSchema` (the runtime
-   * path — `orbital resolve`, the compiled path, stamps the same marker
-   * on this field too, verified separately by hand while diagnosing item
-   * B). Skips (not fails) when the registry file isn't on this checkout.
+   * resolved by `orb resolve`. Skips (not fails) when the registry file isn't on this checkout.
    */
   it("std-notes' NoteDelete.DELETE row field: both detectors agree it is Note's whole row", async () => {
     const registryPath = join(
@@ -278,17 +271,10 @@ describe('findPersistWholeRowField / isWholeRowField convergence (C1-J3, item B)
     );
     if (!existsSync(registryPath)) return;
 
-    const { preprocessSchema } = await import('@almadar/runtime');
-    const schemaJson = JSON.parse(readFileSync(registryPath, 'utf-8')) as OrbitalSchema;
-    const result = await preprocessSchema(schemaJson, {
-      basePath: join(REPO_ROOT, 'packages/almadar-behaviors'),
-      stdLibPath: join(REPO_ROOT, 'packages/almadar-std'),
-      allowOutsideBasePath: true,
-    });
-    expect(result.success).toBe(true);
-    if (!result.success) return;
+    const { programResolve } = await import('@almadar/runtime/hostNode');
+    const resolved = await programResolve(registryPath, { cwd: REPO_ROOT });
 
-    const noteDelete = result.data.schema.orbitals
+    const noteDelete = resolved.orbitals
       .flatMap((o) => o.traits)
       .map(asResolvedTrait)
       .find((t): t is Trait => t !== undefined && t.name === 'NoteDelete');
