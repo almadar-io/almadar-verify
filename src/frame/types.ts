@@ -99,6 +99,8 @@ export interface FrameCause {
    * verbatim. See that field's doc.
    */
   verifiesPortalFor?: { traitName: string; from: string; event: string; to: string };
+  /** The roster persona a step an access policy refused was walked as, and admitted (G-ORBITAL-SHELL-TYPESCRIPT-026). */
+  admittedPersona?: string;
   /**
    * I-23: set when the kernel deliberately SKIPPED the bare bus fallback
    * because the step's open event requires payload fields a `{}` dispatch

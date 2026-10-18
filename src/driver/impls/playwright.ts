@@ -90,6 +90,8 @@ export interface PlaywrightBridge {
    * dispatch. No generic default, same reasoning as `getPersona`.
    */
   setPersona?(page: Page, persona: RawUserClaims | null): Promise<void>;
+  /** The app's persona roster, for walking a refused step as each persona (`Driver.listPersonas`). */
+  listPersonas?(page: Page): Promise<RawUserClaims[]>;
   /**
    * C1-V12: the FULL row set for `entityName` in the runtime's
    * server-truth mock store — no generic default (a page has no standard
@@ -201,6 +203,9 @@ export function createPlaywrightDriver(
   }
   if (bridge.listEntityRows !== undefined) {
     driver.listEntityRows = async (ctx, entityName) => bridge.listEntityRows!(ctx.page, entityName);
+  }
+  if (bridge.listPersonas !== undefined) {
+    driver.listPersonas = async (ctx) => bridge.listPersonas!(ctx.page);
   }
 
   return driver;

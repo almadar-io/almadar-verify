@@ -171,6 +171,12 @@ export interface Driver<Ctx extends DriverContext = DriverContext> {
   setPersona?(ctx: Ctx, persona: RawUserClaims | null): Promise<void>;
 
   /**
+   * The app's persona roster. `tick()` walks a step an access policy refuses as each other persona in turn until one
+   * is admitted (G-ORBITAL-SHELL-TYPESCRIPT-026). Optional: a driver that cannot list personas sends the step once.
+   */
+  listPersonas?(ctx: Ctx): Promise<RawUserClaims[]>;
+
+  /**
    * C1-V12 (rung 3): the FULL row set for `entityName` in the runtime's
    * server-truth store — never the browser's rendered/fetched subset
    * `entitiesFromPrev` derives from the previous frame's snapshot. `tick()`

@@ -24,7 +24,7 @@
  * @packageDocumentation
  */
 
-import type { EntityData, EntityRow, EventPayload, FieldValue, RawUserClaims, ServerResponseTrace } from '@almadar/core';
+import type { EffectTrace, EntityData, EntityRow, EventPayload, FieldValue, RawUserClaims, ServerResponseTrace } from '@almadar/core';
 import { collectBindings, kernelEvaluator, toWireValue } from '@almadar/core';
 import type { EvalContextWire } from '@almadar/core/kernel-wire';
 import { makeInitFrame, makeWalkFrame } from '../frame/factory.js';
@@ -484,8 +484,31 @@ export async function tick<Ctx extends DriverContext>(
   }
 
   await driver.settle(ctx);
-  const stateAfter = await driver.getState(ctx, step.traitName);
-  const snap = await driver.snapshot(ctx, step);
+  let stateAfter = await driver.getState(ctx, step.traitName);
+  let snap = await driver.snapshot(ctx, step);
+
+  // A step an access policy refused is walked as each other roster persona until one is admitted: the refusal of a
+  // persona the policy excludes is expected, the step is covered by the persona it admits.
+  let admittedPersona: string | undefined;
+  if (dispatchSent && unreachableRow === undefined && refusedByPolicy(snap.effectResults)
+    && driver.listPersonas !== undefined && driver.setPersona !== undefined) {
+    const current = driver.getPersona !== undefined ? await driver.getPersona(ctx) : defaultPersona ?? null;
+    for (const persona of await driver.listPersonas(ctx)) {
+      if (persona.id !== undefined && persona.id === current?.id) continue;
+      await driver.setPersona(ctx, persona);
+      personaSwitched = true;
+      const send = await driver.sendEvent(ctx, step.event, asEventPayload(step.payload), traitScope);
+      serverResponse = send.serverResponse;
+      dispatchSent = send.sent;
+      await driver.settle(ctx);
+      stateAfter = await driver.getState(ctx, step.traitName);
+      snap = await driver.snapshot(ctx, step);
+      if (!refusedByPolicy(snap.effectResults)) {
+        admittedPersona = persona.id;
+        break;
+      }
+    }
+  }
 
   // C1-V9 item A: restore the app's own default persona AFTER the
   // snapshot (which must reflect what THIS step produced under the
@@ -515,7 +538,7 @@ export async function tick<Ctx extends DriverContext>(
     ...(errors.length > 0 && { errors }),
     index,
     timestamp,
-    cause: domFellBackToBus
+    cause: admittedPersona !== undefined ? { ...cause, admittedPersona } : domFellBackToBus
       ? { ...cause, triggerKind: 'bus' }
       : bareDispatchSkip !== undefined
         ? { ...cause, bareDispatchSkipped: bareDispatchSkip }
@@ -539,6 +562,11 @@ export async function tick<Ctx extends DriverContext>(
 }
 
 // ── internal ─────────────────────────────────────────────────────────
+
+/** Whether an access policy refused one of the step's writes (`EffectTrace.outcome`). */
+function refusedByPolicy(effects: ReadonlyArray<EffectTrace>): boolean {
+  return effects.some((effect) => effect.outcome === 'denied');
+}
 
 /**
  * `WalkStep.payload` is typed `Record<string, unknown>` in @almadar/core
