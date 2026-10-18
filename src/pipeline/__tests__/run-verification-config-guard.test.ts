@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -57,7 +58,7 @@ describe('runVerification — config-bound guard (std-data-erasure/std-mod-queue
     const { driver, runtime } = createFakeDriver(traits);
 
     const result = await runVerification({
-      itemName: 'std-data-erasure',
+      itemName: 'std-data-erasure', kernel: testKernel,
       orbital: erasureLikeOrbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -131,7 +132,7 @@ describe('runVerification — config-bound guard (std-data-erasure/std-mod-queue
     // This is the precise shape the checker must still skip.
 
     const result = await runVerification({
-      itemName: 'std-mod-queue',
+      itemName: 'std-mod-queue', kernel: testKernel,
       orbital: constFoldedOrbital,
       driver,
       ctx: { outputDir: '', runtime },

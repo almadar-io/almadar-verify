@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { OrbitalServerRuntime } from '@almadar/runtime/OrbitalServerRuntime';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 import { probeListenCascades } from '../../observer/probe-listen-cascades.js';
@@ -79,7 +80,7 @@ describe('runVerification — trait scope (options.traits)', () => {
     const ctx = { outputDir: '', runtime };
 
     const result = await runVerification({
-      itemName: 'trait-scope-fixture',
+      itemName: 'trait-scope-fixture', kernel: testKernel,
       orbital: twoTraits,
       driver,
       ctx,
@@ -99,7 +100,7 @@ describe('runVerification — trait scope (options.traits)', () => {
     const ctx = { outputDir: '', runtime };
 
     const result = await runVerification({
-      itemName: 'trait-scope-fixture',
+      itemName: 'trait-scope-fixture', kernel: testKernel,
       orbital: twoTraits,
       driver,
       ctx,
@@ -119,7 +120,7 @@ describe('runVerification — trait scope (options.traits)', () => {
 
     await expect(
       runVerification({
-        itemName: 'trait-scope-fixture',
+        itemName: 'trait-scope-fixture', kernel: testKernel,
         orbital: twoTraits,
         driver,
         ctx,
@@ -134,7 +135,7 @@ describe('runVerification — trait scope (options.traits)', () => {
     const ctx = { outputDir: '', runtime };
 
     const result = await runVerification({
-      itemName: 'trait-scope-fixture',
+      itemName: 'trait-scope-fixture', kernel: testKernel,
       orbital: twoTraits,
       driver,
       ctx,

@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EffectTrace, OrbitalSchema, Trait } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 const taskLifecycleTrait: Trait = {
@@ -213,7 +214,7 @@ describe('runVerification — guard-precondition preamble replays to a non-initi
     };
 
     const result = await runVerification({
-      itemName: 'thread-establish-at-state-fixture',
+      itemName: 'thread-establish-at-state-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -305,7 +306,7 @@ describe('runVerification — beforeReplay establish-row preamble (C1-V14, F4)',
     });
 
     const result = await runVerification({
-      itemName: 'pf-establish-before-replay-fixture',
+      itemName: 'pf-establish-before-replay-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

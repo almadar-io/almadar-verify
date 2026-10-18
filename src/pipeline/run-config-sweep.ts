@@ -11,10 +11,12 @@
 
 import type { OrbitalSchema, DeclaredTraitConfig, TraitConfig } from '@almadar/core';
 import type { Driver, DriverContext } from '../driver/types.js';
-import { enumerateConfigVariants } from '../planner/enumerate-config-variants.js';
+import type { KernelPlanner } from '../kernel/kernel-planner.js';
 
 export interface ConfigSweepInput<Ctx extends DriverContext> {
   readonly orbital: OrbitalSchema;
+  /** The kernel plans the variants: the values each knob declares. */
+  readonly kernel: KernelPlanner;
   readonly driver: Driver<Ctx>;
   readonly ctx: Ctx;
   /** Trait to sweep. Defaults to the first trait with a non-empty declared config. */
@@ -55,7 +57,7 @@ function findSweepTrait(
 export async function runConfigSweep<Ctx extends DriverContext>(
   input: ConfigSweepInput<Ctx>,
 ): Promise<ConfigSweepResult> {
-  const { orbital, driver, ctx, traitName, maxVariants = 24, log } = input;
+  const { orbital, kernel, driver, ctx, traitName, maxVariants = 24, log } = input;
 
   const target = findSweepTrait(orbital, traitName);
   if (target === null) {
@@ -67,7 +69,11 @@ export async function runConfigSweep<Ctx extends DriverContext>(
     return { traitName: target.name, variants: [] };
   }
 
-  const all = enumerateConfigVariants(target.config);
+  const sweep = (await kernel.plan(orbital)).configVariants.find((c) => c.trait === target.name);
+  const all = sweep?.variants ?? [];
+  if (sweep !== undefined && sweep.noDeclaredValues.length > 0) {
+    log?.(`config sweep: no declared values for ${sweep.noDeclaredValues.join(', ')} (kept at their defaults)`);
+  }
   const variants = all.slice(0, maxVariants);
   if (all.length > variants.length) {
     log?.(`config sweep: capped ${all.length} variants to ${variants.length}`);

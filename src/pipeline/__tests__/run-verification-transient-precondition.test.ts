@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -63,7 +64,7 @@ async function run(orbital: OrbitalSchema) {
     if (event === 'LISTED') runtime.setState(ctx.trait.traitName, 'idle');
     return result;
   };
-  return runVerification({ itemName: 'std-calendar-sync-fixture', orbital, driver, ctx: { outputDir: '', runtime }, options });
+  return runVerification({ itemName: 'std-calendar-sync-fixture', kernel: testKernel, orbital, driver, ctx: { outputDir: '', runtime }, options });
 }
 
 const pullNextFromIdle = (frames: ReadonlyArray<{ cause: { event: string; triggerKind?: string }; stateBefore: string | null }>) =>

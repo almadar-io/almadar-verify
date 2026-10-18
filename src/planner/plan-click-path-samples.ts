@@ -18,61 +18,49 @@
 import type { Effect, OrbitalSchema, SExpr } from '@almadar/core';
 import { isInlineTrait } from '@almadar/core';
 import type { ExtendedWalkStep } from './types.js';
-import { dispatchNavigates, findInitialState } from './internal/orbital-walk.js';
-import { collectEntityFields } from './internal/payload-synth.js';
-import { planGuardPreconditionPreamble } from './internal/guard-precondition.js';
+import { findInitialState } from './internal/orbital-walk.js';
+import { establishFromPrecondition } from '../kernel/adapt.js';
+import type { KernelPlanner } from '../kernel/kernel-planner.js';
 
-export function planClickPathSamples(orbital: OrbitalSchema): ExtendedWalkStep[] {
+/**
+ * The browser half of click-path sampling: find the buttons the render tree mounts (each `action: "EVENT"` in a
+ * state's `render-ui`), then ask the kernel what clicking each one does: where the machine lands, whether the page
+ * navigates, and the preamble a guarded affordance needs.
+ */
+export async function planClickPathSamples(kernel: KernelPlanner, orbital: OrbitalSchema): Promise<ExtendedWalkStep[]> {
   const result: ExtendedWalkStep[] = [];
   const seen = new Set<string>();
-  const entityFieldsByName = collectEntityFields(orbital);
 
   for (const orb of orbital.orbitals) {
     for (const traitRef of orb.traits ?? []) {
       if (!isInlineTrait(traitRef)) continue;
       const trait = traitRef;
       if (trait.stateMachine === undefined) continue;
-      const initial = findInitialState(trait.stateMachine);
-      if (initial === null) continue;
+      if (findInitialState(trait.stateMachine) === null) continue;
 
-      const sites = collectRenderSites(trait);
-      for (const site of sites) {
+      for (const site of collectRenderSites(trait)) {
         const dedupeKey = `${trait.name}::${site.slot}::${site.event}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
 
-        // The step must start from the state whose render-ui actually
-        // mounts the button (`site.state` = the `to` of the transition
-        // carrying the render effect). Stamping `initial` dispatched
-        // e.g. CANCEL while the dialog was still closed — the button was
-        // never visible, the bus fallback fired an event with no
-        // transition from `idle`, and VG3 reported a spurious dead key.
-        const target = findTransitionTarget(trait, site.state, site.event) ?? site.state;
-        const step: ExtendedWalkStep = {
-          from: site.state,
-          event: site.event,
-          to: target,
+        // The step starts from the state whose render-ui mounts the button (`site.state`): a click while the dialog
+        // is still closed finds no button and reports a spurious dead key.
+        const affordance = await kernel.affordance(orbital, { trait: trait.name, from: site.state, event: site.event });
+        if (affordance === null) continue;
+        result.push({
+          from: affordance.from,
+          event: affordance.event,
+          to: affordance.to,
           guardCase: null,
           payload: {},
           isRepositioning: false,
-          traitName: trait.name,
+          traitName: affordance.trait,
           triggerKind: 'dom',
-          coverageKey: `${trait.name}:${site.state}+${site.event}->${target}[click-path:${site.slot}]`,
+          coverageKey: affordance.coverageKey.replace(/\[affordance\]$/, `[click-path:${site.slot}]`),
           testKind: 'click-path',
-          ...(dispatchNavigates(orbital, orb, trait.name, site.event) ? { navigates: true } : {}),
-        };
-        // A click on a guarded affordance is only meaningful once the guard's
-        // `@entity.*` reads hold — the same precondition the walk establishes
-        // (a composer's Send with an empty draft is a held guard, not a dead key).
-        const guarded = trait.stateMachine.transitions.find(
-          (t) => t.from === site.state && t.event === site.event && t.guard !== undefined,
-        );
-        if (guarded !== undefined) {
-          const plan = planGuardPreconditionPreamble(orbital, trait, guarded, site.state, entityFieldsByName);
-          if (plan.establishesRow !== undefined) step.establishesRow = plan.establishesRow;
-          else if (plan.guardPreconditionUnreachable !== undefined) step.unreachableRowReason = plan.guardPreconditionUnreachable;
-        }
-        result.push(step);
+          ...(affordance.navigates ? { navigates: true } : {}),
+          ...establishFromPrecondition(affordance.precondition),
+        });
       }
     }
   }
@@ -111,18 +99,6 @@ function collectRenderSites(trait: { stateMachine?: { transitions: ReadonlyArray
   }
 
   return sites;
-}
-
-/** The declared target of `<event>` from `from`, when the trait declares such a transition. */
-function findTransitionTarget(
-  trait: { stateMachine?: { transitions: ReadonlyArray<{ from?: string; event?: string; to?: string }> } },
-  from: string,
-  event: string,
-): string | undefined {
-  const transition = trait.stateMachine?.transitions.find(
-    (t) => t.from === from && t.event === event,
-  );
-  return typeof transition?.to === 'string' ? transition.to : undefined;
 }
 
 /** Recursively walk a render-ui payload looking for `action: "<EVENT>"` fields. */

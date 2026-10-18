@@ -12,8 +12,8 @@
  *   - `formData` (when target pattern is a form, derived from the
  *     transition's payload schema + linked entity field metadata)
  *   - Preceded by `triggerKind: 'replay'` steps when fromState !=
- *     initialState (via `planReplayTo` — the one replay planner, so hops
- *     carry synthesized payloads and skip effect-emitted events).
+ *     initialState (the kernel's replay, so hops carry payloads their guards
+ *     accept and skip effect-emitted events).
  *
  * Pure. No `Page`, no DOM, no schema-side helpers — operates on the
  * typed `@almadar/core` `OrbitalSchema`.
@@ -29,23 +29,12 @@ import {
   findInitialState,
 } from './internal/orbital-walk.js';
 import { buildMinimalPayload, type EntityFieldDef } from '../browser/interaction.js';
-import { extractTraitWalkConfigs } from './extract-trait-walk-configs.js';
-import { planReplayTo } from './plan-replay-to.js';
+import { replayTo } from '../kernel/adapt.js';
+import type { KernelPlanner } from '../kernel/kernel-planner.js';
 
-export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[] {
+export async function planInteractionTests(kernel: KernelPlanner, orbital: OrbitalSchema): Promise<ExtendedWalkStep[]> {
   const result: ExtendedWalkStep[] = [];
   const entityFieldsByName = collectEntityFields(orbital);
-
-  // Repositioning preambles go through the ONE replay planner
-  // (`planReplayTo`): payload synthesis from the event's declared schema,
-  // guard-pass merge, and effect-emitted-hop exclusion. The private BFS this
-  // planner used to carry dispatched every hop with `{}` — any hop whose
-  // event requires payload fields (OPEN_X `id!`) was validator-rejected, the
-  // precondition never established, and every steady-detail arm
-  // (`viewing_single`) stayed uncovered (the std-trial/std-dunning class).
-  const walkConfigs = new Map(
-    extractTraitWalkConfigs(orbital).map((c) => [c.traitName, c]),
-  );
 
   // Orbital-wide set of events surfaced as DOM affordances anywhere
   // (`action: "EVENT"`, `submitEvent: "EVENT"`). Buttons that fire a
@@ -75,10 +64,8 @@ export function planInteractionTests(orbital: OrbitalSchema): ExtendedWalkStep[]
       const renderTarget = findRenderTarget(transition);
       if (renderTarget === null) continue;
 
-      const walkConfig = walkConfigs.get(trait.name);
-      const replayPath = walkConfig !== undefined
-        ? planReplayTo({ trait: walkConfig, targetState: transition.from }, entityFieldsByName)
-        : null;
+      // Repositioning preambles are the kernel's replay: the hops a fresh trait needs to stand in `transition.from`.
+      const replayPath = await replayTo(kernel, orbital, trait.name, transition.from);
       if (replayPath === null) continue;
 
       // Replay steps first (retagged so coverage attributes the hop to the

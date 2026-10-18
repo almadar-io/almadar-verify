@@ -1,15 +1,17 @@
 /**
  * The `evaluateGuard` + `executeEffects` hooks that make a
- * {@link playCircuitStep} real: guard and effects run through
- * `@almadar/evaluator` against one mutable entity row, no server. Each
- * evaluation is recorded as it runs (`evaluateTraced`), so a guard verdict
+ * {@link playCircuitStep} real, against one mutable entity row, no server.
+ * The guard runs on the kernel's evaluator; the effects still run through the
+ * JS interpreter (`@almadar/evaluator`'s `executeEffects` semantics), which
+ * retires with it. Each evaluation is recorded as it runs, so a guard verdict
  * carries its trace and every `EffectTrace` carries `evalTrace`.
  */
 
 import type { Effect, EffectTrace, EntityRow, EvalTrace, EventPayload, RuntimeValue, SExpr, TraitConfig } from '@almadar/core';
-import { isEventPayloadValue } from '@almadar/core';
+import { isEventPayloadValue, kernelEvaluator, toWireValue } from '@almadar/core';
 import { createEffectContext, createMinimalContext, evaluateTraced } from '@almadar/evaluator';
 import type { EvaluationContext } from '@almadar/evaluator';
+import type { EvalContextWire } from '@almadar/core/kernel-wire';
 
 export interface GuardVerdict {
   passed: boolean;
@@ -38,10 +40,17 @@ export function createCircuitHooks(entityRow: EntityRow, fromState: string, conf
   };
   return {
     evaluateGuard: (guard, ctx) => {
-      const run = evaluateTraced(guard, baseContext(ctx.payload));
-      return run.error !== undefined
-        ? { passed: false, trace: run.trace, error: run.error }
-        : { passed: Boolean(run.value), trace: run.trace };
+      const kernel = kernelEvaluator();
+      const context: EvalContextWire = {
+        entity: toWireValue(entityRow),
+        payload: toWireValue(ctx.payload),
+        state: fromState,
+        ...(config ? { config: toWireValue(config) } : {}),
+      };
+      const run = kernel.evaluateTraced(context, guard);
+      if (run.outcome.kind === 'error') return { passed: false, trace: run.trace, error: run.outcome.message };
+      const [verdict] = kernel.evaluateGuards(context, [guard]);
+      return { passed: verdict.kind === 'value' && verdict.value, trace: run.trace };
     },
     executeEffects: (effects, ctx) => {
       const emitted: Array<{ event: string; payload?: EventPayload }> = [];

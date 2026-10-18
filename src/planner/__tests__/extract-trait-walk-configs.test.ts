@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema, Trait, TraitEventListener, Transition } from '@almadar/core';
 import { extractTraitWalkConfigs } from '../extract-trait-walk-configs.js';
-import { planWalk } from '../plan-walk.js';
+import { walkSteps } from '../../kernel/adapt.js';
+import { kernelPlan } from '../../kernel/__tests__/kernel-steps.js';
 
 // Snake-inspired single-trait orbital: numeric-interval tick, guarded
 // self-transitions, and a declared `emits {}` contract block.
@@ -129,8 +130,9 @@ describe('extractTraitWalkConfigs — schema-model fields', () => {
       expect(reply('Plain')).toEqual([]);
     });
 
-    it('control: the planner walks Plain\'s DONE arm and skips Caller\'s', () => {
-      const walked = (name: string) => planWalk({ trait: configs.find((c) => c.traitName === name)!, includeAutoInit: false }).map((step) => step.event);
+    it('control: the kernel planner walks Plain\'s DONE arm and skips Caller\'s', () => {
+      const planned = kernelPlan(schema);
+      const walked = (name: string) => walkSteps(planned, name, { includeAutoInit: false }).map((step) => step.event);
       expect(walked('Plain')).toContain('DONE');
       expect(walked('Caller')).not.toContain('DONE');
     });

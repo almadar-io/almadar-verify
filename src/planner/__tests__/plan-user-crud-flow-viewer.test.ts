@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { EffectTrace, OrbitalSchema, RawUserClaims } from '@almadar/core';
-import { planUserCrudFlow } from '../plan-user-crud-flow.js';
+import { planUserCrudFlow as planWith } from '../plan-user-crud-flow.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
+
+const planUserCrudFlow = (orbital: Parameters<typeof planWith>[1]): ReturnType<typeof planWith> => planWith(testKernel, orbital);
 import { extractTraitWalkConfigs } from '../extract-trait-walk-configs.js';
 import { createFakeDriver, type FakeDriverContext } from '../../driver/impls/fake.js';
 import { tick } from '../../driver/tick.js';
@@ -146,7 +149,7 @@ function ownershipPolicedListShape(): OrbitalSchema {
 describe('planUserCrudFlow viewer switch, through tick() (C1-V10 item 1)', () => {
   it('crud-edit: switches persona to the target row\'s owner before dispatch and restores the default after', async () => {
     const schema = ownershipPolicedListShape();
-    const steps = planUserCrudFlow(schema);
+    const steps = await planUserCrudFlow(schema);
     const edit = steps.find((s) => s.testKind === 'crud-edit');
     expect(edit).toBeDefined();
     expect(edit?.viewerRequirement).toEqual({ owner: { sourceEntity: 'ListItem', sourceField: 'authorId' } });
@@ -191,7 +194,7 @@ describe('planUserCrudFlow viewer switch, through tick() (C1-V10 item 1)', () =>
 
   it('crud-delete: switches persona to the target row\'s owner before dispatch and restores the default after', async () => {
     const schema = ownershipPolicedListShape();
-    const steps = planUserCrudFlow(schema);
+    const steps = await planUserCrudFlow(schema);
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
     expect(del?.viewerRequirement).toEqual({ owner: { sourceEntity: 'ListItem', sourceField: 'authorId' } });
@@ -232,7 +235,7 @@ describe('planUserCrudFlow viewer switch, through tick() (C1-V10 item 1)', () =>
 
   it('fails closed with no-satisfying-persona when the target row carries no owner value', async () => {
     const schema = ownershipPolicedListShape();
-    const steps = planUserCrudFlow(schema);
+    const steps = await planUserCrudFlow(schema);
     const edit = steps.find((s) => s.testKind === 'crud-edit');
 
     const traits = extractTraitWalkConfigs(schema);
@@ -376,7 +379,7 @@ function roleOnlyDeletePolicedMembershipShape(): OrbitalSchema {
 describe('planUserCrudFlow viewer switch, role-only OR policy (C1-V19 item 6)', () => {
   it('crud-delete: switches persona to the role literal (never an owner id) and the persist succeeds', async () => {
     const schema = roleOnlyDeletePolicedMembershipShape();
-    const steps = planUserCrudFlow(schema);
+    const steps = await planUserCrudFlow(schema);
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
     expect(del?.viewerRequirement).toEqual({ role: { field: 'role', value: 'moderator' } });

@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -59,7 +60,7 @@ async function run(landsAfterReset: 'browsing' | 'loading', extra: Parameters<ty
     await reset?.(ctx);
     runtime.setState('Browse', landsAfterReset);
   };
-  return runVerification({ itemName: 'browse-fixture', orbital, driver, ctx: { outputDir: '', runtime }, options });
+  return runVerification({ itemName: 'browse-fixture', kernel: testKernel, orbital, driver, ctx: { outputDir: '', runtime }, options });
 }
 
 describe('runVerification — observed settle after reset', () => {

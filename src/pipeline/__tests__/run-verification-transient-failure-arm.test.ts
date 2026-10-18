@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EffectTrace, EventPayload, OrbitalSchema, Trait } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 function dmStarterOrbital(): OrbitalSchema {
@@ -164,7 +165,7 @@ describe('runVerification — transient failure-route arm (RV item 27)', () => {
     });
 
     const result = await runVerification({
-      itemName: 'dm-starter-pipeline-fixture',
+      itemName: 'dm-starter-pipeline-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

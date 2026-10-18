@@ -23,6 +23,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema, Transition } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 /**
@@ -115,7 +116,7 @@ describe('runVerification — reconcile-sibling-credit requires the sibling guar
     };
 
     const result = await runVerification({
-      itemName: 'reconcile-sibling-credit-fixture',
+      itemName: 'reconcile-sibling-credit-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -147,7 +148,7 @@ describe('runVerification — reconcile-sibling-credit requires the sibling guar
     };
 
     const result = await runVerification({
-      itemName: 'reconcile-sibling-credit-fixture',
+      itemName: 'reconcile-sibling-credit-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -102,7 +103,7 @@ describe('runVerification — frontier walk scope', () => {
     const ctx = { outputDir: '', runtime };
 
     const result = await runVerification({
-      itemName: 'frontier-fixture',
+      itemName: 'frontier-fixture', kernel: testKernel,
       orbital: mixed,
       driver,
       ctx,
@@ -132,7 +133,7 @@ describe('runVerification — frontier walk scope', () => {
     const ctx = { outputDir: '', runtime };
 
     const result = await runVerification({
-      itemName: 'frontier-fixture',
+      itemName: 'frontier-fixture', kernel: testKernel,
       orbital: mixed,
       driver,
       ctx,

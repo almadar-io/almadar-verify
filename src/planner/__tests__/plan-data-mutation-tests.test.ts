@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
-import { planDataMutationTests } from '../plan-data-mutation-tests.js';
+import { planDataMutationTests } from '../../kernel/__tests__/kernel-steps.js';
 
 const cart: OrbitalSchema = {
   name: 'cart',

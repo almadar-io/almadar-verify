@@ -21,7 +21,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
-import { planUserCrudFlow } from '../../planner/plan-user-crud-flow.js';
+import { planUserCrudFlow as planWith } from '../../planner/plan-user-crud-flow.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
+
+const planUserCrudFlow = (orbital: Parameters<typeof planWith>[1]): ReturnType<typeof planWith> => planWith(testKernel, orbital);
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 import { createFakeDriver, type FakeDriverContext } from '../impls/fake.js';
 import { tick } from '../tick.js';
@@ -126,7 +129,7 @@ async function runAutoInit(
 describe('tick — server-truth row resolution (C1-V12)', () => {
   it('crud-delete: avoids a row a HIDDEN sibling references (never seen in the previous frame\'s snapshot) and picks a genuinely safe VISIBLE row', async () => {
     const schema = noteSchema();
-    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(schema)).find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
     expect(del?.avoidReferencedVia).toEqual(['parentId']);
 

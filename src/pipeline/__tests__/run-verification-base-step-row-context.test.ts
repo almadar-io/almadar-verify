@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EffectTrace, OrbitalSchema, Trait } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 function roleOnlyPersistOrbital(): OrbitalSchema {
@@ -104,7 +105,7 @@ describe('runVerification — base-walk step inherits data-mutation row/viewer c
     });
 
     const result = await runVerification({
-      itemName: 'base-step-row-context-fixture',
+      itemName: 'base-step-row-context-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

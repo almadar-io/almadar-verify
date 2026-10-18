@@ -24,6 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -108,7 +109,7 @@ describe('runVerification — walk-budget-exceeded is a distinct, structured out
     const { driver, runtime } = createFakeDriver(traits);
 
     const result = await runVerification({
-      itemName: 'walk-budget-fixture',
+      itemName: 'walk-budget-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -130,7 +131,7 @@ describe('runVerification — walk-budget-exceeded is a distinct, structured out
     const { driver, runtime } = createFakeDriver(traits);
 
     const result = await runVerification({
-      itemName: 'walk-budget-fixture-clean',
+      itemName: 'walk-budget-fixture-clean', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -149,7 +150,7 @@ describe('runVerification — walk-budget-exceeded is a distinct, structured out
     // guard-pass fan-out (up to 3 variants × ARM_COUNT arms) before the
     // emit-sweep extension (appended after base steps) gets a turn.
     const result = await runVerification({
-      itemName: 'walk-budget-fixture-emit-sweep-starved',
+      itemName: 'walk-budget-fixture-emit-sweep-starved', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -167,7 +168,7 @@ describe('runVerification — walk-budget-exceeded is a distinct, structured out
     const { driver, runtime } = createFakeDriver(traits);
 
     const result = await runVerification({
-      itemName: 'walk-budget-fixture-emit-sweep-clean',
+      itemName: 'walk-budget-fixture-emit-sweep-clean', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -194,7 +195,7 @@ describe('runVerification — walk-budget-exceeded is a distinct, structured out
     };
 
     const result = await runVerification({
-      itemName: 'walk-budget-fixture-ms',
+      itemName: 'walk-budget-fixture-ms', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

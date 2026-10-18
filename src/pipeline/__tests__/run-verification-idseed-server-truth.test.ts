@@ -16,6 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EntityRow, OrbitalSchema, Trait } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -107,7 +108,7 @@ describe('runVerification — idSeedRow server-truth sourcing (C1-V14, F3)', () 
     };
 
     const result = await runVerification({
-      itemName: 'ticket-editor-server-truth-fixture',
+      itemName: 'ticket-editor-server-truth-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -139,7 +140,7 @@ describe('runVerification — idSeedRow server-truth sourcing (C1-V14, F3)', () 
     driver.listEntityRows = undefined;
 
     const result = await runVerification({
-      itemName: 'ticket-editor-server-truth-fixture-no-list',
+      itemName: 'ticket-editor-server-truth-fixture-no-list', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

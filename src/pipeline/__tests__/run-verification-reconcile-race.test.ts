@@ -20,6 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 function makeOrbital(extraTransitions: ReadonlyArray<{ from: string; to: string; event: string }> = []): OrbitalSchema {
@@ -95,7 +96,7 @@ describe('runVerification — reconcile hop transient-closure tolerance', () => 
     };
 
     const result = await runVerification({
-      itemName: 'std-cache-aside-fixture',
+      itemName: 'std-cache-aside-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -135,7 +136,7 @@ describe('runVerification — reconcile hop transient-closure tolerance', () => 
     };
 
     const result = await runVerification({
-      itemName: 'std-cache-aside-fixture',
+      itemName: 'std-cache-aside-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -180,7 +181,7 @@ describe('runVerification — reconcile hop transient-closure tolerance', () => 
       return result;
     };
     return runVerification({
-      itemName: 'std-cache-aside-fixture',
+      itemName: 'std-cache-aside-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

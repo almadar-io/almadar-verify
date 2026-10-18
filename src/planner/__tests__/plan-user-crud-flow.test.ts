@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
-import { planUserCrudFlow } from '../plan-user-crud-flow.js';
+import { planUserCrudFlow as planWith } from '../plan-user-crud-flow.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
+
+const planUserCrudFlow = (orbital: Parameters<typeof planWith>[1]): ReturnType<typeof planWith> => planWith(testKernel, orbital);
 
 /**
  * Mirrors std-list's resolved (post-inline) shape: a Browse trait, a
@@ -170,8 +173,8 @@ const stdListShape: OrbitalSchema = {
 };
 
 describe('planUserCrudFlow', () => {
-  it('emits one create + one edit + one delete step per persistor entity', () => {
-    const steps = planUserCrudFlow(stdListShape);
+  it('emits one create + one edit + one delete step per persistor entity', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
     expect(steps).toHaveLength(3);
 
     const create = steps.find((s) => s.testKind === 'crud-create');
@@ -183,8 +186,8 @@ describe('planUserCrudFlow', () => {
     expect(del).toBeDefined();
   });
 
-  it('crud-create step targets the modal trait OPEN affordance with submit chain', () => {
-    const steps = planUserCrudFlow(stdListShape);
+  it('crud-create step targets the modal trait OPEN affordance with submit chain', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
     const create = steps.find((s) => s.testKind === 'crud-create');
     expect(create?.traitName).toBe('ListItemCreate');
     expect(create?.event).toBe('CREATE');
@@ -196,8 +199,8 @@ describe('planUserCrudFlow', () => {
     expect(create?.expectedRowContent).toBeDefined();
   });
 
-  it('crud-edit step carries expectedRowChangedFields matching its form data', () => {
-    const steps = planUserCrudFlow(stdListShape);
+  it('crud-edit step carries expectedRowChangedFields matching its form data', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
     const edit = steps.find((s) => s.testKind === 'crud-edit');
     expect(edit?.event).toBe('EDIT');
     expect(edit?.submitEvent).toBe('LIST_ITEM_UPDATED');
@@ -207,8 +210,8 @@ describe('planUserCrudFlow', () => {
     expect(edit?.expectedRowChangedFields?.length).toBeGreaterThan(0);
   });
 
-  it('crud-delete step uses confirmEvent (not submitEvent) and no form data', () => {
-    const steps = planUserCrudFlow(stdListShape);
+  it('crud-delete step uses confirmEvent (not submitEvent) and no form data', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del?.event).toBe('DELETE');
     expect(del?.confirmEvent).toBe('CONFIRM_DELETE');
@@ -220,7 +223,7 @@ describe('planUserCrudFlow', () => {
     expect(del?.payloadRowShape).toBeUndefined();
   });
 
-  it('crud-delete: payloadRowShape derives from the open event payloadSchema (entity-typed fields take the whole row)', () => {
+  it('crud-delete: payloadRowShape derives from the open event payloadSchema (entity-typed fields take the whole row)', async () => {
     // std-delete's real shape: DELETE declares `id` + `row: <Entity>`,
     // guard `"@payload.row"`. The trigger needs the whole row for
     // `row` and `row.id` for `id` when it self-dispatches. `row`'s lowered
@@ -254,14 +257,14 @@ describe('planUserCrudFlow', () => {
         },
       ],
     };
-    const del = planUserCrudFlow(withDeleteSchema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(withDeleteSchema)).find((s) => s.testKind === 'crud-delete');
     expect(del?.payloadRowShape).toEqual([
       { name: 'id', wholeRow: false },
       { name: 'row', wholeRow: true },
     ]);
   });
 
-  it('crud-delete: a pre-marker payload (bare `type: entityName`, no `entity`) is deterministically NOT wholeRow', () => {
+  it('crud-delete: a pre-marker payload (bare `type: entityName`, no `entity`) is deterministically NOT wholeRow', async () => {
     // A registry `.orb` emitted BEFORE the `entity` marker existed (B1-V
     // item C) carries `row`'s type as the bare entity name with no
     // `entity` field — the honest absence of data, not a name-matching
@@ -288,14 +291,14 @@ describe('planUserCrudFlow', () => {
         },
       ],
     };
-    const del = planUserCrudFlow(withDeleteSchema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(withDeleteSchema)).find((s) => s.testKind === 'crud-delete');
     expect(del?.payloadRowShape).toEqual([
       { name: 'id', wholeRow: false },
       { name: 'row', wholeRow: false },
     ]);
   });
 
-  it('C1-V11: crud-delete attaches avoidReferencedVia when the entity self-relates; crud-edit does not', () => {
+  it('C1-V11: crud-delete attaches avoidReferencedVia when the entity self-relates; crud-edit does not', async () => {
     // ListItem gains a self-relation field (mirrors std-notes' Note.parentId) —
     // a `persist delete` targeting the structurally-first row would hit the
     // mock seeder's tree-shape restrict-rejection every time. crud-edit is
@@ -310,7 +313,7 @@ describe('planUserCrudFlow', () => {
       ];
     }
 
-    const steps = planUserCrudFlow(schema);
+    const steps = await planUserCrudFlow(schema);
     const edit = steps.find((s) => s.testKind === 'crud-edit');
     const del = steps.find((s) => s.testKind === 'crud-delete');
 
@@ -318,9 +321,9 @@ describe('planUserCrudFlow', () => {
     expect(edit?.avoidReferencedVia).toBeUndefined();
   });
 
-  it('I-23: requiresRowContext stamps only steps whose open event declares required payload', () => {
+  it('I-23: requiresRowContext stamps only steps whose open event declares required payload', async () => {
     // Base fixture: DELETE/EDIT open events declare no payloadSchema → no flag.
-    const bare = planUserCrudFlow(stdListShape);
+    const bare = await planUserCrudFlow(stdListShape);
     expect(bare.find((s) => s.testKind === 'crud-delete')?.requiresRowContext).toBeUndefined();
     expect(bare.find((s) => s.testKind === 'crud-edit')?.requiresRowContext).toBeUndefined();
     expect(bare.find((s) => s.testKind === 'crud-create')?.requiresRowContext).toBeUndefined();
@@ -349,11 +352,11 @@ describe('planUserCrudFlow', () => {
         },
       ],
     };
-    const del = planUserCrudFlow(withDeleteSchema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(withDeleteSchema)).find((s) => s.testKind === 'crud-delete');
     expect(del?.requiresRowContext).toBe(true);
   });
 
-  it('produces no steps when the orbital has no persistor', () => {
+  it('produces no steps when the orbital has no persistor', async () => {
     const noPersistor: OrbitalSchema = {
       ...stdListShape,
       orbitals: [
@@ -365,11 +368,11 @@ describe('planUserCrudFlow', () => {
         },
       ],
     };
-    expect(planUserCrudFlow(noPersistor)).toEqual([]);
+    expect(await planUserCrudFlow(noPersistor)).toEqual([]);
   });
 
-  it('coverage keys carry the testKind suffix', () => {
-    const steps = planUserCrudFlow(stdListShape);
+  it('coverage keys carry the testKind suffix', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
     for (const step of steps) {
       expect(step.coverageKey).toMatch(/\[crud-(create|edit|delete)\]$/);
     }
@@ -381,7 +384,7 @@ describe('planUserCrudFlow', () => {
   // upstream button (`action-REQUEST_DELETE`), not `action-<openEvent>`.
   // The planner must set `openAffordanceEvent` so the driver targets
   // the right button while the coverage key keeps the receiver event.
-  it('crud-delete: when source trait has inbound listener {event ≠ triggers}, openAffordanceEvent overrides', () => {
+  it('crud-delete: when source trait has inbound listener {event ≠ triggers}, openAffordanceEvent overrides', async () => {
     const withInboundListen: OrbitalSchema = {
       ...stdListShape,
       orbitals: [
@@ -399,7 +402,7 @@ describe('planUserCrudFlow', () => {
         },
       ],
     };
-    const steps = planUserCrudFlow(withInboundListen);
+    const steps = await planUserCrudFlow(withInboundListen);
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
     // step.event stays as the receiver's transition event for coverage labelling.
@@ -409,15 +412,15 @@ describe('planUserCrudFlow', () => {
     expect(del?.openAffordanceEvent).toBe('REQUEST_DELETE');
   });
 
-  it('crud-delete: no openAffordanceEvent override when source trait has no inbound listener', () => {
+  it('crud-delete: no openAffordanceEvent override when source trait has no inbound listener', async () => {
     // The baseline fixture has no Delete.listens — affordance stays
     // implicit (driver uses step.event).
-    const steps = planUserCrudFlow(stdListShape);
+    const steps = await planUserCrudFlow(stdListShape);
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del?.openAffordanceEvent).toBeUndefined();
   });
 
-  it('crud-create: openAffordanceEvent is omitted when listener.event === listener.triggers', () => {
+  it('crud-create: openAffordanceEvent is omitted when listener.event === listener.triggers', async () => {
     // For std-list Create, even if Create had a Browse.CREATE→CREATE
     // listener, the names match — no override needed.
     const withMatchingListen: OrbitalSchema = {
@@ -437,7 +440,7 @@ describe('planUserCrudFlow', () => {
         },
       ],
     };
-    const steps = planUserCrudFlow(withMatchingListen);
+    const steps = await planUserCrudFlow(withMatchingListen);
     const create = steps.find((s) => s.testKind === 'crud-create');
     expect(create?.event).toBe('CREATE');
     expect(create?.openAffordanceEvent).toBeUndefined();
@@ -611,8 +614,8 @@ describe('planUserCrudFlow — isRowAction classification (C1-V9 item C)', () =>
     };
   }
 
-  it('a genuine row action (declared in itemActions) is classified isRowAction: true', () => {
-    const steps = planUserCrudFlow(rowActionSchema());
+  it('a genuine row action (declared in itemActions) is classified isRowAction: true', async () => {
+    const steps = await planUserCrudFlow(rowActionSchema());
     const edit = steps.find((s) => s.testKind === 'crud-edit' && s.traitName === 'TicketEditModal');
     expect(edit).toBeDefined();
     // listener.event === listener.triggers ('EDIT' both) — no override needed.
@@ -620,8 +623,8 @@ describe('planUserCrudFlow — isRowAction classification (C1-V9 item C)', () =>
     expect(edit?.isRowAction).toBe(true);
   });
 
-  it("a plain single button reached the SAME cross-trait-listener way (never declared in itemActions) is classified isRowAction: false — the RATE/TicketCsatSurvey shape", () => {
-    const steps = planUserCrudFlow(rowActionSchema());
+  it("a plain single button reached the SAME cross-trait-listener way (never declared in itemActions) is classified isRowAction: false — the RATE/TicketCsatSurvey shape", async () => {
+    const steps = await planUserCrudFlow(rowActionSchema());
     const rate = steps.find((s) => s.testKind === 'crud-edit' && s.traitName === 'TicketCsatSurvey');
     expect(rate).toBeDefined();
     expect(rate?.openAffordanceEvent).toBeUndefined();
@@ -660,28 +663,28 @@ describe('planUserCrudFlow — viewer requirement (C1-V10 item 1)', () => {
     };
   }
 
-  it('crud-create carries the create-side owner requirement (useDefaultId + payloadOwnerField)', () => {
-    const steps = planUserCrudFlow(ownershipPolicedShape());
+  it('crud-create carries the create-side owner requirement (useDefaultId + payloadOwnerField)', async () => {
+    const steps = await planUserCrudFlow(ownershipPolicedShape());
     const create = steps.find((s) => s.testKind === 'crud-create');
     expect(create?.viewerRequirement).toEqual({
       owner: { sourceEntity: 'ListItem', sourceField: 'id', useDefaultId: true, payloadOwnerField: 'authorId' },
     });
   });
 
-  it('crud-edit carries the update-side owner requirement (reads the target row\'s own owner column)', () => {
-    const steps = planUserCrudFlow(ownershipPolicedShape());
+  it('crud-edit carries the update-side owner requirement (reads the target row\'s own owner column)', async () => {
+    const steps = await planUserCrudFlow(ownershipPolicedShape());
     const edit = steps.find((s) => s.testKind === 'crud-edit');
     expect(edit?.viewerRequirement).toEqual({ owner: { sourceEntity: 'ListItem', sourceField: 'authorId' } });
   });
 
-  it('crud-delete carries the delete-side owner requirement', () => {
-    const steps = planUserCrudFlow(ownershipPolicedShape());
+  it('crud-delete carries the delete-side owner requirement', async () => {
+    const steps = await planUserCrudFlow(ownershipPolicedShape());
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del?.viewerRequirement).toEqual({ owner: { sourceEntity: 'ListItem', sourceField: 'authorId' } });
   });
 
-  it('no viewerRequirement on any crud step when the entity declares no access policy (regression)', () => {
-    const steps = planUserCrudFlow(stdListShape);
+  it('no viewerRequirement on any crud step when the entity declares no access policy (regression)', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
     for (const step of steps) {
       expect(step.viewerRequirement).toBeUndefined();
     }
@@ -766,13 +769,13 @@ describe('planUserCrudFlow — C1-V18 negative gate (a Browse fetch-success arm 
     };
   }
 
-  it('produces zero crud steps for ChannelMember — the fetch-success arm never opens an overlay', () => {
-    const steps = planUserCrudFlow(channelRailSchema());
+  it('produces zero crud steps for ChannelMember — the fetch-success arm never opens an overlay', async () => {
+    const steps = await planUserCrudFlow(channelRailSchema());
     expect(steps.filter((s) => s.expectedRowDelta?.entityName === 'ChannelMember')).toEqual([]);
   });
 
-  it('a std-modal-shaped fixture (stdListShape) is still planned — the gate does not over-exclude', () => {
-    const steps = planUserCrudFlow(stdListShape);
+  it('a std-modal-shaped fixture (stdListShape) is still planned — the gate does not over-exclude', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
     expect(steps.map((s) => s.testKind).sort()).toEqual(['crud-create', 'crud-delete', 'crud-edit']);
   });
 });

@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EntityRow, OrbitalSchema, Trait } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 const SEEDED_ROW: EntityRow = { id: 'ticket-seed-1', title: 'Real seeded ticket' };
@@ -165,7 +166,7 @@ describe('runVerification — persist-write id seeding', () => {
     };
 
     const result = await runVerification({
-      itemName: 'ticket-editor-fixture',
+      itemName: 'ticket-editor-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -193,7 +194,7 @@ describe('runVerification — persist-write id seeding', () => {
     };
 
     const result = await runVerification({
-      itemName: 'ticket-editor-fixture-unbound',
+      itemName: 'ticket-editor-fixture-unbound', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -220,7 +221,7 @@ describe('runVerification — persist-write id seeding', () => {
     };
 
     const result = await runVerification({
-      itemName: 'ticket-lifecycle-create-fixture',
+      itemName: 'ticket-lifecycle-create-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

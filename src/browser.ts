@@ -8,6 +8,9 @@
  * @packageDocumentation
  */
 
+// The kernel planner, over a wasm kernel the browser host initialises itself
+export { createKernelPlanner, createRemoteKernelExports, KERNEL_OPS, KernelPlanRefused, type KernelExports, type KernelOp, type KernelPlanner, type PlannedProgram } from './kernel/kernel-planner.js';
+
 // Pipeline
 export type { RunVerificationInput, RunVerificationOutput } from './pipeline/types.js';
 export { runVerification } from './pipeline/index.js';
@@ -19,15 +22,12 @@ export type {
   ConfigSweepResult,
   ConfigSweepVariant,
 } from './pipeline/run-config-sweep.js';
-export { enumerateConfigVariants } from './planner/enumerate-config-variants.js';
-export type { ConfigVariant } from './planner/enumerate-config-variants.js';
 
 // Driver contract (types + tick only — no Playwright impls)
 export type { Driver, DriverContext, SendResult, SnapshotResult } from './driver/types.js';
 export { tick } from './driver/tick.js';
 export { playCircuitStep, type PlayCircuitStepInput, type PlayCircuitStepResult } from './driver/play-step.js';
-export { stepVerdict, type StepExpectation, type StepVerdict } from './driver/step-verdict.js';
-export { walkTraitVerdict, stepExpectation, type TraitWalkOptions, type TraitWalkVerdict, type WalkedStep } from './driver/trait-walk.js';
+export { walkTraitVerdict, stepExpectation, stepVerdictOf, observationOf, type StepExpectation, type StepVerdict, type TraitWalkOptions, type TraitWalkVerdict, type WalkedStep } from './driver/trait-walk.js';
 export { createCircuitHooks, type CircuitHooks, type GuardVerdict } from './driver/circuit-hooks.js';
 export { declaredEntityRow } from './driver/declared-entity-row.js';
 export type { ExtendedWalkStep } from './planner/types.js';
@@ -35,16 +35,9 @@ export type { TraitWalkConfig } from './engine/types.js';
 
 // Planners
 export type { PlanWalkInput, PlanEmitInput, PlanReplayInput } from './planner/types.js';
-export { planWalk } from './planner/plan-walk.js';
-export { planInitCredit } from './planner/plan-init-credit.js';
-export { planEmitSweep } from './planner/plan-emit-sweep.js';
-export { planReplayTo } from './planner/plan-replay-to.js';
 export { decorateWithTriggerKind } from './planner/plan-dom-decoration.js';
 export { planClickPathSamples } from './planner/plan-click-path-samples.js';
 export { extractTraitWalkConfigs } from './planner/extract-trait-walk-configs.js';
-export type { ContractRegistry, ContractRegistryEntry } from './planner/plan-contract-events.js';
-export { planContractEvents } from './planner/plan-contract-events.js';
-export { planDataMutationTests } from './planner/plan-data-mutation-tests.js';
 export { planInteractionTests } from './planner/plan-interaction-tests.js';
 export { planUserCrudFlow } from './planner/plan-user-crud-flow.js';
 

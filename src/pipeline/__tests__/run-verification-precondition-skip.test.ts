@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -100,7 +101,7 @@ describe('runVerification — precondition-unreachable steps are skipped, not mi
     };
 
     const result = await runVerification({
-      itemName: 'std-approval-gate-fixture',
+      itemName: 'std-approval-gate-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -136,7 +137,7 @@ describe('runVerification — precondition-unreachable steps are skipped, not mi
     const { driver, runtime } = createFakeDriver(traits);
 
     const result = await runVerification({
-      itemName: 'std-approval-gate-fixture-unreachable',
+      itemName: 'std-approval-gate-fixture-unreachable', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -167,7 +168,7 @@ describe('runVerification — precondition-unreachable steps are skipped, not mi
     };
 
     const result = await runVerification({
-      itemName: 'std-approval-gate-fixture-diverge',
+      itemName: 'std-approval-gate-fixture-diverge', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

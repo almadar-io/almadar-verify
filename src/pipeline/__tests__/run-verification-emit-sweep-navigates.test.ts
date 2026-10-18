@@ -23,6 +23,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -102,7 +103,7 @@ describe('runVerification — emit-sweep navigates wiring', () => {
     const ctx = { outputDir: '', runtime };
 
     const result = await runVerification({
-      itemName: 'std-notes-fixture',
+      itemName: 'std-notes-fixture', kernel: testKernel,
       orbital: schema,
       driver,
       ctx,

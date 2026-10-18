@@ -25,8 +25,8 @@
  */
 
 import type { EntityData, EntityRow, EventPayload, FieldValue, RawUserClaims, ServerResponseTrace } from '@almadar/core';
-import { collectBindings } from '@almadar/core';
-import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
+import { collectBindings, kernelEvaluator, toWireValue } from '@almadar/core';
+import type { EvalContextWire } from '@almadar/core/kernel-wire';
 import { makeInitFrame, makeWalkFrame } from '../frame/factory.js';
 import type { Frame, FrameCause } from '../frame/types.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
@@ -568,7 +568,7 @@ function findingPrefixFor(code: PickTargetRowFailureCode): string {
 
 /**
  * C1-V15 item B: build the per-row `pickTargetRow` filter from a step's
- * `affordanceDisabledExpr` — evaluated with `@almadar/evaluator`, the SAME
+ * `affordanceDisabledExpr` — evaluated with the kernel's evaluator, the SAME
  * evaluator the real runtime uses to decide render-time truth (mirrors
  * `run-verification.ts`'s `siblingGuardSatisfiable`, the sole other guard-
  * truth evaluation site in this package). The expr's own bindings name
@@ -594,15 +594,12 @@ function buildAffordanceEnabledFilter(
   const isEnabled = (row: EntityRow): boolean => {
     const wrapped: Record<string, EntityRow> = {};
     for (const key of wrapperKeys) wrapped[key] = row;
-    const base = createMinimalContext({}, {}, fromState ?? 'initial');
-    const ctx = disabled.bindingRoot === 'callsitePayload'
-      ? { ...base, callsitePayload: wrapped as EventPayload }
-      : { ...base, payload: wrapped as EventPayload };
-    try {
-      return evaluateGuard(disabled.expr, ctx) !== true;
-    } catch {
-      return true;
-    }
+    const state = fromState ?? 'initial';
+    const ctx: EvalContextWire = disabled.bindingRoot === 'callsitePayload'
+      ? { callsitePayload: toWireValue(wrapped), state }
+      : { payload: toWireValue(wrapped), state };
+    const verdict = kernelEvaluator().evaluateGuard(ctx, disabled.expr);
+    return verdict.kind === 'error' || !verdict.value;
   };
   return {
     isEnabled,

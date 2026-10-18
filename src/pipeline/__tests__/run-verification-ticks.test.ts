@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 
@@ -84,7 +85,7 @@ function run(extra: { enableTickTests?: boolean; enableEmitSweep?: boolean } = {
   const traits = extractTraitWalkConfigs(snake);
   const { driver, runtime } = createFakeDriver(traits);
   return runVerification({
-    itemName: 'std-snake',
+    itemName: 'std-snake', kernel: testKernel,
     orbital: snake,
     driver,
     ctx: { outputDir: '', runtime },

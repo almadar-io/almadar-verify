@@ -17,7 +17,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { EffectTrace, OrbitalSchema, RawUserClaims } from '@almadar/core';
-import { planUserCrudFlow } from '../../planner/plan-user-crud-flow.js';
+import { planUserCrudFlow as planWith } from '../../planner/plan-user-crud-flow.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
+
+const planUserCrudFlow = (orbital: Parameters<typeof planWith>[1]): ReturnType<typeof planWith> => planWith(testKernel, orbital);
 import { extractTraitWalkConfigs } from '../../planner/extract-trait-walk-configs.js';
 import { createFakeDriver, type FakeDriverContext } from '../impls/fake.js';
 import { tick } from '../tick.js';
@@ -217,16 +220,16 @@ function crossEntityRestrictedChannelSchema(): OrbitalSchema {
 }
 
 describe('tick — crud row resolution, cross-entity restrict relation (C1-V17)', () => {
-  it('planUserCrudFlow attaches avoidReferencedByOtherEntities for a cross-entity (non-self) restrict relation', () => {
+  it('planUserCrudFlow attaches avoidReferencedByOtherEntities for a cross-entity (non-self) restrict relation', async () => {
     const schema = crossEntityRestrictedChannelSchema();
-    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(schema)).find((s) => s.testKind === 'crud-delete');
     expect(del?.avoidReferencedVia).toBeUndefined();
     expect(del?.avoidReferencedByOtherEntities).toEqual([{ entityName: 'ChannelMember', fieldName: 'channel' }]);
   });
 
   it('picks the Channel row NOT referenced by any ChannelMember, never row 0 just because it has no SELF-relation', async () => {
     const schema = crossEntityRestrictedChannelSchema();
-    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(schema)).find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
 
     const traits = extractTraitWalkConfigs(schema);
@@ -253,7 +256,7 @@ describe('tick — crud row resolution, cross-entity restrict relation (C1-V17)'
 
   it('fails closed with a no-deletable-row finding (not no-target-row) when EVERY row is cross-entity referenced', async () => {
     const schema = crossEntityRestrictedChannelSchema();
-    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(schema)).find((s) => s.testKind === 'crud-delete');
 
     const traits = extractTraitWalkConfigs(schema);
     const dispatched: string[] = [];
@@ -292,7 +295,7 @@ describe('tick — crud row resolution, cross-entity restrict relation (C1-V17)'
 describe('tick — crud row resolution (C1-V11)', () => {
   it('picks an unreferenced owned row, sets targetRowId, switches the viewer to its owner, and dispatches against it', async () => {
     const schema = selfRelatingOwnedNoteSchema();
-    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(schema)).find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
     expect(del?.avoidReferencedVia).toEqual(['parentId']);
     expect(del?.viewerRequirement).toEqual({ owner: { sourceEntity: 'Note', sourceField: 'authorId' } });
@@ -332,7 +335,7 @@ describe('tick — crud row resolution (C1-V11)', () => {
 
   it('fails the frame closed with a no-deletable-row finding when every row is referenced, and never dispatches', async () => {
     const schema = selfRelatingOwnedNoteSchema();
-    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(schema)).find((s) => s.testKind === 'crud-delete');
     expect(del?.avoidReferencedVia).toEqual(['parentId']);
 
     const traits = extractTraitWalkConfigs(schema);
@@ -371,7 +374,7 @@ describe('tick — crud row resolution (C1-V11)', () => {
 
   it('a bus-fallback dispatch (no DOM affordance found) carries the picked row\'s id, never a bare payload', async () => {
     const schema = selfRelatingOwnedNoteSchema();
-    const del = planUserCrudFlow(schema).find((s) => s.testKind === 'crud-delete');
+    const del = (await planUserCrudFlow(schema)).find((s) => s.testKind === 'crud-delete');
 
     const traits = extractTraitWalkConfigs(schema);
     const { driver, runtime } = createFakeDriver(traits);

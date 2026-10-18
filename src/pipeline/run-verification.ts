@@ -18,29 +18,23 @@
  */
 
 // node:fs is loaded dynamically below so browser bundles don't pull it in.
-import { collectEmbeddedTraitReferrers, constTruth } from '@almadar/core';
+import { collectEmbeddedTraitReferrers, constTruth, kernelEvaluator, toWireValue } from '@almadar/core';
 import type { EntityData, EntityRow, EventPayload, Orbital } from '@almadar/core';
-import { createMinimalContext, evaluateGuard } from '@almadar/evaluator';
 import type { Frame } from '../frame/types.js';
 import { tick, resolveEstablishRowPayload } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
 import { pickTargetRow } from '../planner/internal/self-relation-fields.js';
-import { planWalk } from '../planner/plan-walk.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { resolveTraitNames } from '../planner/trait-scope.js';
 import { collectEntityFields, projectedPayloadFields } from '../planner/internal/payload-synth.js';
 import { eachInlineTrait, findInitialState, traitBootRenderSlots } from '../planner/internal/orbital-walk.js';
 import { scanRenderUiEffect } from '../planner/internal/render-ui-scan.js';
-import { planTransientFailureProbes, type TransientFailureProbeResult } from '../planner/plan-transient-failure-probes.js';
+import { transientFailureProbes as planTransientFailureProbes, type TransientFailureProbeResult } from '../kernel/adapt.js';
 import { isUiFactoryBoard } from './ui-factory-board.js';
 import { planClickPathSamples } from '../planner/plan-click-path-samples.js';
-import { planContractEvents } from '../planner/plan-contract-events.js';
-import { planDataMutationTests } from '../planner/plan-data-mutation-tests.js';
 import { planInteractionTests } from '../planner/plan-interaction-tests.js';
 import { planUserCrudFlow } from '../planner/plan-user-crud-flow.js';
-import { planReplayTo } from '../planner/plan-replay-to.js';
-import { planTickTests } from '../planner/plan-tick-tests.js';
-import { planEmitSweep } from '../planner/plan-emit-sweep.js';
+import { contractSteps, dataMutationSteps, emitSweepSteps, replayTo, tickSteps, walkSteps } from '../kernel/adapt.js';
 import {
   collectEntityIdBindingTransitions,
   collectPersistWriteTransitions,
@@ -242,24 +236,25 @@ export async function runVerification<Ctx extends DriverContext>(
     }
   };
 
+  const planned = await input.kernel.plan(input.orbital);
   if (opts.enableInteractionTests !== false) {
-    collectExtension(planInteractionTests(input.orbital));
+    collectExtension(await planInteractionTests(input.kernel, input.orbital));
   }
   if (opts.enableDataMutationTests !== false) {
-    collectExtension(planDataMutationTests(input.orbital));
+    collectExtension(dataMutationSteps(planned));
   }
   if (opts.enableClickPathSamples !== false) {
-    collectExtension(planClickPathSamples(input.orbital));
+    collectExtension(await planClickPathSamples(input.kernel, input.orbital));
   }
-  if (opts.enableContractEvents !== false && opts.contractRegistry !== undefined) {
-    collectExtension(planContractEvents(input.orbital, opts.contractRegistry));
+  if (opts.enableContractEvents !== false) {
+    collectExtension(contractSteps(planned));
   }
   if (opts.enableUserCrudFlow !== false) {
-    collectExtension(planUserCrudFlow(input.orbital));
+    collectExtension(await planUserCrudFlow(input.kernel, input.orbital));
   }
   if (opts.enableTickTests !== false) {
     for (const trait of traits) {
-      collectExtension(planTickTests({ trait }));
+      collectExtension(tickSteps(planned, trait.traitName));
     }
   }
   if (opts.enableEmitSweep !== false) {
@@ -273,13 +268,7 @@ export async function runVerification<Ctx extends DriverContext>(
       for (const transition of t.transitions) acceptedEvents.add(transition.event);
     }
     for (const trait of traits) {
-      const emits = emitSweepDeclarations(trait);
-      if (emits.length > 0) {
-        collectExtension(
-          planEmitSweep({ trait, emits, schema: input.orbital, orb: orbByTraitName.get(trait.traitName) })
-            .filter((step) => acceptedEvents.has(step.event)),
-        );
-      }
+      collectExtension(emitSweepSteps(planned, trait.traitName).filter((step) => acceptedEvents.has(step.event)));
     }
   }
 
@@ -300,8 +289,7 @@ export async function runVerification<Ctx extends DriverContext>(
   let transientFailureProbes: TransientFailureProbeResult = { steps: [], findings: [] };
   const transientArmKeys = new Set<string>();
   if (opts.enablePortalPerStep !== false) {
-    const walkConfigsByName = new Map(walkTraits.map((t) => [t.traitName, t]));
-    transientFailureProbes = planTransientFailureProbes(input.orbital, portalExpectations, walkConfigsByName);
+    transientFailureProbes = await planTransientFailureProbes(input.kernel, input.orbital, portalExpectations);
     collectExtension(transientFailureProbes.steps);
     for (const step of transientFailureProbes.steps) {
       const v = step.verifiesPortalFor;
@@ -352,9 +340,9 @@ export async function runVerification<Ctx extends DriverContext>(
     // the first extension step fires into a still-hydrating page and
     // flakes with `frame 0: dispatch failed`.
     const baseSteps = importedSource === undefined
-      ? planWalk({ trait, entityFieldsByName, orbital: input.orbital })
+      ? walkSteps(planned, trait.traitName)
       : extensionSteps.length > 0
-        ? planWalk({ trait, entityFieldsByName, orbital: input.orbital }).filter((s) => s.triggerKind === 'auto-init')
+        ? walkSteps(planned, trait.traitName).filter((s) => s.triggerKind === 'auto-init')
         : [];
     attachRowContextFromDataMutation(baseSteps, extensionSteps);
     const plan = [...baseSteps, ...extensionSteps];
@@ -536,10 +524,7 @@ export async function runVerification<Ctx extends DriverContext>(
                 `walk config to replay to '${establishTargetState}'`;
               establishReplayFailed = true;
             } else {
-              const establishReplayPath = planReplayTo(
-                { trait: establishTraitConfig, targetState: establishTargetState },
-                entityFieldsByName,
-              );
+              const establishReplayPath = await replayTo(input.kernel, input.orbital, establishTraitName, establishTargetState);
               if (establishReplayPath === null) {
                 preconditionUnreachable = true;
                 preconditionReason =
@@ -616,10 +601,7 @@ export async function runVerification<Ctx extends DriverContext>(
         // to establish, so an empty replay path here is correct-by-design,
         // not a reachability failure.
         if (!preconditionUnreachable && step.from !== trait.initialState && step.from !== '*') {
-          const replayPath = planReplayTo(
-            { trait, targetState: step.from },
-            entityFieldsByName,
-          );
+          const replayPath = await replayTo(input.kernel, input.orbital, trait.traitName, step.from);
           if (replayPath === null) {
             // Genuinely unreachable — no dispatchable hop's closure ever
             // lands on `step.from`. Distinct from `[]`, which means the
@@ -1127,28 +1109,6 @@ export async function runVerification<Ctx extends DriverContext>(
 // ── internal ─────────────────────────────────────────────────────────
 
 /**
- * Build the emit-sweep declaration list for a trait: every event its
- * effects emit (`emit: { success, failure }` options) plus every
- * contract-declared event from `emits {}`, internal AND external scope.
- * `@config.<knob>` event-name references can't be dispatched as literals
- * — they resolve at inline/resolve time, so a surviving `@`-prefixed
- * name here is undispatchable and skipped. `planEmitSweep` dedupes.
- */
-export function emitSweepDeclarations(trait: TraitWalkConfig): EmitDeclaration[] {
-  const isHttpRoute = (event: string): boolean => trait.httpReplyEvents?.has(event) === true || trait.httpFailureEvents?.has(event) === true;
-  const out: EmitDeclaration[] = [];
-  for (const event of trait.effectEmittedEvents ?? []) {
-    if (isHttpRoute(event)) continue;
-    out.push({ success: event });
-  }
-  for (const contract of trait.emitContracts ?? []) {
-    if (contract.event.startsWith('@') || isHttpRoute(contract.event)) continue;
-    out.push({ success: contract.event });
-  }
-  return out;
-}
-
-/**
  * R-PERSIST-NO-ROW-KEY-SILENT-SUCCESS remedy: if `step` IS the trait's
  * own id-binding transition (`(from,event,to)` matches an entry
  * `collectEntityIdBindingTransitions` found for this trait), replace the
@@ -1214,7 +1174,7 @@ function entityRowForTrait(frame: Frame | null, traitName: string, linkedEntity:
 /**
  * RECONCILE-SIBLING-CREDIT: whether `sibling`'s guard actually admits the
  * payload the kernel dispatched for this reconcile hop — using
- * `@almadar/evaluator`'s `evaluateGuard`, the same evaluator the real
+ * the kernel's `evaluateGuard`, the same evaluator the real
  * runtime uses to decide guard truth. Before this check, the
  * reconcile-divergence assertion credited "guard selected a declared
  * sibling" whenever the runtime's landing state matched ANY OTHER arm's
@@ -1237,12 +1197,11 @@ function siblingGuardSatisfiable(
 ): boolean {
   if (sibling.guard === undefined || sibling.guard === null) return true;
   const entity = entityRowForTrait(beforeFrame, traitName, linkedEntity);
-  const ctx = createMinimalContext(entity, payload, fromState);
-  try {
-    return evaluateGuard(sibling.guard, ctx);
-  } catch {
-    return false;
-  }
+  const verdict = kernelEvaluator().evaluateGuard(
+    { entity: toWireValue(entity), payload: toWireValue(payload), state: fromState },
+    sibling.guard,
+  );
+  return verdict.kind === 'value' && verdict.value;
 }
 
 /**

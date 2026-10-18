@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
-import { planClickPathSamples } from '../plan-click-path-samples.js';
+import { planClickPathSamples as planWith } from '../plan-click-path-samples.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
+
+const planClickPathSamples = (orbital: Parameters<typeof planWith>[1]): ReturnType<typeof planWith> => planWith(testKernel, orbital);
 
 const cartWithButtons: OrbitalSchema = {
   name: 'cart',
@@ -51,8 +54,8 @@ const cartWithButtons: OrbitalSchema = {
 };
 
 describe('planClickPathSamples', () => {
-  it('emits one dom step per (slot, event) render site found in render-ui effects', () => {
-    const steps = planClickPathSamples(cartWithButtons);
+  it('emits one dom step per (slot, event) render site found in render-ui effects', async () => {
+    const steps = await planClickPathSamples(cartWithButtons);
     expect(steps).toHaveLength(2);
     for (const step of steps) {
       expect(step.triggerKind).toBe('dom');
@@ -64,7 +67,7 @@ describe('planClickPathSamples', () => {
     expect(steps.map((s) => s.event).sort()).toEqual(['ADD_ITEM', 'REMOVE_ITEM']);
   });
 
-  it('returns [] when no traits have render-ui actions', () => {
+  it('returns [] when no traits have render-ui actions', async () => {
     const noActions: OrbitalSchema = {
       ...cartWithButtons,
       orbitals: [
@@ -84,10 +87,10 @@ describe('planClickPathSamples', () => {
         },
       ],
     };
-    expect(planClickPathSamples(noActions)).toEqual([]);
+    expect(await planClickPathSamples(noActions)).toEqual([]);
   });
 
-  it('deduplicates the same (trait, slot, event) seen across multiple transitions', () => {
+  it('deduplicates the same (trait, slot, event) seen across multiple transitions', async () => {
     const dupe: OrbitalSchema = {
       ...cartWithButtons,
       orbitals: [
@@ -120,10 +123,10 @@ describe('planClickPathSamples', () => {
         },
       ],
     };
-    expect(planClickPathSamples(dupe)).toHaveLength(1);
+    expect(await planClickPathSamples(dupe)).toHaveLength(1);
   });
 
-  it('stamps navigates: true for a click-path step whose target transition is navigate-back', () => {
+  it('stamps navigates: true for a click-path step whose target transition is navigate-back', async () => {
     const withBack: OrbitalSchema = {
       ...cartWithButtons,
       orbitals: [
@@ -153,20 +156,20 @@ describe('planClickPathSamples', () => {
         },
       ],
     };
-    const steps = planClickPathSamples(withBack);
+    const steps = await planClickPathSamples(withBack);
     expect(steps).toHaveLength(1);
     expect(steps[0]?.event).toBe('BACK');
     expect(steps[0]?.navigates).toBe(true);
   });
 
-  it('does not stamp navigates for a click-path step whose target transition has no navigation effect', () => {
-    const steps = planClickPathSamples(cartWithButtons);
+  it('does not stamp navigates for a click-path step whose target transition has no navigation effect', async () => {
+    const steps = await planClickPathSamples(cartWithButtons);
     for (const step of steps) {
       expect(step.navigates).toBeUndefined();
     }
   });
 
-  it('returns [] when traits have no stateMachine', () => {
+  it('returns [] when traits have no stateMachine', async () => {
     const noSM: OrbitalSchema = {
       ...cartWithButtons,
       orbitals: [
@@ -176,12 +179,12 @@ describe('planClickPathSamples', () => {
         },
       ],
     };
-    expect(planClickPathSamples(noSM)).toEqual([]);
+    expect(await planClickPathSamples(noSM)).toEqual([]);
   });
 });
 
 describe('planClickPathSamples — a guarded affordance carries its guard preamble', () => {
-  it('attaches DRAFT_CHANGED before clicking a composer Send guarded on the draft', () => {
+  it('attaches DRAFT_CHANGED before clicking a composer Send guarded on the draft', async () => {
     const orbital: OrbitalSchema = {
       name: 'efficacy-chat',
       version: '1.0.0',
@@ -212,7 +215,7 @@ describe('planClickPathSamples — a guarded affordance carries its guard preamb
               { from: 'ready', to: 'ready', event: 'DRAFT_CHANGED', effects: [['set', '@entity.draft', '@payload.value']] },
               {
                 from: 'ready', to: 'ready', event: 'SEND',
-                guard: ['and', '@entity.activeChannel', ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
+                guard: ['and', ['!=', '@entity.activeChannel', ''], ['not', ['=', ['str/default', '@entity.draft', ''], '']]],
                 effects: [['emit', 'SAVE', { data: { content: '@entity.draft' } }]],
               },
             ],
@@ -220,7 +223,7 @@ describe('planClickPathSamples — a guarded affordance carries its guard preamb
         }],
       }],
     };
-    const steps = planClickPathSamples(orbital);
+    const steps = await planClickPathSamples(orbital);
     const send = steps.find((s) => s.event === 'SEND');
     expect(send?.establishesRow?.event).toBe('DRAFT_CHANGED');
     expect(send?.establishesRow?.beforeReplay).toBe(true);

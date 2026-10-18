@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { EffectTrace, OrbitalSchema, RawUserClaims } from '@almadar/core';
-import { planDataMutationTests } from '../plan-data-mutation-tests.js';
+import { planDataMutationTests } from '../../kernel/__tests__/kernel-steps.js';
 import { extractTraitWalkConfigs } from '../extract-trait-walk-configs.js';
 import { createFakeDriver, type FakeDriverContext } from '../../driver/impls/fake.js';
 import { tick } from '../../driver/tick.js';

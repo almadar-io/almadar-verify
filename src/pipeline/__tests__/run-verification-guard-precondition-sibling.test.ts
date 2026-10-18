@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EffectTrace, OrbitalSchema, Trait } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 function helpdeskOrbital(): OrbitalSchema {
@@ -156,7 +157,7 @@ describe('runVerification — sibling guard-precondition preamble (C1-V15 item A
     };
 
     const result = await runVerification({
-      itemName: 'helpdesk-sibling-preamble-fixture',
+      itemName: 'helpdesk-sibling-preamble-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },

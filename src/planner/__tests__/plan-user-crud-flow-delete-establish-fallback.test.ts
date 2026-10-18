@@ -8,7 +8,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema, OrbitalEntity, Trait } from '@almadar/core';
-import { planUserCrudFlow } from '../plan-user-crud-flow.js';
+import { planUserCrudFlow as planWith } from '../plan-user-crud-flow.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
+
+const planUserCrudFlow = (orbital: Parameters<typeof planWith>[1]): ReturnType<typeof planWith> => planWith(testKernel, orbital);
 
 function createTrait(): Trait {
   return {
@@ -113,15 +116,15 @@ const selfRelatingEntity: OrbitalEntity = {
 };
 
 describe('planUserCrudFlow — deleteEstablishFallback (C1-V15 item C)', () => {
-  it('attaches no fallback when the entity has no self-relation', () => {
-    const steps = planUserCrudFlow(schemaWith(plainEntity));
+  it('attaches no fallback when the entity has no self-relation', async () => {
+    const steps = await planUserCrudFlow(schemaWith(plainEntity));
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
     expect(del?.deleteEstablishFallback).toBeUndefined();
   });
 
-  it('attaches the declared create flow as a fallback when the entity self-relates and a create exists', () => {
-    const steps = planUserCrudFlow(schemaWith(selfRelatingEntity));
+  it('attaches the declared create flow as a fallback when the entity self-relates and a create exists', async () => {
+    const steps = await planUserCrudFlow(schemaWith(selfRelatingEntity));
     const del = steps.find((s) => s.testKind === 'crud-delete');
     expect(del).toBeDefined();
     expect(del?.deleteEstablishFallback).toBeDefined();

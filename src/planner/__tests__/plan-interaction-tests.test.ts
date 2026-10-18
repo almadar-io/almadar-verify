@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
-import { planInteractionTests } from '../plan-interaction-tests.js';
+import { planInteractionTests as planWith } from '../plan-interaction-tests.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
+
+const planInteractionTests = (orbital: Parameters<typeof planWith>[1]): ReturnType<typeof planWith> => planWith(testKernel, orbital);
 
 const cart: OrbitalSchema = {
   name: 'cart',
@@ -87,16 +90,16 @@ const cart: OrbitalSchema = {
 };
 
 describe('planInteractionTests', () => {
-  it('emits a dom step per transition with a render-ui target', () => {
-    const steps = planInteractionTests(cart);
+  it('emits a dom step per transition with a render-ui target', async () => {
+    const steps = await planInteractionTests(cart);
     // Two render-ui transitions: ADD_ITEM (modal), SAVE (form-section).
     // CANCEL has no render-ui → no test.
     const interactions = steps.filter((s) => s.testKind === 'interaction');
     expect(interactions).toHaveLength(2);
   });
 
-  it('marks the form transition with formData built from the payload schema', () => {
-    const steps = planInteractionTests(cart);
+  it('marks the form transition with formData built from the payload schema', async () => {
+    const steps = await planInteractionTests(cart);
     const save = steps.find((s) => s.event === 'SAVE');
     expect(save?.expectedPattern).toBe('form-section');
     expect(save?.formData).toBeDefined();
@@ -104,15 +107,15 @@ describe('planInteractionTests', () => {
     expect(save?.formData?.description).toBeDefined();
   });
 
-  it('non-form interactions get expectedPattern but no formData', () => {
-    const steps = planInteractionTests(cart);
+  it('non-form interactions get expectedPattern but no formData', async () => {
+    const steps = await planInteractionTests(cart);
     const add = steps.find((s) => s.event === 'ADD_ITEM');
     expect(add?.expectedPattern).toBe('modal');
     expect(add?.formData).toBeUndefined();
   });
 
-  it('replay path is expanded inline as triggerKind: replay steps before each interaction', () => {
-    const steps = planInteractionTests(cart);
+  it('replay path is expanded inline as triggerKind: replay steps before each interaction', async () => {
+    const steps = await planInteractionTests(cart);
     // SAVE fires from `form`, which is reachable from `idle` via ADD_ITEM.
     // So SAVE's interaction step should be preceded by a replay step.
     const idx = steps.findIndex((s) => s.event === 'SAVE' && s.testKind === 'interaction');
@@ -122,12 +125,12 @@ describe('planInteractionTests', () => {
     expect(prev.event).toBe('ADD_ITEM');
   });
 
-  it('skips transitions with no render-ui (e.g. CANCEL)', () => {
-    const steps = planInteractionTests(cart);
+  it('skips transitions with no render-ui (e.g. CANCEL)', async () => {
+    const steps = await planInteractionTests(cart);
     expect(steps.find((s) => s.event === 'CANCEL')).toBeUndefined();
   });
 
-  it('returns [] for an orbital with no render-ui transitions', () => {
+  it('returns [] for an orbital with no render-ui transitions', async () => {
     const noUi: OrbitalSchema = {
       ...cart,
       orbitals: [
@@ -147,6 +150,6 @@ describe('planInteractionTests', () => {
         },
       ],
     };
-    expect(planInteractionTests(noUi)).toEqual([]);
+    expect(await planInteractionTests(noUi)).toEqual([]);
   });
 });

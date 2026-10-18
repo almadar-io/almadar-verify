@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 
-export { applyRowAccess, checkMutationAccess } from '@almadar/evaluator/entityAccess';
+export { applyRowAccess, checkMutationAccess } from '@almadar/core';
 
 // Browser utilities
 export { listBrowserPersonas, signInBrowserPersona, readBrowserCurrentUid, type PersonaHostKind, type PersonaBrowserWindow } from './browser/persona.js';
@@ -264,11 +264,6 @@ export type {
   PlanReplayInput,
   PlanTickInput,
 } from './planner/types.js';
-export { planWalk } from './planner/plan-walk.js';
-export { planInitCredit } from './planner/plan-init-credit.js';
-export { planEmitSweep } from './planner/plan-emit-sweep.js';
-export { planReplayTo } from './planner/plan-replay-to.js';
-export { planTickTests } from './planner/plan-tick-tests.js';
 export {
   decorateWithTriggerKind,
   type DecorateInput,
@@ -276,12 +271,6 @@ export {
 export { planClickPathSamples } from './planner/plan-click-path-samples.js';
 export { extractTraitWalkConfigs } from './planner/extract-trait-walk-configs.js';
 export { resolveTraitNames, traitMatchesName } from './planner/trait-scope.js';
-export {
-  planContractEvents,
-  type ContractRegistry,
-  type ContractRegistryEntry,
-} from './planner/plan-contract-events.js';
-export { planDataMutationTests } from './planner/plan-data-mutation-tests.js';
 export { planInteractionTests } from './planner/plan-interaction-tests.js';
 export { planUserCrudFlow } from './planner/plan-user-crud-flow.js';
 
@@ -358,8 +347,7 @@ export {
   type PlayCircuitStepInput,
   type PlayCircuitStepResult,
 } from './driver/play-step.js';
-export { stepVerdict, type StepExpectation, type StepVerdict } from './driver/step-verdict.js';
-export { walkTraitVerdict, stepExpectation, type TraitWalkOptions, type TraitWalkVerdict, type WalkedStep } from './driver/trait-walk.js';
+export { walkTraitVerdict, stepExpectation, stepVerdictOf, observationOf, type StepExpectation, type StepVerdict, type TraitWalkOptions, type TraitWalkVerdict, type WalkedStep } from './driver/trait-walk.js';
 export { createCircuitHooks, type CircuitHooks, type GuardVerdict } from './driver/circuit-hooks.js';
 export { declaredEntityRow } from './driver/declared-entity-row.js';
 export {
@@ -382,6 +370,10 @@ export {
   createDefaultDomTrigger,
   type DefaultDomTriggerOptions,
 } from './driver/helpers/default-dom-trigger.js';
+
+// The kernel is the one planner the pipeline asks what to fire and what to expect.
+export { loadKernelExports, loadKernelPlanner } from './kernel/load-node.js';
+export { createKernelPlanner, createRemoteKernelExports, KERNEL_OPS, KernelPlanRefused, type KernelExports, type KernelOp, type KernelPlanner, type PlannedProgram } from './kernel/kernel-planner.js';
 
 // Pipeline — composes plan → fold(tick) → observers → report.
 export {

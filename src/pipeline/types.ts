@@ -13,7 +13,7 @@ import type {
   PortalExpectation,
   ReportShape,
 } from '../observer/types.js';
-import type { ContractRegistry } from '../planner/plan-contract-events.js';
+import type { KernelPlanner } from '../kernel/kernel-planner.js';
 
 /**
  * Input to `runVerification`. Generic over `Ctx` so the consumer's
@@ -29,6 +29,8 @@ import type { ContractRegistry } from '../planner/plan-contract-events.js';
 export interface RunVerificationInput<Ctx extends DriverContext> {
   /** Identifier for the report (e.g. behavior or atom name). */
   itemName: string;
+  /** The kernel planner: what to fire and what to expect, for every flow the walk drives. */
+  kernel: KernelPlanner;
   /** Parsed orbital schema from `@almadar/core`'s `parseOrbitalSchema`. */
   orbital: OrbitalSchema;
   /** Driver impl that exposes the four required methods. */
@@ -42,7 +44,7 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
   options?: {
     /** Run Phase 4b interaction tests (DOM-trigger render-ui patterns). Default: true. */
     enableInteractionTests?: boolean;
-    /** Run Phase 4c contract event coverage. Requires `contractRegistry`. Default: true. */
+    /** Run Phase 4c contract event coverage, from the event contracts the kernel reads. Default: true. */
     enableContractEvents?: boolean;
     /** Run Phase 4b+ data mutation tests (CRUD). Default: true. */
     enableDataMutationTests?: boolean;
@@ -69,11 +71,6 @@ export interface RunVerificationInput<Ctx extends DriverContext> {
      * so downstream listeners get covered. Default: true.
      */
     enableEmitSweep?: boolean;
-    /**
-     * Pattern → emit registry from `event-contracts.json` files.
-     * Required when `enableContractEvents` is true.
-     */
-    contractRegistry?: ContractRegistry;
     /** Per-trait time budget in ms. Default: 60000. */
     maxWalkMs?: number;
     /** Safety bound on the total Frame stream length. Default: 5000. */

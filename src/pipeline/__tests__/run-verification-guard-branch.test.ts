@@ -24,6 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import type { OrbitalSchema } from '@almadar/core';
 import { runVerification } from '../run-verification.js';
+import { testKernel } from '../../kernel/__tests__/test-kernel.js';
 import { createFakeDriver } from '../../driver/impls/fake.js';
 
 function makeOrbital(): OrbitalSchema {
@@ -101,7 +102,7 @@ describe('runVerification — reconcile hop guard-branch tolerance', () => {
     };
 
     const result = await runVerification({
-      itemName: 'guard-branch-fixture',
+      itemName: 'guard-branch-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
@@ -124,7 +125,7 @@ describe('runVerification — reconcile hop guard-branch tolerance', () => {
     };
 
     const result = await runVerification({
-      itemName: 'guard-branch-fixture',
+      itemName: 'guard-branch-fixture', kernel: testKernel,
       orbital,
       driver,
       ctx: { outputDir: '', runtime },
