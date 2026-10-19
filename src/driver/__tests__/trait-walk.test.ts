@@ -170,3 +170,48 @@ describe('the kernel verdict on a played step', () => {
       .toEqual({ ok: false, detail: 'editing --SAVE--> did not fire.' });
   });
 });
+
+function walletApp(spend: SExpr, persist = false): OrbitalSchema {
+  return {
+    name: 'wallet',
+    orbitals: [{
+      name: 'WalletOrbital',
+      entity: { name: 'Account', persistence: 'runtime', fields: [{ name: 'balance', type: 'number', default: 100 }] },
+      pages: [],
+      traits: [{
+        name: 'Wallet',
+        scope: 'instance',
+        linkedEntity: 'Account',
+        stateMachine: {
+          states: [{ name: 'active', isInitial: true }],
+          events: [{ key: 'SPEND', name: 'Spend', payloadSchema: [{ name: 'amount', type: 'number', required: true }] }],
+          transitions: [{
+            from: 'active', to: 'active', event: 'SPEND',
+            guard: ['>=', '@payload.amount', 0],
+            ensures: [['=', '@entity.balance', ['-', '@fromEntity.balance', '@payload.amount']]],
+            effects: persist ? [['persist', 'update', 'Account', { id: '@entity.id', balance: spend }]] : [['set', '@entity.balance', spend]],
+          }],
+        },
+      }],
+    }],
+  };
+}
+
+describe('the @ensures of a played step, judged by the kernel', () => {
+  it('a transition that keeps its contract passes', async () => {
+    const walk = await walkTraitVerdict(walletApp(['-', '@entity.balance', '@payload.amount']), 'Wallet');
+    expect(walk.status, walk.detail).toBe('pass');
+  });
+
+  it('a wrong value in the right state fails the walk', async () => {
+    const walk = await walkTraitVerdict(walletApp(['-', ['-', '@entity.balance', '@payload.amount'], 1]), 'Wallet');
+    expect(walk.status).toBe('fail');
+    expect(walk.detail).toMatch(/@ensures/);
+  });
+
+  it('a row the walk cannot observe is inconclusive, never a pass', async () => {
+    const walk = await walkTraitVerdict(walletApp(['-', '@entity.balance', '@payload.amount'], true), 'Wallet');
+    expect(walk.status).toBe('inconclusive');
+    expect(walk.detail).toMatch(/persist/);
+  });
+});

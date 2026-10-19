@@ -5,8 +5,8 @@
  * linked entity's first seeded row, as each canvas step does. Shared by the Studio canvas and the
  * pre-deploy gate.
  */
-import type { CircuitStepResult, EntityRow, EventPayload, OrbitalSchema, TraitConfig } from '@almadar/core';
-import type { Observation, ObservedEffect, StepWire, VerdictWire } from '@almadar/core/kernel-wire';
+import { isInlineTrait, toWireValue, type CircuitStepResult, type EntityRow, type EventPayload, type OrbitalSchema, type SExpr, type TraitConfig } from '@almadar/core';
+import type { Observation, ObservedEffect, PropositionObservation, PropositionVerdict, StepWire, VerdictWire } from '@almadar/core/kernel-wire';
 import { inconclusiveReason, walkStep, walkWire } from '../kernel/adapt.js';
 import type { KernelPlanner } from '../kernel/kernel-planner.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
@@ -99,6 +99,46 @@ export function stepVerdictOf(step: Pick<StepWire, 'from' | 'event' | 'to' | 'gu
   }
 }
 
+/** The `@ensures` of the arm a played step took (`firedArm` among the trait's `from --event-->` arms). */
+export function ensuresOf(schema: OrbitalSchema, traitName: string, from: string, event: string, firedArm: number | undefined): SExpr[] {
+  if (firedArm === undefined) return [];
+  for (const orbital of schema.orbitals) {
+    for (const trait of orbital.traits) {
+      if (typeof trait === 'string' || !isInlineTrait(trait) || trait.name !== traitName) continue;
+      const arm = trait.stateMachine?.transitions.filter((t) => t.from === from && t.event === event)[firedArm];
+      return arm?.ensures ?? [];
+    }
+  }
+  return [];
+}
+
+/** A played step as the kernel's proposition judge sees it. The walk runs `set`s on the row but not `persist`s, so a
+ *  step that persists reports its after-row as unobserved rather than judged on a row it did not write. */
+export function propositionObservationOf(result: CircuitStepResult, before: EntityRow, after: EntityRow, payload: EventPayload): PropositionObservation {
+  const persisted = result.effects.some((e) => e.type === 'persist');
+  return {
+    executed: result.transitionFired,
+    failed: result.effects.some((e) => e.outcome !== 'denied' && e.routed === undefined && (e.outcome === 'failed' || e.status === 'failed')),
+    entityBefore: toWireValue(before),
+    entityAfter: toWireValue(after),
+    payload: toWireValue(payload),
+    ...(persisted ? { unobserved: 'a circuit step does not run persist effects, so the row they write is not observed' } : {}),
+  };
+}
+
+/** The walk's finding for a step's `@ensures` verdict. */
+export function propositionVerdictOf(step: Pick<StepWire, 'from' | 'event' | 'to'>, verdict: PropositionVerdict): StepVerdict {
+  const arm = `${step.from} --${step.event}--> ${step.to}`;
+  switch (verdict.verdict) {
+    case 'held':
+      return { ok: true };
+    case 'broken':
+      return { ok: false, detail: `${arm} reached its state but broke its @ensures ${JSON.stringify(verdict.proposition)}.` };
+    case 'inconclusive':
+      return { ok: true, inconclusive: true, detail: `${arm} @ensures: ${verdict.reason}` };
+  }
+}
+
 export interface TraitWalkOptions {
   /** Seeded rows by entity (`buildMockData`); each step's `@entity` is the linked entity's first
    *  row, layered over its declared defaults. */
@@ -133,6 +173,7 @@ export async function walkTraitVerdict(kernel: KernelPlanner, schema: OrbitalSch
     const expected = stepExpectation(plannedStep);
     const payload: EventPayload = plannedStep.payload ?? {};
     const row = declaredEntityRow(schema, target.linkedEntity, seeded);
+    const before: EntityRow = { ...row };
     const result = await playCircuitStep(target, {
       from: plannedStep.from,
       event: plannedStep.event,
@@ -140,8 +181,14 @@ export async function walkTraitVerdict(kernel: KernelPlanner, schema: OrbitalSch
       ...createCircuitHooks(row, plannedStep.from, options.config),
     });
     const judged = await kernel.judge(await kernel.expect(wire), observationOf(result));
-    const verdict = stepVerdictOf(wire, result, judged);
+    let verdict = stepVerdictOf(wire, result, judged);
     if (inconclusive === undefined && judged.reason.kind === 'arm-unsolved' && verdict.detail !== undefined) inconclusive = verdict.detail;
+    const ensures = ensuresOf(schema, traitName, plannedStep.from, plannedStep.event, result.firedArm);
+    if (verdict.ok && ensures.length > 0) {
+      const held = propositionVerdictOf(wire, await kernel.proposition(ensures, propositionObservationOf(result, before, row, payload)));
+      if (!held.ok || held.inconclusive) verdict = held;
+      if (inconclusive === undefined && held.inconclusive && held.detail !== undefined) inconclusive = held.detail;
+    }
     steps.push({ ...expected, payload, result, verdict });
     if (!verdict.ok) return { trait: traitName, status: 'fail', ...(verdict.detail ? { detail: verdict.detail } : {}), steps };
   }

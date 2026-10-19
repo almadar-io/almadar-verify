@@ -5,7 +5,7 @@
  * @packageDocumentation
  */
 
-import type { OrbitalSchema } from '@almadar/core';
+import type { OrbitalSchema, SExpr } from '@almadar/core';
 import type {
   AffordanceQuery,
   AffordanceStep,
@@ -16,6 +16,8 @@ import type {
   PlanOptions,
   PlanOutcome,
   PreambleEvent,
+  PropositionObservation,
+  PropositionVerdict,
   StepWire,
   TransientOutcome,
   TransientQuery,
@@ -29,6 +31,7 @@ export interface KernelExports {
   verifyTransientProbe(programJson: string, queryJson: string, optionsJson: string): string | Promise<string>;
   verifyExpect(stepJson: string): string | Promise<string>;
   verifyJudge(expectationJson: string, observationJson: string): string | Promise<string>;
+  verifyProposition(ensuresJson: string, observationJson: string): string | Promise<string>;
   verifyCredit(stepsJson: string): string | Promise<string>;
   verifyReplay(programJson: string, queryJson: string, optionsJson: string): string | Promise<string>;
 }
@@ -36,7 +39,7 @@ export interface KernelExports {
 /** The exports a kernel answers over HTTP: the playground server holds the wasm and a browser host calls it. */
 export type KernelOp = keyof KernelExports;
 
-export const KERNEL_OPS: ReadonlyArray<KernelOp> = ['verifyPlan', 'verifyAffordance', 'verifyTransientProbe', 'verifyExpect', 'verifyJudge', 'verifyCredit', 'verifyReplay'];
+export const KERNEL_OPS: ReadonlyArray<KernelOp> = ['verifyPlan', 'verifyAffordance', 'verifyTransientProbe', 'verifyExpect', 'verifyJudge', 'verifyProposition', 'verifyCredit', 'verifyReplay'];
 
 /** A remote kernel: every export is one `POST url` with `{ op, args }`, answered `{ result }`. */
 export function createRemoteKernelExports(url: string, post: typeof fetch = fetch): KernelExports {
@@ -51,6 +54,7 @@ export function createRemoteKernelExports(url: string, post: typeof fetch = fetc
     verifyTransientProbe: call('verifyTransientProbe'),
     verifyExpect: call('verifyExpect'),
     verifyJudge: call('verifyJudge'),
+    verifyProposition: call('verifyProposition'),
     verifyCredit: call('verifyCredit'),
     verifyReplay: call('verifyReplay'),
   };
@@ -66,6 +70,8 @@ export interface KernelPlanner {
   transientProbe(program: OrbitalSchema, query: TransientQuery, options?: PlanOptions): Promise<TransientOutcome | null>;
   expect(step: StepWire): Promise<Expectation>;
   judge(expectation: Expectation, observation: Observation): Promise<VerdictWire>;
+  /** A fired transition's `@ensures` judged on one run: `@entity` after its effects, `@fromEntity` before them. */
+  proposition(ensures: ReadonlyArray<SExpr>, observation: PropositionObservation): Promise<PropositionVerdict>;
   credit(steps: ReadonlyArray<CreditStep>): Promise<Credit[]>;
   /** The hops that place a fresh machine of `trait` in `state`; `null` when the trait is unknown or the state unreachable. */
   replay(program: OrbitalSchema, trait: string, state: string, options?: PlanOptions): Promise<PreambleEvent[] | null>;
@@ -98,6 +104,9 @@ export function createKernelPlanner(kernel: KernelExports): KernelPlanner {
     },
     async judge(expectation, observation) {
       return JSON.parse(await kernel.verifyJudge(JSON.stringify(expectation), JSON.stringify(observation))) as VerdictWire;
+    },
+    async proposition(ensures, observation) {
+      return JSON.parse(await kernel.verifyProposition(JSON.stringify(ensures), JSON.stringify(observation))) as PropositionVerdict;
     },
     async credit(steps) {
       return JSON.parse(await kernel.verifyCredit(JSON.stringify(steps))) as Credit[];
