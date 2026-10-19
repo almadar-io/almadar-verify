@@ -38,7 +38,8 @@ function hop(id: string, event: string, before: number, after: number, effectTyp
     to: 'active',
     event,
     effects: [{ type: effectType, args: [], status: 'executed' }],
-    observed: { firedArm: 0, payload: { amount: 3 }, entityBefore: { balance: before }, entityAfter: { balance: after } },
+    firedArm: 0,
+    observed: { payload: { amount: 3 }, entityBefore: { balance: before }, entityAfter: { balance: after } },
     timestamp: 1,
   };
 }

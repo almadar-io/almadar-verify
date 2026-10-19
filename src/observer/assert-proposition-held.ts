@@ -47,7 +47,7 @@ export async function assertPropositionHeld(
       seen.add(trace.id);
       const observation = observationOf(trace);
       if (observation === undefined) continue;
-      const ensures = ensuresOf(schema, trace.traitName, trace.from, trace.event, trace.observed?.firedArm);
+      const ensures = ensuresOf(schema, trace.traitName, trace.from, trace.event, trace.firedArm);
       if (ensures.length === 0) continue;
       judged += 1;
       const hop = `${trace.traitName}: ${trace.from} --${trace.event}--> ${trace.to}`;
