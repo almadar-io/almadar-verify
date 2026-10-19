@@ -25,7 +25,7 @@ import type {
 import type { ConsoleCollector } from '../../browser/console.js';
 import type { Driver, DomTriggerResult, DriverContext, SendResult, SnapshotResult } from '../types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
-import { createDefaultSnapshot } from '../helpers/default-snapshot.js';
+import { createDefaultSnapshot, withRenderedRows } from '../helpers/default-snapshot.js';
 import { createDefaultDomTrigger } from '../helpers/default-dom-trigger.js';
 import { dispatchInBrowser } from '../helpers/browser-send-event.js';
 import { fillRouteParams } from '../helpers/fill-route-params.js';
@@ -155,7 +155,11 @@ export function createPlaywrightDriver(
 
     async snapshot(ctx, step): Promise<SnapshotResult> {
       const result = await snapshotImpl(ctx.page, ctx.outputDir, ctx.trait.traitName, step);
-      return result;
+      const listRows = bridge.listEntityRows;
+      if (listRows === undefined) return result;
+      const entities = [ctx.trait.linkedEntity, step?.expectedRowDelta?.entityName, step?.bindRowFrom?.entityName]
+        .filter((entity): entity is string => entity !== undefined);
+      return withRenderedRows(result, ctx.page, entities, (entity) => listRows(ctx.page, entity));
     },
 
     async reset(ctx) {

@@ -223,6 +223,33 @@ describe('planUserCrudFlow', () => {
     expect(del?.payloadRowShape).toBeUndefined();
   });
 
+  it('a crud step expects the source trait where its submit leaves it, since the flow clicks open then submit', async () => {
+    const steps = await planUserCrudFlow(stdListShape);
+    expect(steps.find((s) => s.testKind === 'crud-delete')?.acceptStates).toEqual(['idle']);
+    expect(steps.find((s) => s.testKind === 'crud-create')?.acceptStates).toEqual(['closed']);
+    expect(steps.find((s) => s.testKind === 'crud-edit')?.acceptStates).toEqual(['closed']);
+  });
+
+  it('control: a guarded submit with two arms accepts each arm the submit can settle in', async () => {
+    const [orbital] = stdListShape.orbitals;
+    const traits = orbital.traits.map((t) => {
+      if (typeof t === 'string' || !('stateMachine' in t) || t.name !== 'ListItemDelete' || t.stateMachine === undefined) return t;
+      return {
+        ...t,
+        stateMachine: {
+          ...t.stateMachine,
+          states: [...t.stateMachine.states, { name: 'blocked' }],
+          transitions: [
+            ...t.stateMachine.transitions,
+            { from: 'confirming', to: 'blocked', event: 'CONFIRM_DELETE', guard: ['=', '@payload.id', ''] },
+          ],
+        },
+      };
+    });
+    const steps = await planUserCrudFlow({ ...stdListShape, orbitals: [{ ...orbital, traits }] });
+    expect(steps.find((s) => s.testKind === 'crud-delete')?.acceptStates).toEqual(['idle', 'blocked']);
+  });
+
   it('crud-delete: payloadRowShape derives from the open event payloadSchema (entity-typed fields take the whole row)', async () => {
     // std-delete's real shape: DELETE declares `id` + `row: <Entity>`,
     // guard `"@payload.row"`. The trigger needs the whole row for

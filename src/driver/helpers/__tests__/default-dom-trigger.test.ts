@@ -162,3 +162,53 @@ describe('createDefaultDomTrigger — a form\'s own submit affordance', () => {
     await page.close();
   });
 });
+
+// A kernel-only client's snapshot carries no list rows: a delete whose row shows no Delete control dispatches the row
+// `tick()` already bound on the step (G-ORBITAL-SHELL-TYPESCRIPT-026), never a row re-read from the snapshot.
+describe('createDefaultDomTrigger — a delete no row exposes', () => {
+  let browser: Browser;
+
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+  }, 30000);
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  const bridgePage = async (): Promise<Page> => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <div data-entity-row data-entity-id="note-2">Second note</div>
+      <script>
+        window.__orbitalVerification = {
+          sendEvent(event, payload) { window.__sent = { event, payload }; },
+          getSnapshot() { return { traits: [] }; },
+        };
+      </script>
+    `);
+    return page;
+  };
+
+  const deleteStep = (bound: boolean): ExtendedWalkStep => ({
+    from: 'idle', event: 'DELETE', to: 'confirming', guardCase: null, isRepositioning: false, triggerKind: 'dom',
+    coverageKey: 'NoteDelete:idle+DELETE->confirming', traitName: 'NoteDelete', testKind: 'crud-delete',
+    expectedRowDelta: { entityName: 'Note', delta: -1 },
+    payload: bound ? { id: 'note-2', row: { id: 'note-2', title: 'Second note' } } : {},
+    ...(bound ? { targetRowId: 'note-2' } : {}),
+  });
+
+  it('dispatches the row tick() bound on the step', async () => {
+    const page = await bridgePage();
+    expect(await createDefaultDomTrigger()(page, deleteStep(true))).toBe(true);
+    const sent = await page.evaluate(() => (window as Window & { __sent?: { event: string; payload: object } }).__sent);
+    expect(sent).toEqual({ event: 'DELETE', payload: { id: 'note-2', row: { id: 'note-2', title: 'Second note' } } });
+    await page.close();
+  });
+
+  it('control: with no bound row and no snapshot rows it reports the missing affordance', async () => {
+    const page = await bridgePage();
+    expect(await createDefaultDomTrigger()(page, deleteStep(false))).toBe('no-row-affordance');
+    await page.close();
+  });
+});

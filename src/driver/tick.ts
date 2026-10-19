@@ -375,6 +375,10 @@ export async function tick<Ctx extends DriverContext>(
       // nothing guarantees that everywhere) — never `seedRow[payloadField]`,
       // which only happens to work when the two names coincide.
       step.payload[payloadField] = wholeRow ? seedRow : (seedRow['id'] as FieldValue);
+      // A row shape (a delete's guard reads the whole `row` beside its `id`) is filled from the same row.
+      for (const field of step.payloadRowShape ?? []) {
+        step.payload[field.name] = field.wholeRow ? seedRow : (seedRow['id'] as FieldValue);
+      }
     }
   }
 

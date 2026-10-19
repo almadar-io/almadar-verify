@@ -20,10 +20,11 @@ import type {
   PageRefObject,
   StateMachine,
   Trait,
+  TraitEventListener,
   TraitRef,
   Transition,
 } from '@almadar/core';
-import { collectTraitEmbedAdjacency, isInlineTrait, isPageReference } from '@almadar/core';
+import { collectTraitEmbedAdjacency, isInlineTrait, isPageReference, splitEventAddress } from '@almadar/core';
 import type { WalkTransition } from '../../engine/types.js';
 
 /**
@@ -123,21 +124,54 @@ export function dispatchNavigates(
   );
   if (dispatchedNavigates) return true;
 
+  for (const { listenerTrait, listen } of listenersOf(schema, orbital, traitName, eventKey)) {
+    if (listen.source?.kind === 'any') continue;
+    const triggeredNavigates = (listenerTrait.stateMachine?.transitions ?? []).some(
+      (t) => t.event === listen.triggers && transitionNavigates(t.effects),
+    );
+    if (triggeredNavigates) return true;
+  }
+  return false;
+}
+
+/** The `listens` entries, in every orbital, that hear `eventKey` emitted by `traitName` of `orbital` (a `* EVENT` wildcard hears every emitter). */
+function* listenersOf(
+  schema: OrbitalSchema,
+  orbital: Orbital,
+  traitName: string,
+  eventKey: string,
+): Generator<{ listenerTrait: Trait; listen: TraitEventListener }> {
   for (const orb of schema.orbitals) {
     for (const listenerTrait of orb.traits ?? []) {
       if (!isInlineTrait(listenerTrait)) continue;
       for (const listen of listenerTrait.listens ?? []) {
-        const source = listen.source;
-        if (source === undefined || source.kind === 'any') continue;
-        const sourceOrbitalName = source.kind === 'orbital' ? source.orbital : orb.name;
-        if (sourceOrbitalName !== orbital.name || source.trait !== traitName) continue;
-        if (listen.event !== eventKey) continue;
-        const triggeredNavigates = (listenerTrait.stateMachine?.transitions ?? []).some(
-          (t) => t.event === listen.triggers && transitionNavigates(t.effects),
-        );
-        if (triggeredNavigates) return true;
+        const { event, source } = listen.source !== undefined ? { event: listen.event, source: listen.source } : splitEventAddress(listen.event);
+        if (source === undefined || event !== eventKey) continue;
+        if (source.kind !== 'any') {
+          const sourceOrbitalName = source.kind === 'orbital' ? source.orbital : orb.name;
+          if (sourceOrbitalName !== orbital.name || source.trait !== traitName) continue;
+        }
+        yield { listenerTrait, listen };
       }
     }
+  }
+}
+
+/**
+ * Whether `eventKey`, emitted by `traitName` while it sits in `from`, reaches an arm: the emitter's own arm from
+ * `from`, or a listener's triggered arm. An emit that lands nowhere is a broadcast contract, not a step to walk.
+ */
+export function emitLands(
+  schema: OrbitalSchema,
+  orbital: Orbital,
+  traitName: string,
+  from: string,
+  eventKey: string,
+): boolean {
+  const emitter = (orbital.traits ?? []).find((t): t is Trait => isInlineTrait(t) && t.name === traitName);
+  if ((emitter?.stateMachine?.transitions ?? []).some((t) => t.event === eventKey && t.from === from)) return true;
+  for (const { listenerTrait, listen } of listenersOf(schema, orbital, traitName, eventKey)) {
+    if ((listenerTrait.stateMachine?.transitions ?? []).some((t) => t.event === listen.triggers)) return true;
   }
   return false;
 }

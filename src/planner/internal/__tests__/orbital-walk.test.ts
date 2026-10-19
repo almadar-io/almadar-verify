@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Effect, Orbital, OrbitalSchema, Trait } from '@almadar/core';
-import { dispatchNavigates, traitBootRenderSlots, transitionNavigates } from '../orbital-walk.js';
+import { dispatchNavigates, emitLands, traitBootRenderSlots, transitionNavigates } from '../orbital-walk.js';
 
 describe('traitBootRenderSlots', () => {
   it('returns empty for a portal-only trait whose INIT transition never renders (std-modal-shaped)', () => {
@@ -154,5 +154,93 @@ describe('dispatchNavigates', () => {
     };
     const schema: OrbitalSchema = { name: 'App', designTokens: {}, customPatterns: {}, orbitals: [orbital] };
     expect(dispatchNavigates(schema, orbital, 'DetailLayout', 'BACK')).toBe(true);
+  });
+});
+
+describe('emitLands', () => {
+  // std-confirmation-shaped: Delete owns CANCEL/CONFIRM arms only in `confirming`; a persistor listens to
+  // Delete.CONFIRM; Other has its own unrelated CANCEL arm in `idle`.
+  function confirmProgram(listenSource: 'trait' | 'any' | 'none'): { schema: OrbitalSchema; orbital: Orbital } {
+    const orbital: Orbital = {
+      name: 'ContactOrbital',
+      entity: { name: 'Contact', persistence: 'runtime', fields: [{ name: 'id', type: 'string', required: true }] },
+      traits: [
+        {
+          name: 'Delete',
+          scope: 'instance',
+          stateMachine: {
+            states: [{ name: 'idle', isInitial: true }, { name: 'confirming' }],
+            events: [{ key: 'REQUEST', name: 'Request' }, { key: 'CONFIRM', name: 'Confirm' }, { key: 'CANCEL', name: 'Cancel' }],
+            transitions: [
+              { from: 'idle', to: 'confirming', event: 'REQUEST', effects: [] },
+              { from: 'confirming', to: 'idle', event: 'CONFIRM', effects: [] },
+              { from: 'confirming', to: 'idle', event: 'CANCEL', effects: [] },
+            ],
+          },
+          emits: [{ event: 'CONFIRM', scope: 'external' }, { event: 'CANCEL', scope: 'external' }],
+        },
+        {
+          name: 'Persistor',
+          scope: 'instance',
+          stateMachine: {
+            states: [{ name: 'idle', isInitial: true }],
+            events: [{ key: 'DO_DELETE', name: 'DoDelete' }],
+            transitions: [{ from: 'idle', to: 'idle', event: 'DO_DELETE', effects: [] }],
+          },
+          listens: listenSource === 'none' ? [] : [{
+            event: 'CONFIRM',
+            triggers: 'DO_DELETE',
+            scope: 'external',
+            source: listenSource === 'any' ? { kind: 'any' } : { kind: 'trait', trait: 'Delete' },
+          }],
+        },
+        {
+          name: 'Other',
+          scope: 'instance',
+          stateMachine: {
+            states: [{ name: 'idle', isInitial: true }],
+            events: [{ key: 'CANCEL', name: 'Cancel' }],
+            transitions: [{ from: 'idle', to: 'idle', event: 'CANCEL', effects: [] }],
+          },
+        },
+      ],
+      pages: [],
+    };
+    return { schema: { name: 'App', designTokens: {}, customPatterns: {}, orbitals: [orbital] }, orbital };
+  }
+
+  it('is false for an emit no listener hears and the emitter has no arm for in the sweep state, whatever other traits handle the same name', () => {
+    const { schema, orbital } = confirmProgram('trait');
+    expect(emitLands(schema, orbital, 'Delete', 'idle', 'CANCEL')).toBe(false);
+  });
+
+  it('is true when the emitter itself handles the event from the sweep state', () => {
+    const { schema, orbital } = confirmProgram('trait');
+    expect(emitLands(schema, orbital, 'Delete', 'confirming', 'CANCEL')).toBe(true);
+  });
+
+  it('is true when a listener sourced on the emitter triggers an arm, and for a wildcard listen', () => {
+    expect(emitLands(confirmProgram('trait').schema, confirmProgram('trait').orbital, 'Delete', 'idle', 'CONFIRM')).toBe(true);
+    expect(emitLands(confirmProgram('any').schema, confirmProgram('any').orbital, 'Delete', 'idle', 'CONFIRM')).toBe(true);
+  });
+
+  it('is false when the only listener is gone', () => {
+    const { schema, orbital } = confirmProgram('none');
+    expect(emitLands(schema, orbital, 'Delete', 'idle', 'CONFIRM')).toBe(false);
+  });
+
+  it('hears a legacy `Source.EVENT` listen address, and a bare unsourced name hears nothing', () => {
+    const legacy = confirmProgram('none');
+    const persistor = legacy.orbital.traits[1];
+    if (typeof persistor === 'string' || !('stateMachine' in persistor)) throw new Error('fixture');
+    persistor.listens = [{ event: 'Delete.CONFIRM', triggers: 'DO_DELETE', scope: 'external' }];
+    expect(emitLands(legacy.schema, legacy.orbital, 'Delete', 'idle', 'CONFIRM')).toBe(true);
+    persistor.listens = [{ event: 'CONFIRM', triggers: 'DO_DELETE', scope: 'external' }];
+    expect(emitLands(legacy.schema, legacy.orbital, 'Delete', 'idle', 'CONFIRM')).toBe(false);
+  });
+
+  it('is false for a listener sourced on a different trait', () => {
+    const { schema, orbital } = confirmProgram('trait');
+    expect(emitLands(schema, orbital, 'Other', 'idle', 'CONFIRM')).toBe(false);
   });
 });

@@ -41,10 +41,16 @@ function crudStep(chain: CrudChain, orbital: OrbitalSchema, traitsByName: Map<st
   const inboundSource = inboundListener !== undefined ? sourceTraitOf(inboundListener) : null;
   const renderingTrait = (inboundSource !== null ? traitsByName.get(inboundSource) : undefined) ?? sourceTrait;
 
+  // The flow clicks the open, then the submit: the source trait settles where a submit arm from `openTo` leads.
+  const submitTargets = sourceTrait.stateMachine?.transitions
+    .filter((t) => t.from === chain.openTo && t.event === chain.submitEvent)
+    .map((t) => t.to) ?? [];
+
   const step: ExtendedWalkStep = {
     from: chain.openFrom,
     event: chain.openEvent,
     to: chain.openTo,
+    ...(submitTargets.length > 0 && { acceptStates: [...new Set(submitTargets)] }),
     guardCase: null,
     payload: {},
     isRepositioning: false,

@@ -124,7 +124,7 @@ export { isNoiseError, isNoiseWarning } from './util/filter.js';
 export { retry } from './util/retry.js';
 
 // orbital binary resolution (PATH-independent)
-export { resolveOrbitalBin, resetOrbitalBinCache } from './util/orbital-bin.js';
+export { resolveOrbitalBin } from './util/orbital-bin.js';
 
 // Behavior-registry discovery (std + io, structure-agnostic walk)
 export {

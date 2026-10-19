@@ -329,7 +329,9 @@ export function createDefaultDomTrigger(
       // deliberately chosen. Falls back to the pre-existing lowest-id
       // "first row" contract only when no target was resolved.
       const entityName = step.expectedRowDelta.entityName;
-      const row = await page.evaluate((args: { name: string; targetId: string | null }) => {
+      // `tick()` bound the target row into the payload: a kernel-only client's snapshot holds no list rows to re-read it from.
+      const bound = step.targetRowId !== undefined;
+      const row = bound ? null : await page.evaluate((args: { name: string; targetId: string | null }) => {
         const w = window as Window & { __orbitalVerification?: import('@almadar/core').OrbitalVerificationAPI };
         const snap = w.__orbitalVerification?.getSnapshot?.();
         const rows: Array<{ id: string } & import('@almadar/core').EntityRow> = [];
@@ -348,7 +350,10 @@ export function createDefaultDomTrigger(
         rows.sort((a, b) => a.id.localeCompare(b.id));
         return rows[0] ?? null;
       }, { name: entityName, targetId: step.targetRowId ?? null });
-      if (row !== null) {
+      if (bound) {
+        clicked = await dispatchInBrowser(page, step.event, step.payload, traitScope);
+        domLog.debug('dom:delete:payload-dispatch', { step: step.coverageKey, entityName, rowId: step.targetRowId, payloadKeys: Object.keys(step.payload), traitScope, delivered: clicked });
+      } else if (row !== null) {
         const payload: EventPayload = {};
         if (step.payloadRowShape !== undefined) {
           for (const field of step.payloadRowShape) {

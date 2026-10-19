@@ -365,6 +365,11 @@ export function createFakeDriver(traits: TraitWalkConfig[], options?: FakeDriver
       // covers the step.
       const targetTrait = traitScope?.split('.').pop() ?? ctx.trait.traitName;
       const result = runtime.dispatch(targetTrait, step.event, step.payload as EventPayload);
+      // Like the DOM driver, a crud step's open is followed by its submit/confirm click.
+      const followUpEvent = step.submitEvent ?? step.confirmEvent;
+      if (result.to !== null && followUpEvent !== undefined) {
+        runtime.dispatch(targetTrait, followUpEvent, (step.formData ?? step.payload) as EventPayload);
+      }
       return result.to !== null;
     },
     async snapshot(_ctx, _step): Promise<SnapshotResult> {

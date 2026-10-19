@@ -7,7 +7,7 @@
 
 import type { EventPayload } from '@almadar/core';
 import type { FieldValue, JsonValue, OrbitalSchema } from '@almadar/core';
-import type { ArmConflict, ContractStep, StepWire, DataMutation, PreambleEvent, RowEstablish, ViewerRequirement, EmitStep, Precondition, TickStep, TransientFinding, TransientProbe } from '@almadar/core/kernel-wire';
+import type { ArmConflict, ContractStep, StepWire, DataMutation, PreambleEvent, RowEstablish, ViewerRequirement, EmitStep, InboundRelation, Precondition, TickStep, TransientFinding, TransientProbe } from '@almadar/core/kernel-wire';
 import type { PortalExpectation } from '../observer/types.js';
 import type { KernelPlanner } from './kernel-planner.js';
 import type { ExtendedWalkStep } from '../planner/types.js';
@@ -19,7 +19,25 @@ export function asEventPayload(value: JsonValue): EventPayload {
   return value;
 }
 
-function emitStep(step: EmitStep): ExtendedWalkStep {
+/** The row a step's payload field must name, in the driver's vocabulary (a delete avoids restrict-referenced rows). */
+function rowBinding(
+  entity: string,
+  binding: { payloadField: string; wholeRow: boolean },
+  avoidVia: ReadonlyArray<string> | undefined,
+  avoidOther: ReadonlyArray<InboundRelation> | undefined,
+): NonNullable<ExtendedWalkStep['bindRowFrom']> {
+  return {
+    entityName: entity,
+    payloadField: binding.payloadField,
+    wholeRow: binding.wholeRow,
+    ...((avoidVia ?? []).length > 0 && { avoidReferencedVia: [...(avoidVia ?? [])] }),
+    ...((avoidOther ?? []).length > 0 && {
+      avoidReferencedByOtherEntities: (avoidOther ?? []).map((r) => ({ entityName: r.entity, fieldName: r.field })),
+    }),
+  };
+}
+
+export function emitStep(step: EmitStep): ExtendedWalkStep {
   return {
     from: step.from,
     event: step.event,
@@ -31,6 +49,9 @@ function emitStep(step: EmitStep): ExtendedWalkStep {
     triggerKind: 'bus',
     coverageKey: step.coverageKey,
     ...(step.navigates && { navigates: true }),
+    ...(step.bindRow !== undefined && {
+      bindRowFrom: rowBinding(step.bindRow.entity, step.bindRow, step.bindRow.avoidReferencedVia, step.bindRow.avoidReferencedByOtherEntities),
+    }),
   };
 }
 
@@ -261,15 +282,7 @@ function dataMutationStep(m: DataMutation): ExtendedWalkStep {
     ...(m.successEvent !== undefined && { expectedSuccessEvent: m.successEvent }),
     ...establish,
     ...(m.bindRow !== undefined && {
-      bindRowFrom: {
-        entityName: m.entity,
-        payloadField: m.bindRow.payloadField,
-        wholeRow: m.bindRow.wholeRow,
-        ...((m.avoidReferencedVia ?? []).length > 0 && { avoidReferencedVia: m.avoidReferencedVia }),
-        ...((m.avoidReferencedByOtherEntities ?? []).length > 0 && {
-          avoidReferencedByOtherEntities: (m.avoidReferencedByOtherEntities ?? []).map((r) => ({ entityName: r.entity, fieldName: r.field })),
-        }),
-      },
+      bindRowFrom: rowBinding(m.entity, m.bindRow, m.avoidReferencedVia, m.avoidReferencedByOtherEntities),
     }),
     ...(establish.establishesRow?.viewerRequirement === undefined ? viewerOf(m.viewer) : {}),
   };

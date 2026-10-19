@@ -19,7 +19,9 @@
 
 // node:fs is loaded dynamically below so browser bundles don't pull it in.
 import { collectEmbeddedTraitReferrers, constTruth, kernelEvaluator, toWireValue } from '@almadar/core';
-import type { EntityData, EntityRow, EventPayload, Orbital } from '@almadar/core';
+import type { EntityData, EntityRow, EventPayload, Orbital, RawUserClaims } from '@almadar/core';
+import { traitPersona } from './trait-persona.js';
+import { replayRowContext } from './replay-row-context.js';
 import type { Frame } from '../frame/types.js';
 import { tick, resolveEstablishRowPayload } from '../driver/tick.js';
 import type { DriverContext } from '../driver/types.js';
@@ -27,7 +29,7 @@ import { pickTargetRow } from '../planner/internal/self-relation-fields.js';
 import { extractTraitWalkConfigs } from '../planner/extract-trait-walk-configs.js';
 import { resolveTraitNames } from '../planner/trait-scope.js';
 import { collectEntityFields, projectedPayloadFields } from '../planner/internal/payload-synth.js';
-import { eachInlineTrait, findInitialState, traitBootRenderSlots } from '../planner/internal/orbital-walk.js';
+import { eachInlineTrait, emitLands, findInitialState, traitBootRenderSlots } from '../planner/internal/orbital-walk.js';
 import { scanRenderUiEffect } from '../planner/internal/render-ui-scan.js';
 import { transientFailureProbes as planTransientFailureProbes, type TransientFailureProbeResult } from '../kernel/adapt.js';
 import { isUiFactoryBoard } from './ui-factory-board.js';
@@ -258,17 +260,10 @@ export async function runVerification<Ctx extends DriverContext>(
     }
   }
   if (opts.enableEmitSweep !== false) {
-    // An emit nothing transitions on is a broadcast contract (GAME_END,
-    // canvas tile/hover events with no handler): driving it through the
-    // bus is a no-op by design, and the binding probe then flags the
-    // frame as an undelivered dispatch. Sweep only events at least one
-    // bound trait actually accepts with a transition.
-    const acceptedEvents = new Set<string>();
-    for (const t of traits) {
-      for (const transition of t.transitions) acceptedEvents.add(transition.event);
-    }
-    for (const trait of traits) {
-      collectExtension(emitSweepSteps(planned, trait.traitName).filter((step) => acceptedEvents.has(step.event)));
+    // An emit that lands on no arm is a broadcast contract (GAME_END, canvas tile/hover events with no handler, a
+    // dialog's CANCEL fired outside the state that handles it): driving it through the bus is a no-op by design.
+    for (const { orb, trait } of eachInlineTrait(input.orbital)) {
+      collectExtension(emitSweepSteps(planned, trait.name).filter((step) => emitLands(input.orbital, orb, trait.name, step.from, step.event)));
     }
   }
 
@@ -323,6 +318,7 @@ export async function runVerification<Ctx extends DriverContext>(
   // both leave the same transitions in `coverage.uncovered`, but only this
   // says WHY.
   const walkBudgetEntries: WalkBudgetEntry[] = [];
+  let switchedFrom: { ctx: Ctx; persona: RawUserClaims | null } | undefined;
 
   for (const trait of walkTraits) {
     const importedSource = frontier ? importedTopology.get(trait.traitName) : undefined;
@@ -417,9 +413,23 @@ export async function runVerification<Ctx extends DriverContext>(
     const needsPersona = plan.some(
       (s) => s.viewerRequirement !== undefined || s.establishesRow?.viewerRequirement !== undefined,
     );
-    const defaultPersona = needsPersona && input.driver.getPersona !== undefined
+    if (switchedFrom !== undefined && input.driver.setPersona !== undefined) {
+      await input.driver.setPersona(ctx, switchedFrom.persona);
+      switchedFrom = undefined;
+    }
+    const appPersona = needsPersona && input.driver.getPersona !== undefined
       ? await input.driver.getPersona(ctx)
       : undefined;
+    // A trait a role policy gates is walked as the persona that role admits, from its first step (G-ORBITAL-SHELL-TYPESCRIPT-026).
+    const walkAs = needsPersona && input.driver.listPersonas !== undefined && input.driver.setPersona !== undefined
+      ? traitPersona(plan, await input.driver.listPersonas(ctx))
+      : undefined;
+    if (walkAs !== undefined && input.driver.setPersona !== undefined) {
+      await input.driver.setPersona(ctx, walkAs);
+      switchedFrom = { ctx, persona: appPersona ?? null };
+      log(`[runVerification] ${trait.traitName}: walked as ${walkAs.id ?? '(persona)'}, the persona its role policy admits`);
+    }
+    const defaultPersona = walkAs ?? appPersona;
 
     log(
       `[runVerification] ${trait.traitName}: ${plan.length} steps (${baseSteps.length} base + ${extensionSteps.length} extension)${importedSource !== undefined ? ` — frontier: topology from ${importedSource} skipped` : ''}`,
@@ -615,6 +625,7 @@ export async function runVerification<Ctx extends DriverContext>(
             const reconcileStep: ExtendedWalkStep = seedEntityIdIfBinding(
               {
                 ...replayStep,
+                ...replayRowContext(replayStep, plan),
                 triggerKind: 'reconcile',
                 coverageKey: `${trait.traitName}:${replayStep.from}+${replayStep.event}->${replayStep.to}[reconcile]`,
               },
@@ -777,6 +788,9 @@ export async function runVerification<Ctx extends DriverContext>(
         }
       }
     }
+  }
+  if (switchedFrom !== undefined && input.driver.setPersona !== undefined) {
+    await input.driver.setPersona(switchedFrom.ctx, switchedFrom.persona);
   }
 
   // ── Run observers ─────────────────────────────────────────────────

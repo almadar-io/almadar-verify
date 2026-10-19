@@ -217,4 +217,29 @@ describe('tick — server-truth row resolution (C1-V12)', () => {
     expect(frame.errors ?? []).toEqual([]);
     expect(frame.accepted).toBe(true);
   });
+
+  it('bindRowFrom with a row shape fills every field of it: the id, and the whole row where the guard reads one', async () => {
+    const schema = noteSchema();
+    const traits = extractTraitWalkConfigs(schema);
+    const dispatched: unknown[] = [];
+    const { driver, runtime } = createFakeDriver(traits, {
+      executeEffects: (_effects, { payload }) => {
+        dispatched.push(payload);
+        return { effects: [], emitted: [] };
+      },
+    });
+    const ctx: FakeDriverContext = { outputDir: '', trait: traits.find((t) => t.traitName === 'NotePersistor')!, runtime };
+    await driver.reset(ctx);
+    runtime.seed('Note', [{ id: 'note-1', parentId: '' }]);
+    const initFrame = await runAutoInit(driver, ctx, 'idle', 'NotePersistor');
+    const step: ExtendedWalkStep = {
+      from: 'idle', event: 'DO_DELETE', to: 'idle', guardCase: null, payload: {}, isRepositioning: false,
+      traitName: 'NotePersistor', triggerKind: 'reconcile', coverageKey: 'NotePersistor:idle+DO_DELETE->idle[reconcile]',
+      bindRowFrom: { entityName: 'Note', payloadField: 'id', wholeRow: false },
+      payloadRowShape: [{ name: 'id', wholeRow: false }, { name: 'row', wholeRow: true }],
+    };
+    const frame = await tick(driver, ctx, initFrame, step);
+    expect(frame.payload).toEqual({ id: 'note-1', row: { id: 'note-1', parentId: '' } });
+  });
 });
+

@@ -20,6 +20,7 @@ import { VERIFICATION_DOM_ATTRS } from '@almadar/core';
 import type {
   EffectTrace,
   EntityData,
+  EntityRow,
   EventLogEntry,
   ServerResponseTrace,
   VerificationSnapshot,
@@ -27,6 +28,7 @@ import type {
 import type { ConsoleEntry } from '../../util/types.js';
 import type { DomSnapshot } from '../../frame/types.js';
 import type { ExtendedWalkStep } from '../../planner/types.js';
+import type { SnapshotResult } from '../types.js';
 import type { ConsoleCollector } from '../../browser/console.js';
 import { readVerificationSnapshot, readEventLogState } from '../../runtime/state-bridge.js';
 import { takeScreenshot } from '../../browser/screenshot.js';
@@ -253,6 +255,36 @@ function mergeEntityData(snap: VerificationSnapshot): EntityData {
     }
   }
   return out;
+}
+
+/**
+ * The snapshot with the rows the page renders: for each of `entities`, the server rows (`listRows`) whose ids a
+ * `[data-entity-row]` shows. A kernel-only client's snapshot holds each trait's own frame, never a list's rows
+ * (G-ORBITAL-SHELL-TYPESCRIPT-026). A server that cannot say leaves that entity as the snapshot had it.
+ */
+export async function withRenderedRows(
+  snapshot: SnapshotResult,
+  page: Page,
+  entities: readonly string[],
+  listRows: (entityName: string) => Promise<EntityRow[]>,
+): Promise<SnapshotResult> {
+  const shown = new Set(await page.$$eval('[data-entity-row][data-entity-id]', (rows) =>
+    rows.map((row) => row.getAttribute('data-entity-id') ?? '').filter((id) => id !== '')));
+  if (shown.size === 0) return snapshot;
+  const entityData: EntityData = { ...snapshot.entityData };
+  for (const entity of new Set(entities)) {
+    let serverRows: EntityRow[];
+    try {
+      serverRows = await listRows(entity);
+    } catch {
+      continue;
+    }
+    const held = entityData[entity] ?? [];
+    const known = new Set(held.map((row) => String(row['id'])));
+    const rendered = serverRows.filter((row) => shown.has(String(row['id'])) && !known.has(String(row['id'])));
+    if (rendered.length > 0) entityData[entity] = [...held, ...rendered];
+  }
+  return { ...snapshot, entityData, dom: { ...snapshot.dom, rowsByEntity: rowCounts(entityData) } };
 }
 
 function rowCounts(data: EntityData): { [name: string]: number } {
