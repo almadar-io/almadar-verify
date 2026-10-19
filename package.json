@@ -16,6 +16,11 @@
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js",
       "require": "./dist/browser.js"
+    },
+    "./ljuba": {
+      "types": "./dist/ljuba.d.ts",
+      "import": "./dist/ljuba.js",
+      "require": "./dist/ljuba.js"
     }
   },
   "files": [
@@ -43,6 +48,7 @@
     "@almadar/logger": "^1.18.0",
     "@almadar/runtime": "^6.111.0",
     "@almadar/std": "^16.254.0",
+    "html2canvas": "^1.4.1",
     "zod": "^3.22.0"
   },
   "peerDependencies": {
