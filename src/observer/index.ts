@@ -39,6 +39,7 @@ export { assertEmitPayloadAlwaysEmpty } from './emit-payload-always-empty.js';
 export { assertListensEdgeNeverFired } from './listens-edge-never-fired.js';
 export { assertWalkStepsFired } from './assert-walk-fired.js';
 export { assertEffectFailureNotSurfaced } from './effect-failure-not-surfaced.js';
+export { assertPropositionHeld } from './assert-proposition-held.js';
 export { report, type ReportInput } from './report.js';
 export {
   probeListenCascades,

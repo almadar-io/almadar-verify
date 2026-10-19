@@ -260,6 +260,12 @@ export interface ReportShape {
      */
     effectFailureNotSurfaced?: Verdict;
     /**
+     * `proposition-held` — every hop whose fired arm declares `@ensures` kept it, judged by the kernel on the
+     * trait's `@entity` before and after the hop (EXEC-STEP-10). A wrong value in the right state fails here
+     * while `walk` and `data-mutation` pass. Absent when no hop declared one.
+     */
+    propositionHeld?: Verdict;
+    /**
      * TRANSIENT-ARM-UNREACHABLE (RV item 27) — informational (`passed:
      * true`), mirrors `preconditionSkipped`'s shape. Names every
      * failure-route arm whose `from` state races forward via an

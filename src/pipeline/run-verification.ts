@@ -63,6 +63,7 @@ import { assertInteractionPattern } from '../observer/assert-interaction-pattern
 import { assertClickNoListener } from '../observer/assert-click-no-listener.js';
 import { assertEmitPayloadAlwaysEmpty } from '../observer/emit-payload-always-empty.js';
 import { assertEffectFailureNotSurfaced } from '../observer/effect-failure-not-surfaced.js';
+import { assertPropositionHeld } from '../observer/assert-proposition-held.js';
 import { report } from '../observer/report.js';
 import { COVERAGE_GAP_REASONS, type CoverageGap } from '../observer/coverage-gap.js';
 import { httpRoutesByTrait } from '../planner/internal/http-routes.js';
@@ -974,6 +975,10 @@ export async function runVerification<Ctx extends DriverContext>(
   if (effectFailureVerdicts.length > 0) {
     verdicts.effectFailureNotSurfaced = combineVerdicts(effectFailureVerdicts, 'effect-failure-not-surfaced');
   }
+
+  // proposition-held — a hop that reached its state but broke its `@ensures` (the author's oracle).
+  const propositionVerdict = await assertPropositionHeld(frames, input.orbital, input.kernel);
+  if (propositionVerdict !== undefined) verdicts.propositionHeld = propositionVerdict;
 
   // Phase 4c — contract event coverage.
   const contractVerdicts = assertContractEventFired(frames);
