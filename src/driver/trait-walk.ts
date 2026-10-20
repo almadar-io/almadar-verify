@@ -96,6 +96,9 @@ export function stepVerdictOf(step: Pick<StepWire, 'from' | 'event' | 'to' | 'gu
     case 'wrong-state':
       if (!result.transitionFired) return { ok: false, detail: `${arm} did not fire.` };
       return { ok: false, detail: `${arm} reached "${reason.actual}", expected "${step.to}".` };
+    default:
+      // The kernel's data-mutation and produced-by-effect reasons are never a circuit step's.
+      return { ok: true, inconclusive: true, detail: `${arm}: the kernel judged it ${verdict.reason.kind}.` };
   }
 }
 
