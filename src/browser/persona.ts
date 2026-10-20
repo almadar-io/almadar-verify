@@ -39,7 +39,9 @@ const playgroundSignInSchema = z.object({
 });
 
 export async function listBrowserPersonas(serverUrl: string, hostKind: PersonaHostKind, options: { allowUnavailable?: boolean } = {}): Promise<RawUserClaims[]> {
-  const response = await fetch(`${serverUrl}${hostKind === 'compiled' ? '/api/personas' : '/api/orbitals/personas'}`);
+  const response = hostKind === 'compiled'
+    ? await fetch(`${serverUrl}/api/hooks/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    : await fetch(`${serverUrl}/api/orbitals/personas`);
   if (!response.ok && options.allowUnavailable) return [];
   if (!response.ok) throw new Error(`Persona roster answered ${response.status}: ${await response.text()}`);
   const { personas } = rosterSchema.parse(await response.json());
@@ -60,7 +62,7 @@ export async function signInBrowserPersona(
   const roster = personaId === null ? [] : await listBrowserPersonas(serverUrl, hostKind);
   const persona = personaId === null ? null : roster.find(row => row.id === personaId);
   if (persona === undefined) throw new Error(`Persona '${personaId}' is not in the declared roster`);
-  const response = await fetch(`${serverUrl}${hostKind === 'compiled' ? '/api/personas/sign-in' : '/api/orbitals/persona'}`, {
+  const response = await fetch(`${serverUrl}${hostKind === 'compiled' ? '/api/hooks/persona-sign-in' : '/api/orbitals/persona'}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(hostKind === 'compiled' ? { id: personaId } : persona ?? {}),
   });
